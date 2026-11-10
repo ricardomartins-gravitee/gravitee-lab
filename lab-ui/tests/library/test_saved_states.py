@@ -4,6 +4,7 @@ No Docker daemon is needed for these tests. The engine's archive and Docker comm
 are separately tested with mocks so failure cannot silently run seed deletion.
 """
 import json
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -142,6 +143,60 @@ class SavedStates(unittest.TestCase):
                 saved_states.capture(job, {"playgrounds": {pid: {}}}, pid)
         self.assertEqual(events, ["stop", "restart"])
         self.assertEqual(saved_states.list_states(pid), [])
+
+
+    def test_two_successful_checkpoints_are_published_only_after_restart(self):
+        class Dummy:
+            def __init__(self):
+                self.lines = []
+            def step(self, name):
+                pass
+        events = []
+        def write_config(dest, mounts):
+            events.append("config")
+            dest.write_bytes(b"safe config")
+        def write_volume(job, name, dest, restore=False):
+            events.append("volume")
+            dest.write_bytes(b"safe data")
+        with mock.patch.object(places, "recorded", return_value=[]), \
+             mock.patch.object(saved_states, "_runtime",
+                               return_value=(["gravitee_data-mongo"], [], ["container1"], [])), \
+             mock.patch.object(saved_states, "_stop", side_effect=lambda *a: events.append("stop")), \
+             mock.patch.object(saved_states, "_restart", side_effect=lambda *a: events.append("restart")), \
+             mock.patch.object(saved_states, "_archive_config", side_effect=write_config), \
+             mock.patch.object(saved_states, "_volume", side_effect=write_volume):
+            first = saved_states.capture(Dummy(), {"playgrounds": {"welcome": {}}}, "welcome", "Before")
+            second = saved_states.capture(Dummy(), {"playgrounds": {"welcome": {}}}, "welcome", "After")
+        self.assertNotEqual(first, second)
+        self.assertEqual([s["name"] for s in saved_states.list_states("welcome")], ["After", "Before"])
+        self.assertEqual(events, ["stop", "config", "volume", "restart"] * 2)
+
+    def test_restore_volume_uses_archive_basename_and_not_an_absolute_container_path(self):
+        commands = []
+        class Dummy:
+            def exec(self, command):
+                commands.append(command)
+        saved_states._volume(Dummy(), "gravitee_data-mongo",
+                             Path("/some/private/path/volume-0.tar.gz"), restore=True)
+        self.assertIn("/backup/volume-0.tar.gz", commands[0][-1])
+        self.assertNotIn("/some/private/path/volume-0.tar.gz -C", commands[0][-1])
+
+    def test_restoring_configuration_removes_stale_files(self):
+        folder = self.root / "snapshot"
+        folder.mkdir()
+        original = self.root / ".lab/catalogs/local/playgrounds/test"
+        original.mkdir(parents=True)
+        (original / "kept.txt").write_text("saved", encoding="utf-8")
+        with tarfile.open(folder / "config.tar.gz", "w:gz") as archive:
+            archive.add(self.root / ".lab/catalogs", arcname=".lab/catalogs")
+        (original / "stale.txt").write_text("added later", encoding="utf-8")
+        saved_states._restore_config(folder)
+        self.assertTrue((original / "kept.txt").is_file())
+        self.assertFalse((original / "stale.txt").exists())
+
+    def test_unconfirmed_restore_never_reads_or_replaces_volumes(self):
+        with self.assertRaisesRegex(ValueError, "Confirm replacing"):
+            saved_states.restore({"playgrounds": {"welcome": {}}}, "welcome", self.sid1)
 
 
 if __name__ == "__main__":
