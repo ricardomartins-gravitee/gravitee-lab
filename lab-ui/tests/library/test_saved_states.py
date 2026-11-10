@@ -214,5 +214,29 @@ class SavedStates(unittest.TestCase):
         self.assertEqual(job.call_args.args[1], [before, delete, after])
 
 
+    def test_checkpoint_image_tags_pin_exact_images_without_copying_layers(self):
+        commands = []
+        class Dummy:
+            def exec(self, cmd):
+                commands.append(cmd)
+        items = [{"id": "sha256:a"}, {"id": "sha256:a"}, {"id": "sha256:b"}]
+        tags = saved_states._pin_images(Dummy(), items, self.sid1)
+        self.assertEqual(len(tags), 2)
+        self.assertEqual(items[0]["locked_tag"], items[1]["locked_tag"])
+        self.assertNotEqual(items[1]["locked_tag"], items[2]["locked_tag"])
+        self.assertEqual(commands[0][:3], ["docker", "tag", "sha256:a"])
+
+    def test_refuse_state_save_when_running_configuration_has_not_been_applied(self):
+        container = {"State": {"Running": True}, "Config": {"Labels": {
+            "com.docker.compose.service": "apim-management-api",
+            "com.docker.compose.config-hash": "saved-hash",
+        }}}
+        with mock.patch.object(compose, "run", return_value=(0, "apim-management-api saved-hash\\n", "")):
+            saved_states._check_applied([container])
+        with mock.patch.object(compose, "run", return_value=(0, "apim-management-api newer-hash\\n", "")):
+            with self.assertRaisesRegex(JobFailed, "Apply the pending settings"):
+                saved_states._check_applied([container])
+
+
 if __name__ == "__main__":
     unittest.main()
