@@ -667,6 +667,8 @@ def start(project, pid, accept, place=None, remove=False, switching=False, save_
     state, now = layers.current(project), _now(project)
     fresh = _fresh(project, state, playground, now)
     plan = _plan(project, state, now, pid, "start", accept, fresh, switching=switching)
+    if save_state and plan.get("switch"):
+        raise RuntimeError("Save the current playground's state before switching platform versions")
     delete = _leaving(project, state, plan, remove, save_state)
     if not plan.get("switch"):
         return _started(project, plan, delete)
