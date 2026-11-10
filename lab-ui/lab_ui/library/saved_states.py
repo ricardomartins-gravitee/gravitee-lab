@@ -205,7 +205,7 @@ def _archive_config(destination, mounts):
 def _volume(job, name, archive, restore=False):
     """Tar operates in a disposable container. The database writers have been stopped."""
     if restore:
-        cmd = ("find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; "
+        cmd = ("find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} \\; && "
                f"tar -xzf /backup/{archive.name} -C /data")
         job.exec(["docker", "run", "--rm", "--pull=missing", "-v", f"{name}:/data",
                   "-v", f"{archive.parent}:/backup:ro", IMAGE, "sh", "-c", cmd])
