@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from lab_ui import paths
+from lab_ui.docker import compose
 from lab_ui.docker.jobs import JobFailed
 from lab_ui.gravitee import places
 from lab_ui.library import playgrounds, saved_states
@@ -100,7 +101,8 @@ class SavedStates(unittest.TestCase):
                     config={"file": "config.tar.gz", "sha256": saved_states._digest(archive)},
                     volumes=[])
         (folder / "manifest.json").write_text(json.dumps(data), encoding="utf-8")
-        with mock.patch.object(saved_states, "_docker", return_value=""):
+        with mock.patch.object(saved_states, "_docker", return_value=""), \
+             mock.patch.object(compose, "project_name", return_value="gravitee"):
             self.assertEqual(saved_states._verified("welcome", self.sid1)[1]["name"], "Good")
             archive.write_bytes(b"corrupted")
             with self.assertRaisesRegex(ValueError, "integrity"):
