@@ -91,7 +91,7 @@ def delete_state(project, pid, sid):
             _docker(["image", "rm", tag])
         except JobFailed:
             failed.append(tag)
-    return {"deleted": sid, "image_cleanup_pending": bool(failed)
+    return {"deleted": sid, "image_cleanup_pending": bool(failed)}
 
 
 def _docker(args):
