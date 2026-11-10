@@ -271,6 +271,7 @@ them one after another.
 | The catalogs and your own items | `.lab/catalogs/`, your own in `.lab/catalogs/local/` | Copy `.lab/` |
 | Demo certificates | `certs/mtls/` | `make certs` makes new ones |
 | What a seed created | `.lab/catalogs/<catalog>/playgrounds/<id>/.state/created.json` | `make reset` empties it |
+| Saved playground states | `.lab/saved-states/` | Delete individual states on the Playground page; checkpoints are not committed to Git |
 
 All of these are git-ignored. Never commit them.
 
