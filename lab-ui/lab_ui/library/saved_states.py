@@ -55,7 +55,7 @@ def _read(path):
 def list_states(pid):
     """Only complete, regular manifests are exposed; partial saves are never restorable."""
     home = _home(pid)
-    if not home.is_dir() or home.is_symlink():
+    if STATES.is_symlink() or not home.is_dir() or home.is_symlink():
         return []
     found = []
     for path in home.iterdir():
@@ -76,6 +76,8 @@ def delete_state(project, pid, sid):
     """Delete checkpoint files only. Never change the active Lab or its volumes."""
     if pid not in project["playgrounds"]:
         raise paths.NotFound(f"No such playground: {pid}")
+    if STATES.is_symlink():
+        raise ValueError("Saved state storage is linked outside the Lab")
     target = _location(pid, sid)
     meta = _read(target / "manifest.json")
     if meta.get("playground") != pid or meta.get("id") != sid:
@@ -191,7 +193,7 @@ def _digest(path):
 
 def _capture_stopped(job, folder, pid, label, volumes, mounts, running, images):
     """Called with the whole local Lab stopped. Manifest is published last."""
-    folder.mkdir(parents=True, exist_ok=False)
+    folder.mkdir(parents=True, exist_ok=False, mode=0o700)
     _archive_config(folder / "config.tar.gz", mounts)
     entries = []
     for index, name in enumerate(volumes):
@@ -249,9 +251,10 @@ def capture(job, project, pid, name=None):
         raise JobFailed("No managed data volumes were found for this Lab")
     _paths_to_save(mounts)  # Validate external mounts before stopping anything
     home = _home(pid)
-    if home.is_symlink():
+    if STATES.is_symlink() or home.is_symlink():
         raise JobFailed("Saved states folder must not be a symlink")
-    home.mkdir(parents=True, exist_ok=True)
+    home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(home, 0o700)
     sid = uuid.uuid4().hex
     staged = home / (".pending-" + sid)
     final = home / sid
@@ -278,6 +281,8 @@ def capture(job, project, pid, name=None):
 
 
 def _verified(pid, sid):
+    if STATES.is_symlink():
+        raise ValueError("Saved state storage is linked outside the Lab")
     folder = _location(pid, sid)
     data = _read(folder / "manifest.json")
     if data.get("id") != sid or data.get("playground") != pid:
