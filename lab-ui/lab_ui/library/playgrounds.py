@@ -849,6 +849,8 @@ def _leaving(project, state, plan, remove, save_state=False):
     its seed needs does not run, or when a place that holds a record cannot be reached."""
     row = next((row for row in plan["stops"] + plan["turns_off"] if row["kind"] == "playground"), None)
     leaving = project["playgrounds"].get(row["id"]) if row else None
+    if save_state and (not leaving or not leaving["seed"]):
+        raise RuntimeError("No departing playground can be saved")
     if not (remove and leaving and leaving["seed"]):
         return None
     if created(leaving["id"]):
