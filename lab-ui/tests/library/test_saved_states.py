@@ -199,5 +199,20 @@ class SavedStates(unittest.TestCase):
             saved_states.restore({"playgrounds": {"welcome": {}}}, "welcome", self.sid1)
 
 
+    def test_switch_to_previously_seeded_playground_still_runs_save_and_delete(self):
+        from lab_ui.library import layers
+        before = lambda job: None
+        after = ["docker", "compose", "up"]
+        delete = lambda job: None
+        plan = {"id": "welcome", "label": "Start", "fresh": False}
+        project = {"playgrounds": {"welcome": {"name": "Welcome"}}}
+        with mock.patch.object(layers, "steps", return_value=[before, after]), \
+             mock.patch.object(layers, "waits", return_value=[{}]), \
+             mock.patch.object(layers, "changes", return_value={}), \
+             mock.patch.object(playgrounds, "_job", return_value="job") as job:
+            self.assertEqual(playgrounds._started(project, plan, delete), "job")
+        self.assertEqual(job.call_args.args[1], [before, delete, after])
+
+
 if __name__ == "__main__":
     unittest.main()
