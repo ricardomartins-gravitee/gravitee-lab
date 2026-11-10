@@ -714,7 +714,7 @@ def _started(project, plan, delete, undo=None):
         # An already-seeded destination takes the normal layers plan, but the
         # departing playground still needs its checkpoint and delete first.
         commands = layers.steps(project, plan, undo=undo)
-        return _job(title, [commands[0], delete, *commands[1:]], pid, "start", [],
+        return _job(title, [commands[0], delete, *commands[1:]], pid, "start", None,
                     layers.waits(project, plan), layers.changes(project, plan))
     phase = WITH_PLATFORM if any(_of_platform(project, row) for row in plan["starts"]) else APPS
     installs, changes, loads, stopped = [], layers.changes(project, plan), {}, []
