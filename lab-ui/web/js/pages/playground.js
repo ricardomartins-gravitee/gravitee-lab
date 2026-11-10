@@ -86,7 +86,8 @@ function savedStatesHtml() {
   const why = store.wait() || (store.state.job && !store.state.job.done ? "Wait for the running job" : "");
   const off = lock({ enabled: !why, reason: why });
   return `<h3>Saved states</h3><ul class="pg-list">${savedStates.map((s) => `<li class="pg-place">
-    <span class="pg-place-name">${esc(s.name)}<span class="sub">${esc(new Date(s.created).toLocaleString())}, ${Math.round(s.size / 1048576)} MB</span></span>
+    <span class="pg-place-name" data-tip="${esc(s.name)}" data-tip-cut>${esc(s.name)}</span>
+    <span class="sub">${esc(new Date(s.created).toLocaleString())}, ${Math.round(s.size / 1048576)} MB</span>
     <span class="row-icons"><button class="btn" ${off} data-busy data-restore-state="${esc(s.id)}" aria-label="${esc(`Restore ${s.name}`)}">Restore</button>
     <button class="icon-btn" ${off} data-busy data-delete-state="${esc(s.id)}" aria-label="${esc(`Delete saved state ${s.name}`)}" data-tip="Delete saved state">${icon("trash")}</button></span>
   </li>`).join("")}</ul>`;
