@@ -244,16 +244,24 @@ def _capture_stopped(job, folder, pid, label, volumes, mounts, running, images):
 def _pin_images(job, images, sid):
     """Keep exact image IDs from pruning without duplicating their Docker layers."""
     locked, seen = [], {}
-    for item in images:
-        iid = item.get("id")
-        if not iid:
-            continue
-        if iid not in seen:
-            tag = f"gravitee-lab-saved:{sid}-{len(seen)}"
-            job.exec(["docker", "tag", iid, tag])
-            seen[iid] = tag
-            locked.append(tag)
-        item["locked_tag"] = seen[iid]
+    try:
+        for item in images:
+            iid = item.get("id")
+            if not iid:
+                continue
+            if iid not in seen:
+                tag = f"gravitee-lab-saved:{sid}-{len(seen)}"
+                job.exec(["docker", "tag", iid, tag])
+                seen[iid] = tag
+                locked.append(tag)
+            item["locked_tag"] = seen[iid]
+    except BaseException:
+        for tag in locked:
+            try:
+                _docker(["image", "rm", tag])
+            except JobFailed:
+                pass
+        raise
     return locked
 
 
