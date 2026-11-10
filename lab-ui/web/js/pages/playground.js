@@ -77,8 +77,9 @@ async function deleteSavedState(item, id) {
     action: () => "Delete saved state", danger: () => true });
   if (!chosen) return;
   try {
-    await api(`/api/playgrounds/${item.id}/saved-states/${id}/delete`, {});
+    const result = await api(`/api/playgrounds/${item.id}/saved-states/${id}/delete`, {});
     await loadSavedStates();
+    if (result.image_cleanup_pending) toast("State deleted; Docker image cleanup is pending", true);
   } catch (error) { toast(error.message, true); }
 }
 
