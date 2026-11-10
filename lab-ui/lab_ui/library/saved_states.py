@@ -85,7 +85,13 @@ def delete_state(project, pid, sid):
     if JOBS.current and not JOBS.current.done:
         raise RuntimeError("Wait for the running job before deleting a saved state")
     shutil.rmtree(target)
-    return {"deleted": sid}
+    failed = []
+    for tag in {image.get("locked_tag") for image in meta.get("images") or [] if image.get("locked_tag")}:
+        try:
+            _docker(["image", "rm", tag])
+        except JobFailed:
+            failed.append(tag)
+    return {"deleted": sid, "image_cleanup_pending": bool(failed)
 
 
 def _docker(args):
@@ -235,6 +241,22 @@ def _capture_stopped(job, folder, pid, label, volumes, mounts, running, images):
             "core_sha256": _digest(ROOT / "docker-compose.yml")}
 
 
+def _pin_images(job, images, sid):
+    """Keep exact image IDs from pruning without duplicating their Docker layers."""
+    locked, seen = [], {}
+    for item in images:
+        iid = item.get("id")
+        if not iid:
+            continue
+        if iid not in seen:
+            tag = f"gravitee-lab-saved:{sid}-{len(seen)}"
+            job.exec(["docker", "tag", iid, tag])
+            seen[iid] = tag
+            locked.append(tag)
+        item["locked_tag"] = seen[iid]
+    return locked
+
+
 def _write_manifest(folder, meta):
     # The complete marker only appears after all volume archives exist.
     paths.write_atomic(folder / "manifest.json", json.dumps(meta, indent=2) + "\n", mode=0o600)
@@ -286,11 +308,13 @@ def capture(job, project, pid, name=None):
     final = home / sid
     finished = False
     stopped = False
+    locked = []
     try:
         _stop(job, running)
         stopped = True
         data = _capture_stopped(job, staged, pid, name, volumes, mounts, running, images)
         data["id"] = sid
+        locked = _pin_images(job, data["images"], sid)
         _write_manifest(staged, data)
         _restart(job, running)
         stopped = False
@@ -301,8 +325,14 @@ def capture(job, project, pid, name=None):
         if stopped:
             # A failed restart is a hard failure: never delete anything afterwards.
             _restart(job, running)
-        if not finished and staged.exists():
-            shutil.rmtree(staged)
+        if not finished:
+            for tag in locked:
+                try:
+                    _docker(["image", "rm", tag])
+                except JobFailed:
+                    pass
+            if staged.exists():
+                shutil.rmtree(staged)
     return sid
 
 
@@ -330,6 +360,10 @@ def _verified(pid, sid):
     for item in data.get("images") or []:
         if item.get("id"):
             _docker(["image", "inspect", item["id"]])
+        if item.get("locked_tag"):
+            reference = _docker(["image", "inspect", "--format", "{{.Id}}", item["locked_tag"]])
+            if reference != item.get("id"):
+                raise ValueError("A saved image tag no longer points to its original image")
     return folder, data
 
 
