@@ -66,7 +66,7 @@ class SavedStates(unittest.TestCase):
         (self.root / ".env").write_text("KEY=unchanged\n", encoding="utf-8")
         with mock.patch.object(saved_states.JOBS, "current", None):
             result = saved_states.delete_state({"playgrounds": {"welcome": {}}}, "welcome", self.sid1)
-        self.assertEqual(result, {"deleted": self.sid1})
+        self.assertEqual(result, {"deleted": self.sid1, "image_cleanup_pending": False})
         self.assertFalse(first.exists())
         self.assertTrue(second.exists())
         self.assertEqual((self.root / ".env").read_text(), "KEY=unchanged\n")
