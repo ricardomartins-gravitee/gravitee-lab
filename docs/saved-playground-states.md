@@ -1,83 +1,83 @@
-# Saved playground states — implementation design
+# Saved playground states
 
-Status: design and safety contract for `feature/playground-saved-states`. This document does not mean the feature is implemented.
+Save a checkpoint of the local Lab before deleting what a playground created. Restore it later to return to its
+persistent data, settings and container images. Keep several checkpoints for the same playground.
 
-## Goal
+A checkpoint belongs to a playground, but it captures the whole local Lab. Restoring it replaces other playgrounds'
+data too. It does not resume processes, memory, live connections or external services.
 
-A person switching from Playground A to Playground B may choose **Save state and delete what it created**, alongside the unchanged choices **Keep what it created** and **Delete what it created**. The new choice preserves a restorable checkpoint first, then performs the **same seeder cleanup** as Delete. Saved states appear on the existing playground page, where they can be restored or deleted. Each playground may have multiple named, immutable states. Do not add a top-level "Profiles" concept.
+## Save before stopping or switching
 
-## Preserve the existing meaning
+1. Open the playground and choose **Stop**, or start another playground that stops it.
+2. Choose **Save state and delete what it created**.
+3. Confirm the action. Follow **Save state**, **Delete what it created**, then the remaining phases of the job.
 
-- **Keep what it created** stops the playground and retains its live Gravitee resources.
-- **Delete what it created** runs the existing seed cleanup before stopping. Its behavior must not change.
-- **Save state and delete what it created** creates and verifies a checkpoint **before** invoking that same cleanup. If saving fails, do not run cleanup or switch playgrounds.
-- The choice is offered when stopping a playground directly and when starting another one that stops it. Reuse the existing effects dialog and job model.
-- Remote Gravitee Cloud resources are **not** captured by a local Docker volume snapshot. Do not offer an "exact" save for remote deployments unless the remote-state problem is explicitly solved; explain why the option is unavailable instead of making a partial backup.
+The Lab stops all running local containers to copy the databases consistently, then restarts those same containers
+and waits for them to become healthy. Once the checkpoint is complete, it runs the existing seeder cleanup. Other
+local services pause during the save, even if the playground does not use them.
 
-## Exact persistent state: boundaries
+A failed save never starts deletion. If deletion fails after saving, the completed checkpoint stays, and the job
+reports the cleanup failure. **Keep what it created** and **Delete what it created** remain available as before.
 
-"Exact" means restoring managed *persistent* data and configuration, not resuming RAM, processes, in-flight messages or open network connections. Data in external services, host paths, or untracked bind mounts cannot be guaranteed. Before enabling Save, inventory every Compose service and its writable volumes and bind mounts, including those brought by add-ons and the playground. Refuse the exact-save action when a required persistent path cannot be captured; never silently omit it.
+## Restore a checkpoint
 
-The core stores data in Compose volumes such as `gravitee_data-mongo`, `gravitee_data-elasticsearch`, `gravitee_data-redis`, plus additional add-on volumes. These volumes can contain resources belonging to **more than one** playground. A snapshot is therefore of the *local Lab runtime*, associated with the playground that was active, **not** a selective export of that playground's resources. Clearly distinguish it from the seed's `.state/created.json`, which is an ownership record, not a backup.
+1. Open the playground's **Saved states** section. Each entry shows its name, creation time and archive size.
+2. Choose **Restore** beside the entry you want.
+3. Confirm replacing the current local Lab's data and configuration.
 
-A checkpoint contains or references:
+Save any current changes you want to keep before restoring. The restore includes shared databases and the captured
+configuration, including settings, passwords and the license. It starts the services that were running when the state
+was saved, using their saved image identities. It does not run the seed again. Changes after a restore can be saved
+as another checkpoint by stopping or switching the playground again.
 
-1. Consistent copies of all relevant named volumes and writable persistent mounts, captured after coordinated shutdown or a storage-specific consistent snapshot.
-2. A copy of the resolved Compose configuration, the Lab activation file `.lab/on.yml`, non-secret configuration, secrets (restricted access), installed plugins and required certificates/credential files.
-3. The playground's catalog identity and exact revision, personal files if any, seed definitions, and seed ownership records.
-4. Exact running container image identifiers/digests, not only version tags; locally built images must remain restorable. This includes databases, APIM, AM, gateways, Gamma and add-ons.
-5. A manifest with schema version, playground ID, unique state ID, user-visible name, creation time, completeness, inventory, per-part checksums, size and compatibility diagnostics.
+Use the same Lab installation. Restore refuses a changed core `docker-compose.yml`, a damaged archive, a missing
+saved image or a saved image tag that points to another image. A checkpoint is not a portable export of a playground:
+copying its files alone does not copy the Docker images it needs.
 
-Keep snapshot payloads **outside Git**, for example under an ignored `.lab/saved-states/` directory or a configured private data directory. Protect credentials and private data. An immutable checkpoint is never modified by restoration.
+## Supported storage
 
-## Safe save transaction
+Apply pending settings before saving, and wait for seeds and other Lab jobs to finish. Saving requires at least one
+managed data volume. The Lab supports local Docker volumes with the project's standard names and no driver options.
+It refuses anonymous, external and custom-named volumes, and storage managed by another volume driver.
 
-1. Verify that this is a supported local playground and identify every persistent storage dependency, platform image and configuration input. Check available disk space.
-2. Prevent other Lab jobs and concurrent start/stop operations.
-3. Quiesce/stop writes and capture an internally consistent snapshot into a temporary staging directory. A live `tar` of database volume files is **not** safe.
-4. Verify inventory, completeness, checksums and image availability. Atomically publish a complete checkpoint. A partial checkpoint is never listed as restorable.
-5. Only now invoke the existing seed deletion step (`_delete_created`) and the existing playground stop plan.
-6. If cleanup fails after a valid checkpoint, **retain the checkpoint** and report the failed cleanup. Never report a successful switch when it did not finish.
-7. On cancellation, leave no fake complete checkpoint; do not silently delete or corrupt the live runtime.
+Bind mounts must be inside the captured configuration folders: `.lab/catalogs/`, `.lab/targets/`, `plugins/`,
+`secrets/` or `certs/mtls/`, or be one of the captured configuration files. This applies to read-only mounts too.
+Links and special files are refused. An external service or a container's writable layer is not part of a checkpoint.
 
-Snapshotting may require briefly stopping services before the existing deletion step, whose management APIs require running services. The implementation must explicitly restart the required management APIs from the *same unchanged runtime* for cleanup, or use an equivalent safe coordinated snapshot technique. It must not snapshot only after seed deletion.
+Saving and restoring are refused while any playground has a recorded deployment in Gravitee Cloud: a local archive
+cannot restore those remote resources. Use [Gravitee Cloud's deployment controls](cloud.md#use-both-places) for them.
 
-## Safe restore transaction
+## Files and images
 
-1. Offer the playground's saved checkpoints under a **Saved states** section on its existing page. Multiple names/timestamps are supported.
-2. Check the candidate's manifest, integrity, catalog revision, image digests, secrets, platform compatibility and remaining storage. Treat a missing image as a blocker, not an invitation to silently pull `latest`.
-3. Before any destructive operation, warn that a whole-runtime snapshot would overwrite the current shared core volumes and may erase resources of other playgrounds. Offer to save the current environment first.
-4. Prepare restored volumes and configuration in a **separate staging area**; keep the active runtime and checkpoint unchanged until preparation succeeds.
-5. Stop the current runtime and switch the prepared data/configuration into place atomically where possible, retaining a rollback copy of the previous runtime until health checks pass.
-6. Restore the saved image identities and start the exact compatible stack. Do **not** automatically re-run the seed, because the snapshot already contains the resulting resources.
-7. If startup fails, stop the attempted restore and roll back to the previous runtime without modifying the immutable checkpoint.
+The Lab keeps checkpoints under `.lab/saved-states/`, outside Git. Each contains checksums, compressed volume archives
+and a configuration archive. Configuration includes `.env`, `.lab/on.yml`, `.lab/core.json`, `.lab/platforms.json`,
+`.lab/targets/`, `.lab/catalogs/`, `plugins/`, `secrets/` and `certs/mtls/` when present. The catalogs carry the personal
+files and the seeds' ownership records. Browser preferences and stars are not restored.
 
-A restore never downgrades a database or Gravitee component against a newer data directory. It restores the data and image set captured *together*. If any component is unavailable or the platform cannot safely restore, block the operation and say why.
+Checkpoint directories are private, but the archives are not encrypted. They can contain tokens, passwords,
+certificates, a license and application data. Protect copies as you would the live Lab's credentials. Never attach an
+archive to an issue or pull request; see [Saved playground states](../SECURITY.md#saved-playground-states).
 
-## Data isolation and versioning
+Docker tags named `gravitee-lab-saved:<state-id>-<number>` keep the saved images available without copying their layers.
+Keep those tags and images while you need the checkpoints. Removing them with Docker's image commands can make a
+checkpoint unrestorable. Allow space for each checkpoint and for a copy of the current runtime during restore.
 
-Saving A, deleting only A's recorded APIs, and then seeding B on the **same shared MongoDB volume** does not make B a fresh environment. Other persistent resources may remain. Do not promise playground isolation until the active runtime is clean or until an isolated persistent working set is implemented. Prefer one active local working set at a time; checkpoints are immutable and can be restored into a new working copy. The current shared-platform behavior remains the default for existing users.
+## Delete a checkpoint
 
-An initial implementation can support exact snapshots only when the Lab can prove that all relevant state is local and controlled. Add more storage backends incrementally; never weaken the guarantee silently.
+Choose **Delete saved state** beside an entry and confirm. This removes that checkpoint and releases its image tags;
+it changes neither another checkpoint nor the live Lab. Shared image layers stay while another tag or container needs
+them. A notice reports image cleanup that Docker could not finish.
 
-## UI
+**Reset** and `make reset` remove the live containers and volumes and clear the current seeds' records. They do not
+remove checkpoint files or their retained images. Delete checkpoints separately when you no longer need them.
 
-On Stop or Switch, add a third option:
+## A restore that fails
 
-- Keep what it created
-- Delete what it created
-- Save state and delete what it created
+Before replacing data, the Lab saves the stopped runtime for rollback. If restore or startup fails, it attempts to
+put that runtime back. A successful rollback leaves the requested checkpoint unchanged.
 
-When the third option is selected, request an optional checkpoint name (default to a timestamp). State creation, verification and existing seed deletion belong to **one** job with understandable progress and failure messages. In the playground's existing page show **Saved states** with name, date, source platform version, total size, **Restore** and **Delete**. Deleting a checkpoint requires confirmation and never changes the current live runtime. Support multiple checkpoints, and allow the user to save new changes after restoring one.
+If rollback also fails, the job reports **Recovery incomplete** and the path of the retained backup and its manifest under
+`.lab/saved-states/.rollback-*/previous/`. Keep that directory and the job output. Do not reset the Lab or remove the
+backup while diagnosing the failure. The temporary backup is removed after a successful restore or rollback.
 
-## Acceptance tests before release
-
-- Existing Keep and Delete paths remain unchanged (UI and backend tests).
-- Switching between two playgrounds with one saved state and restoring it preserves edited APIs and arbitrary data in managed core/add-on volumes.
-- Two saved states for one playground are independent; deleting one does not alter the other or live state.
-- Missing images, incompatible catalog revision, untracked writable path, insufficient disk, corrupted archive and interrupted save fail safely.
-- A failed cleanup leaves a completed snapshot, the actual runtime state is reported accurately, and no new playground is started.
-- A failed restore rolls back to the original runtime without corrupting it.
-- Any shared-platform data or external dependency that prevents exact isolation blocks the operation or is explicitly called out; never claim isolation from seeder cleanup alone.
-- Remote Cloud deployments cannot accidentally trigger a misleading local exact-state snapshot.
-- No checkpoint data, secrets, or generated archives are committed to Git.
+For the unit, Docker and full Gravitee API checks, see [Change the Lab UI](../CONTRIBUTING.md#change-the-lab-ui).

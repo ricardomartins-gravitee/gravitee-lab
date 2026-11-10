@@ -3,9 +3,11 @@
 No Docker daemon is needed for these tests. The engine's archive and Docker commands
 are separately tested with mocks so failure cannot silently run seed deletion.
 """
+
 import json
+import os
+import stat
 import tarfile
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -14,22 +16,16 @@ from lab_ui import paths
 from lab_ui.docker import compose
 from lab_ui.docker.jobs import JobFailed
 from lab_ui.gravitee import places
-from lab_ui.library import playgrounds, saved_states
+from lab_ui.library import layers, playgrounds, saved_states
+
+from .. import Case
 
 
-class SavedStates(unittest.TestCase):
+class SavedStates(Case):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        (self.root / ".lab" / "saved-states").mkdir(parents=True)
-        (self.root / "docker-compose.yml").write_text("name: gravitee\n", encoding="utf-8")
-        self.patch_root = mock.patch.object(saved_states, "ROOT", self.root)
-        self.patch_states = mock.patch.object(saved_states, "STATES", self.root / ".lab" / "saved-states")
-        self.patch_root.start()
-        self.patch_states.start()
-        self.addCleanup(self.patch_root.stop)
-        self.addCleanup(self.patch_states.stop)
+        self.folder(saved_states, files={"docker-compose.yml": "name: gravitee\n"})
+        self.patch(saved_states, "STATES", self.root / ".lab/saved-states")
+        saved_states.STATES.mkdir(parents=True)
         self.sid1 = "1" * 32
         self.sid2 = "2" * 32
 
@@ -59,6 +55,14 @@ class SavedStates(unittest.TestCase):
         (saved_states._home("welcome") / (".pending-" + self.sid2)).mkdir()
         (saved_states._home("welcome") / ("3" * 32)).symlink_to(folder, target_is_directory=True)
         self.assertEqual([row["name"] for row in saved_states.list_states("welcome")], ["Good"])
+        # Broken metadata must not turn the whole list into a server error.
+        valid = json.loads((folder / "manifest.json").read_text())
+        for key, value in (("created", None), ("created", "not-a-date"), ("name", None), ("size", -1),
+                           ("images", [None]), ("schema", True)):
+            with self.subTest(key=key, value=value):
+                candidate = {**valid, "id": self.sid2, key: value}
+                (bad / "manifest.json").write_text(json.dumps(candidate), encoding="utf-8")
+                self.assertEqual([row["name"] for row in saved_states.list_states("welcome")], ["Good"])
 
     def test_delete_one_state_preserves_the_other_and_live_configuration(self):
         first = self.record("welcome", self.sid1, "Before edits")
@@ -80,7 +84,7 @@ class SavedStates(unittest.TestCase):
         with self.assertRaises(ValueError):
             saved_states.delete_state({"playgrounds": {"other": {}}}, "other", self.sid1)
 
-    def test_external_or_unknown_writable_mount_refuses_an_exact_save(self):
+    def test_external_or_unknown_bind_mount_refuses_an_exact_save(self):
         outside = {"Type": "bind", "RW": True, "Source": "/var/lib/foreign-data",
                    "Destination": "/data"}
         with self.assertRaisesRegex(JobFailed, "external bind mount"):
@@ -113,8 +117,10 @@ class SavedStates(unittest.TestCase):
     def test_save_before_delete_and_delete_never_runs_after_failed_save(self):
         events = []
         job = object()
+
         def delete(job):
             events.append("delete")
+
         wrapped = playgrounds._save_before_delete(
             {"playgrounds": {"welcome": {}}}, {"id": "welcome"}, delete)
         with mock.patch.object(saved_states, "capture", side_effect=lambda *args: events.append("save")):
@@ -128,11 +134,7 @@ class SavedStates(unittest.TestCase):
 
     def test_snapshot_failure_restarts_containers_and_publishes_no_state(self):
         pid = "welcome"
-        class Dummy:
-            lines = []
-            def step(self, name):
-                pass
-        job = Dummy()
+        job = mock.Mock(lines=[])
         events = []
         with mock.patch.object(places, "recorded", return_value=[]), \
              mock.patch.object(saved_states, "_runtime",
@@ -145,20 +147,17 @@ class SavedStates(unittest.TestCase):
         self.assertEqual(events, ["stop", "restart"])
         self.assertEqual(saved_states.list_states(pid), [])
 
-
     def test_two_successful_checkpoints_are_published_only_after_restart(self):
-        class Dummy:
-            def __init__(self):
-                self.lines = []
-            def step(self, name):
-                pass
         events = []
+
         def write_config(dest, mounts):
             events.append("config")
             dest.write_bytes(b"safe config")
+
         def write_volume(job, name, dest, restore=False):
             events.append("volume")
             dest.write_bytes(b"safe data")
+
         with mock.patch.object(places, "recorded", return_value=[]), \
              mock.patch.object(saved_states, "_runtime",
                                return_value=(["gravitee_data-mongo"], [], ["container1"], [])), \
@@ -166,34 +165,43 @@ class SavedStates(unittest.TestCase):
              mock.patch.object(saved_states, "_restart", side_effect=lambda *a: events.append("restart")), \
              mock.patch.object(saved_states, "_archive_config", side_effect=write_config), \
              mock.patch.object(saved_states, "_volume", side_effect=write_volume):
-            first = saved_states.capture(Dummy(), {"playgrounds": {"welcome": {}}}, "welcome", "Before")
-            second = saved_states.capture(Dummy(), {"playgrounds": {"welcome": {}}}, "welcome", "After")
+            first = saved_states.capture(mock.Mock(lines=[]), {"playgrounds": {"welcome": {}}}, "welcome", "Before")
+            second = saved_states.capture(mock.Mock(lines=[]), {"playgrounds": {"welcome": {}}}, "welcome", "After")
         self.assertNotEqual(first, second)
         self.assertEqual([s["name"] for s in saved_states.list_states("welcome")], ["After", "Before"])
         self.assertEqual(events, ["stop", "config", "volume", "restart"] * 2)
 
     def test_restore_volume_uses_archive_basename_and_not_an_absolute_container_path(self):
         commands = []
-        class Dummy:
-            def exec(self, command):
-                commands.append(command)
-        saved_states._volume(Dummy(), "gravitee_data-mongo",
+        job = mock.Mock()
+        job.exec.side_effect = commands.append
+        saved_states._volume(job, "gravitee_data-mongo",
                              Path("/some/private/path/volume-0.tar.gz"), restore=True)
         self.assertIn("/backup/volume-0.tar.gz", commands[0][-1])
         self.assertNotIn("/some/private/path/volume-0.tar.gz -C", commands[0][-1])
 
-    def test_restoring_configuration_removes_stale_files(self):
+    def test_restoring_configuration_removes_stale_files_and_preserves_access_modes(self):
         folder = self.root / "snapshot"
         folder.mkdir()
         original = self.root / ".lab/catalogs/local/playgrounds/test"
         original.mkdir(parents=True)
         (original / "kept.txt").write_text("saved", encoding="utf-8")
+        plugins = self.root / "plugins/apim"
+        plugins.mkdir(parents=True)
+        secrets = original / "secrets"
+        secrets.mkdir()
+        os.chmod(plugins, 0o777)   # containers unpack plugins as another user
+        os.chmod(secrets, 0o700)
+        os.chmod(original / "kept.txt", 0o600)
         with tarfile.open(folder / "config.tar.gz", "w:gz") as archive:
             archive.add(self.root / ".lab/catalogs", arcname=".lab/catalogs")
+            archive.add(self.root / "plugins", arcname="plugins")
         (original / "stale.txt").write_text("added later", encoding="utf-8")
         saved_states._restore_config(folder)
         self.assertTrue((original / "kept.txt").is_file())
         self.assertFalse((original / "stale.txt").exists())
+        for path, expected in ((plugins, 0o777), (secrets, 0o700), (original / "kept.txt", 0o600)):
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), expected, str(path))
 
     def test_unsafe_configuration_is_refused_before_any_file_is_removed(self):
         folder = self.root / "snapshot"
@@ -243,19 +251,21 @@ class SavedStates(unittest.TestCase):
         backups = list(saved_states.STATES.glob(".rollback-*/previous/config.tar.gz"))
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_bytes(), b"previous config")
+        self.assertEqual(json.loads((backups[0].parent / "manifest.json").read_text()), data)
 
     def test_unconfirmed_restore_never_reads_or_replaces_volumes(self):
         with self.assertRaisesRegex(ValueError, "Confirm replacing"):
             saved_states.restore({"playgrounds": {"welcome": {}}}, "welcome", self.sid1)
 
-
     def test_switch_to_previously_seeded_playground_still_runs_save_and_delete(self):
-        from lab_ui.library import layers
         def before(job):
             pass
+
         after = ["docker", "compose", "up"]
+
         def delete(job):
             pass
+
         plan = {"id": "welcome", "label": "Start", "fresh": False}
         project = {"playgrounds": {"welcome": {"name": "Welcome"}}}
         with mock.patch.object(layers, "steps", return_value=[before, after]), \
@@ -265,18 +275,22 @@ class SavedStates(unittest.TestCase):
             self.assertEqual(playgrounds._started(project, plan, delete), "job")
         self.assertEqual(job.call_args.args[1], [before, delete, after])
 
-
     def test_checkpoint_image_tags_pin_exact_images_without_copying_layers(self):
         commands = []
-        class Dummy:
-            def exec(self, cmd):
-                commands.append(cmd)
+        job = mock.Mock()
+        job.exec.side_effect = commands.append
         items = [{"id": "sha256:a"}, {"id": "sha256:a"}, {"id": "sha256:b"}]
-        tags = saved_states._pin_images(Dummy(), items, self.sid1)
+        tags = saved_states._pin_images(job, items, self.sid1)
         self.assertEqual(len(tags), 2)
         self.assertEqual(items[0]["locked_tag"], items[1]["locked_tag"])
         self.assertNotEqual(items[1]["locked_tag"], items[2]["locked_tag"])
         self.assertEqual(commands[0][:3], ["docker", "tag", "sha256:a"])
+        job = mock.Mock(lines=[])
+        job.exec.side_effect = [None, JobFailed("Pin failed")]
+        with mock.patch.object(saved_states, "_docker", side_effect=JobFailed("Image in use")):
+            with self.assertRaisesRegex(JobFailed, "Pin failed"):
+                saved_states._pin_images(job, [{"id": "sha256:a"}, {"id": "sha256:b"}], self.sid1)
+        self.assertTrue(any("Image in use" in line for line in job.lines))
 
     def test_refuse_state_save_when_running_configuration_has_not_been_applied(self):
         container = {"State": {"Running": True}, "Config": {"Labels": {

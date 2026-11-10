@@ -167,6 +167,21 @@ class Running(Case):
         self.assertTrue(self.finished(first).ok)
         second = self.finished(self.start("Start Jade", []))
         self.assertEqual((self.jobs.current, self.jobs.jobs), (second, [first, second]))
+        # A synchronous checkpoint deletion holds the same guard as a new job.
+        attempted, started = threading.Event(), []
+
+        def start_after_guard():
+            attempted.set()
+            started.append(self.start("Start guarded", []))
+
+        with self.jobs.idle():
+            thread = threading.Thread(target=start_after_guard)
+            thread.start()
+            self.assertTrue(attempted.wait(2))
+            self.assertEqual(started, [])
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(self.finished(started[0]).ok)
 
     def test_a_job_says_what_it_acts_on_and_what_it_does(self):
         # The button that started it shows it by them; a job that would not say is refused

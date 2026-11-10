@@ -80,6 +80,19 @@ before sharing it, make it in **Personal** (the **New** buttons of the lists) an
 - Reuse the existing components (the picker, the pager, the rows) before you add one.
 - Add tests in `lab-ui/tests` and run `make test`. A fix adds its case to the test that holds the behavior ([Tests grow by cases](AGENTS.md#rules)).
 
+The saved-state engine also has two Docker checks, run separately from `make test`:
+
+```bash
+PYTHONPATH=lab-ui python3 -m tests.saved_states_docker
+PYTHONPATH=lab-ui python3 -m tests.saved_states_gravitee
+```
+
+Both create uniquely named temporary projects with separate volumes, networks and loopback ports, and remove them
+afterward. They can run alongside an existing Lab. The first checks archive transactions and rollback with files and
+Redis. The second builds the seeder from this checkout and uses the Lab HTTP API, a real API Management platform and
+gateway traffic to verify save, cleanup, switching, repeated restore and checkpoint deletion. It needs internet access
+to build and pull missing images. Set `GRAVITEE_STATE_E2E_ARTIFACTS` to a directory to keep its diagnostic logs.
+
 ## Documentation
 
 Write in American English, with sentence case headings, imperative sentences and short paragraphs. Draw diagrams in Mermaid. Name files and folders in lowercase with dashes.
@@ -100,7 +113,7 @@ Maintainers review on a best-effort basis.
 
 ### What CI does
 
-Every pull request, from any fork, gets these jobs with no secret and no wait: **Lint and seeder tests**, **Compose files** (`make check` with the Compose release the lab pins and with the newest one, which is what a Linux user gets from Docker's repository), **Repository tests** (the tests of `.github/tests`), **Lab UI tests** (the whole suite on Python 3.15, in four parts that take about as long, from the seconds in `lab-ui/tests/durations.json`: `python3 lab-ui/tests/run.py --time` writes them again when the parts drift apart), and **Lab UI on Python 3.9**, the oldest Python the Lab UI supports and the one a Mac comes with: every module imports on it, `make check` passes, and the quicker tests run (`run.py --imports`, then `run.py --quick`). **CI result** passes when all of them did: it is the check a merge waits for. **Default catalog** checks the default catalog with your change, so that a change of the engine that breaks it shows on the pull request: it is not required, since the fix may belong to the catalog.
+Every pull request, from any fork, gets these jobs with no secret and no wait: **Lint and seeder tests**, **Compose files** (`make check` with the Compose release the lab pins and with the newest one, which is what a Linux user gets from Docker's repository), **Repository tests** (the tests of `.github/tests`), **Lab UI tests** (the whole suite on Python 3.15, in four parts that take about as long, from the seconds in `lab-ui/tests/durations.json`: `python3 lab-ui/tests/run.py --time` writes them again when the parts drift apart), and **Lab UI on Python 3.9**, the oldest Python the Lab UI supports and the one a Mac comes with: every module imports on it, `make check` passes, and the quicker tests run (`run.py --imports`, then `run.py --quick`). **Gravitee saved states end to end** runs the isolated API scenario above, and **Compose files** also runs the lower-level Docker transactions. **CI result** passes when all of them did: it is the check a merge waits for. **Default catalog** checks the default catalog with your change, so that a change of the engine that breaks it shows on the pull request: it is not required, since the fix may belong to the catalog.
 
 The engine holds no item, so the **E2E** workflow tries the canary of the default catalog (`canary:` in its `catalog.yml`) on the engine as your change leaves it. A change that touches nothing every item shares (documentation, the page) runs nothing. Each catalog runs the same test for its own changes.
 

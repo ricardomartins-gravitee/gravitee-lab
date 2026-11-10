@@ -32,6 +32,14 @@ Only the latest version, the current `main` branch, is supported, and fixes land
 - The Developer Portal turns its frame protection on and names `http://localhost:8084` (the APIM Console) and the Lab UI's pages as the pages that may frame it, with its own `ALLOWED_FRAME_ANCESTOR_URLS` setting.
 - The Lab UI loads marked, DOMPurify, Mermaid, Monaco and xterm.js from cdnjs.cloudflare.com and cdn.jsdelivr.net, each at a pinned version. A Subresource Integrity hash covers the script the page loads, which for Monaco is its loader: the editor's other files are not hashed. You trust those two CDNs: a script that the page runs can use every Docker action of the Lab UI.
 
+## Saved playground states
+
+Saved states under `.lab/saved-states/` can contain the Lab's database contents, `.env` files, tokens, license and
+private keys. Checkpoint directories are private, but the archives are not encrypted. Protect copies as you would
+the live credentials, and never attach an archive to an issue, pull request or log. Deleting a saved state does not
+revoke credentials that were copied. [Saved playground states](docs/saved-playground-states.md) lists what is captured
+and how restore replaces the local data and configuration.
+
 ## Demo credentials
 
 The demo logins and secrets are public by design: they are public defaults of the Gravitee images, or the defaults of settings in the Compose files, and [Logins](docs/configuration.md#logins) lists them with their settings. They are not vulnerabilities. Every password, secret, token and key in a Compose file is a setting, never a literal: a demo value is the default of its setting, and the check of a catalog refuses a literal. Change the ones you want, and do not reuse the defaults anywhere else.

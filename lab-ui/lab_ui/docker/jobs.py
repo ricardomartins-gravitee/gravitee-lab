@@ -2,6 +2,7 @@
 from it and from what Docker says of their containers. The last failure on an item is remembered until the next job
 that starts or stops it."""
 
+import contextlib
 import json
 import re
 import threading
@@ -590,11 +591,17 @@ class Jobs:
     def __init__(self):
         self.jobs, self.current, self._lock = [], None, threading.Lock()
 
-    def start(self, title, steps, *, key, verb, changes=None, phases=None, waits=None):
-        """Starts a job. Every job says what it acts on and what it does (`key`, `verb`: see Job)."""
+    @contextlib.contextmanager
+    def idle(self):
+        """Guards a short change that must not overlap a job, keeping the lock inside the jobs domain."""
         with self._lock:
             if self.current and not self.current.done:
                 raise RuntimeError(f"'{self.current.title}' is still running")
+            yield
+
+    def start(self, title, steps, *, key, verb, changes=None, phases=None, waits=None):
+        """Starts a job. Every job says what it acts on and what it does (`key`, `verb`: see Job)."""
+        with self.idle():
             job = Job(title, steps, key, verb, changes, phases, waits)
             self.jobs = (self.jobs + [job])[-KEPT:]
             self.current = job

@@ -6,7 +6,7 @@
 import { $, $$, esc, icon, setHTML, loading, api, store, router, recall, remember, hrefOf, ID_PATTERN, splitKey, credHtml, catalogRows } from "../core.js";
 import { effectsDialog, paintLinks, platformLinks, progressBar, dockerDown, stateDot, toast, openMenu, originLink, catalogNeed,
   actionButton, paintActions, planRows, accepted, itemLink, openButton, noteHtml, licenseForm, starButton, toggleStar, pluginWords,
-  GAP, applyBadge, TURNS, fileButtons } from "../components/ui.js";
+  GAP, applyBadge, TURNS, fileButtons, paintBusy } from "../components/ui.js";
 import { runJob, busy, showOutput, cancelJob, jobTitle } from "../activity/jobs.js";
 import { openFile, openSettings } from "../dialogs/editor.js";
 import { share, home } from "../dialogs/create.js";
@@ -31,32 +31,64 @@ let checks = null;   // what starting it takes; null while it is read
 // What its Start says before it runs, as the checks read it (their `dialog`, null when it does no more than the
 // playground): what installing its plugins restarts too. Undefined while they are read.
 let said;
-let savedStates = [], savedFor = null;
+let savedStates = [], savedFor = null, savedProblem = "";
+let savedAsked = 0;   // only the newest read of the checkpoint list may replace it
+let settled;         // the finished job the checks were read after; undefined until they are read
+let asked = 0;       // the last read of the checks: only its answer is kept
+let timer = null;    // ticks the seconds of the running job while the page is on screen
+let refresher = null;   // reads the places again every minute while the page is on screen
+let read;            // the place the checks were asked for ("machine" or a place's id); undefined until they are
+const guides = {};   // the guides read so far, by the version of their text: {version: markdown}
+let step = "";       // the page of the guide the address names ("4"); "" for the one read last
+let stepping = false;   // the page is left for another page of the same guide: what the checks say still stands
+let toGuide = false;    // a click asked for another page of the guide: it is brought into view (see renderGuide)
+
+// Another page of this playground's guide, at `href`, in the place of the one on screen in the history, always: a UI beside the
+// guide adds its own entries to it, and a Back inside one must never go back through a turn of the guide. The same turn
+// before a start, which has no UI, so that a page of the guide is turned one way.
+function turn(href) {
+  toGuide = true;
+  router.replace(href);
+}
+
+// The plugins a playground requires, whatever the product
+const requiredPlugins = (item) => Object.values(item.requires.plugins || {}).flat();
+// What its seed created in Gravitee, as a person counts it: "3 APIs", "1 Application"
+export const seeded = (item) => item.created.map((c) => `${c.count} ${c.count === 1 ? c.what.replace(/ies$/, "y").replace(/s$/, "") : c.what}`);
+
+// --- Saved states -----------------------------------------------------------------------
+
+// Reads again after a job or a visit. An older answer must not replace a newer list for the same playground.
 async function loadSavedStates() {
-  const pid = shown;
+  const pid = shown, request = ++savedAsked;
   if (!pid) return;
   try {
     const result = await api(`/api/playgrounds/${pid}/saved-states`);
-    if (pid !== shown) return;
+    if (pid !== shown || request !== savedAsked) return;
     savedStates = result.states || [];
+    savedProblem = "";
   } catch (error) {
-    if (pid !== shown) return;
-    savedStates = [];
-    toast(error.message, true);
+    if (pid !== shown || request !== savedAsked) return;
+    savedProblem = error.message;
   }
   savedFor = pid;
   const section = $("#pg-saved-states", root);
-  if (section) setHTML(section, savedStatesHtml());
+  if (section) {
+    setHTML(section, savedStatesHtml());
+    paintBusy(section);
+  }
 }
 function savedStatesHtml() {
-  if (savedFor !== shown) return "<h3>Saved states</h3><p class=\"muted\">Loading…</p>";
-  if (!savedStates.length) return "<h3>Saved states</h3><p class=\"muted\">No saved states yet.</p>";
+  if (savedFor !== shown) return `<h3>Saved states</h3><div class="empty">${loading("Loading")}</div>`;
+  if (savedProblem) return `<h3>Saved states</h3><div class="empty" role="alert">${esc(savedProblem)}
+    <button class="btn" data-reload-states>Try again</button></div>`;
+  if (!savedStates.length) return '<h3>Saved states</h3><div class="empty">No saved states</div>';
   const why = store.wait() || (store.state.job && !store.state.job.done ? "Wait for the running job" : "");
-  const off = why ? `disabled data-tip="${esc(why)}"` : "";
+  const off = lock({ enabled: !why, reason: why });
   return `<h3>Saved states</h3><ul class="pg-list">${savedStates.map((s) => `<li class="pg-place">
     <span class="pg-place-name">${esc(s.name)}<span class="sub">${esc(new Date(s.created).toLocaleString())}, ${Math.round(s.size / 1048576)} MB</span></span>
-    <span class="row-icons"><button class="btn" ${off} data-restore-state="${esc(s.id)}">Restore</button>
-    <button class="icon-btn" ${why ? "disabled" : ""} data-delete-state="${esc(s.id)}" aria-label="Delete saved state" data-tip="${esc(why || "Delete saved state")}">${icon("trash")}</button></span>
+    <span class="row-icons"><button class="btn" ${off} data-busy data-restore-state="${esc(s.id)}" aria-label="${esc(`Restore ${s.name}`)}">Restore</button>
+    <button class="icon-btn" ${off} data-busy data-delete-state="${esc(s.id)}" aria-label="${esc(`Delete saved state ${s.name}`)}" data-tip="Delete saved state">${icon("trash")}</button></span>
   </li>`).join("")}</ul>`;
 }
 async function restoreSavedState(item, id) {
@@ -84,29 +116,6 @@ async function deleteSavedState(item, id) {
     if (result.image_cleanup_pending) toast("State deleted; Docker image cleanup is pending", true);
   } catch (error) { toast(error.message, true); }
 }
-
-let settled;         // the finished job the checks were read after; undefined until they are read
-let asked = 0;       // the last read of the checks: only its answer is kept
-let timer = null;    // ticks the seconds of the running job while the page is on screen
-let refresher = null;   // reads the places again every minute while the page is on screen
-let read;            // the place the checks were asked for ("machine" or a place's id); undefined until they are
-const guides = {};   // the guides read so far, by the version of their text: {version: markdown}
-let step = "";       // the page of the guide the address names ("4"); "" for the one read last
-let stepping = false;   // the page is left for another page of the same guide: what the checks say still stands
-let toGuide = false;    // a click asked for another page of the guide: it is brought into view (see renderGuide)
-
-// Another page of this playground's guide, at `href`, in the place of the one on screen in the history, always: a UI beside the
-// guide adds its own entries to it, and a Back inside one must never go back through a turn of the guide. The same turn
-// before a start, which has no UI, so that a page of the guide is turned one way.
-function turn(href) {
-  toGuide = true;
-  router.replace(href);
-}
-
-// The plugins a playground requires, whatever the product
-const requiredPlugins = (item) => Object.values(item.requires.plugins || {}).flat();
-// What its seed created in Gravitee, as a person counts it: "3 APIs", "1 Application"
-export const seeded = (item) => item.created.map((c) => `${c.count} ${c.count === 1 ? c.what.replace(/ies$/, "y").replace(/s$/, "") : c.what}`);
 
 // --- Items of this machine and of catalogs ----------------------------------------------
 
@@ -862,7 +871,8 @@ function keepOrDelete(item, shown) {
       { value: true, label: "Delete what it created", disabled: !!why, reason: why, rows: rows("Deletes", "danger") },
       { value: "save", label: "Save state and delete what it created",
         disabled: !!why || remote, reason: why || (remote ? "Only supported on This machine" : ""),
-        rows: rows("Deletes", "danger") }] };
+        rows: [{ label: "Saves", items: ["Local Lab data and configuration"] },
+          { label: "Pauses", items: ["All running local Lab services"] }, ...rows("Deletes", "danger")] }] };
 }
 
 export async function stopPlayground(item) {
@@ -992,6 +1002,7 @@ export const playgroundPage = {
       if (where) return choosePlace(item, where);
       const fix = on("[data-fix]");
       if (fix) return answer(item, fix.dataset.fix);
+      if (on("[data-reload-states]")) return loadSavedStates();
       const restoreState = on("[data-restore-state]");
       if (restoreState) return restoreSavedState(item, restoreState.dataset.restoreState);
       const deleteState = on("[data-delete-state]");
@@ -1016,7 +1027,7 @@ export const playgroundPage = {
   },
 
   show([id, page]) {
-    if (id !== shown) { checks = null; savedFor = null; savedStates = []; }
+    if (id !== shown) { checks = null; savedFor = null; savedStates = []; savedProblem = ""; }
     // Read again, what the checks say may have changed since the last visit; not for another page of the guide
     if (!(stepping && id === shown)) settled = undefined;
     stepping = false;

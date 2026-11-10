@@ -1,9 +1,10 @@
-"""Local, immutable saved states of a playground's complete *managed* persistent runtime.
+"""Local, immutable saved states of a playground's managed persistent runtime.
 
 These are checkpoints of the whole local Lab, not selective API exports. The database volumes can
 also hold other playgrounds' data. Only local Docker-managed volumes and files under the Lab root
-can be captured; unsupported writable external bind mounts refuse a save.
+can be captured; unsupported bind mounts refuse a save.
 """
+
 import hashlib
 import json
 import os
@@ -18,17 +19,18 @@ from pathlib import Path
 
 from .. import paths
 from ..docker import compose
-from ..gravitee import places
 from ..docker.jobs import JOBS, JobFailed
+from ..gravitee import places
 
 ROOT = paths.ROOT
 STATES = ROOT / ".lab" / "saved-states"
 IMAGE = "alpine:3.20"
 SID = re.compile(r"[a-f0-9]{32}")
 MAX_MANIFEST = 1 << 20
-# The files that determine a Lab's running state. Every playground and add-on settings,
+# The files that determine a Lab's running state. Each playground's and add-on's settings,
 # seed ownership record and catalog revision lives under .lab/catalogs.
-CONFIG = (".env", ".lab/on.yml", ".lab/core.json", ".lab/platforms.json", ".lab/targets", ".lab/catalogs", "plugins", "secrets", "certs/mtls")
+CONFIG = (".env", ".lab/on.yml", ".lab/core.json", ".lab/platforms.json", ".lab/targets", ".lab/catalogs",
+          "plugins", "secrets", "certs/mtls")
 EXCLUDE = (".lab/saved-states", ".lab/lab-ui.flock", ".git")
 SCHEMA = 1
 
@@ -52,8 +54,17 @@ def _read(path):
     if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_MANIFEST:
         raise ValueError("The saved state manifest is not a regular file")
     obj = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(obj, dict) or obj.get("schema") != SCHEMA or obj.get("complete") is not True:
+    if (not isinstance(obj, dict) or type(obj.get("schema")) is not int
+            or obj["schema"] != SCHEMA or obj.get("complete") is not True):
         raise ValueError("Incomplete or unsupported saved state")
+    if (not all(isinstance(obj.get(key), str) and obj[key] for key in ("id", "playground", "name", "created"))
+            or type(obj.get("size")) is not int or obj["size"] < 0
+            or not isinstance(obj.get("images"), list) or not all(isinstance(item, dict) for item in obj["images"])):
+        raise ValueError("Invalid saved state metadata")
+    try:
+        datetime.fromisoformat(obj["created"].replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("Invalid saved state creation time") from None
     return obj
 
 
@@ -87,17 +98,10 @@ def delete_state(project, pid, sid):
     meta = _read(target / "manifest.json")
     if meta.get("playground") != pid or meta.get("id") != sid:
         raise ValueError("The saved state does not belong to this playground")
-    with JOBS._lock:
-        if JOBS.current and not JOBS.current.done:
-            raise RuntimeError("Wait for the running job before deleting a saved state")
+    with JOBS.idle():
         shutil.rmtree(target)
-    failed = []
-    for tag in {image.get("locked_tag") for image in meta.get("images") or [] if image.get("locked_tag")}:
-        try:
-            _docker(["image", "rm", tag])
-        except JobFailed:
-            failed.append(tag)
-    return {"deleted": sid, "image_cleanup_pending": bool(failed)}
+    tags = {image.get("locked_tag") for image in meta.get("images") or [] if image.get("locked_tag")}
+    return {"deleted": sid, "image_cleanup_pending": bool(_release_images(tags))}
 
 
 def _docker(args):
@@ -119,10 +123,9 @@ def _check_applied(containers):
     files = ["-f", str(ROOT / "docker-compose.yml")]
     if (ROOT / ".lab/on.yml").is_file():
         files += ["-f", str(ROOT / ".lab/on.yml")]
-    rc, out, err = compose.run([*compose.COMPOSE, *files, "config", "--hash", "*"], timeout=90)
-    if rc:
-        raise JobFailed("Could not check applied Compose configuration: " + (err.strip() or out.strip()))
-    hashes = dict(parts for line in out.splitlines() if len(parts := line.split()) == 2)
+    hashes = compose.config_hashes(files)
+    if hashes is None:
+        raise JobFailed("Could not check applied Compose configuration")
     for container in containers:
         if not container.get("State", {}).get("Running"):
             continue
@@ -157,7 +160,7 @@ def _runtime():
             running.append(container["Id"])
         images.append({"service": labels.get("com.docker.compose.service"), "reference": cfg.get("Image"),
                        "id": container.get("Image"), "running": bool(container.get("State", {}).get("Running")),
-                       "role": labels.get("io.gravitee.role") })
+                       "role": labels.get("io.gravitee.role")})
         for mount in container.get("Mounts") or []:
             if mount.get("Type") == "volume" and mount.get("Name") not in volumes:
                 raise JobFailed("The Lab cannot safely snapshot an external or untracked Docker volume: "
@@ -182,7 +185,6 @@ def _inside_root(path):
 
 
 def _paths_to_save(mounts):
-    names = set(CONFIG)
     for mount in mounts:
         relative = _inside_root(mount.get("Source") or "/")
         if relative is None or relative.startswith(".lab/saved-states"):
@@ -190,8 +192,7 @@ def _paths_to_save(mounts):
         if not any(relative == item or relative.startswith(item + "/") for item in CONFIG):
             raise JobFailed("This bind mount needs a storage adapter before its state can be saved: "
                             + mount["Destination"])
-        names.add(relative)
-    return sorted(name for name in names if not any(name.startswith(other + "/") for other in names if other != name))
+    return sorted(CONFIG)
 
 
 def _include(info):
@@ -243,9 +244,10 @@ def _capture_stopped(job, folder, pid, label, volumes, mounts, running, images):
         _volume(job, name, archive)
         entries.append({"name": name, "file": archive.name, "sha256": _digest(archive)})
     files = [{"file": "config.tar.gz", "sha256": _digest(folder / "config.tar.gz")}, *entries]
+    created = datetime.now(timezone.utc)
+    name = label or f"Saved {created:%Y-%m-%d %H:%M:%S UTC} ({folder.name[-6:]})"
     return {"schema": SCHEMA, "complete": True, "playground": pid,
-            "id": folder.name, "name": label or "Saved " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") + " (" + folder.name[-6:] + ")",
-            "created": datetime.now(timezone.utc).isoformat(), "volumes": entries,
+            "id": folder.name, "name": name, "created": created.isoformat(), "volumes": entries,
             "config": files[0], "images": images, "running": running,
             "size": sum((folder / record["file"]).stat().st_size for record in files),
             "core_sha256": _digest(ROOT / "docker-compose.yml")}
@@ -266,11 +268,7 @@ def _pin_images(job, images, sid):
                 locked.append(tag)
             item["locked_tag"] = seen[iid]
     except BaseException:
-        for tag in locked:
-            try:
-                _docker(["image", "rm", tag])
-            except JobFailed:
-                pass
+        _release_images(locked, job)
         raise
     return locked
 
@@ -345,16 +343,25 @@ def capture(job, project, pid, name=None):
                 _restart(_Recovery(job), running)
         finally:
             if not finished:
-                _discard(staged, locked)
+                _discard(job, staged, locked)
     return sid
 
 
-def _discard(staged, locked):
-    for tag in locked:
+def _release_images(tags, job=None):
+    """A cleanup failure is reported without hiding the original save or deletion result."""
+    failed = []
+    for tag in tags:
         try:
             _docker(["image", "rm", tag])
-        except JobFailed:
-            pass
+        except JobFailed as error:
+            failed.append(tag)
+            if job is not None:
+                job.lines.append(f"Could not release saved image {tag}: {error}")
+    return failed
+
+
+def _discard(job, staged, locked):
+    _release_images(locked, job)
     if staged.exists():
         shutil.rmtree(staged)
 
@@ -440,15 +447,20 @@ def _restore_config(folder):
                 shutil.rmtree(target)
             elif target.exists():
                 target.unlink()
+        directories = []
         for item in members:
             target = ROOT / item.name
             if item.isdir():
                 target.mkdir(parents=True, exist_ok=True)
+                directories.append((target, item.mode & 0o777))
             elif item.isfile():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.extractfile(item) as source, open(target, "wb") as dest:
                     shutil.copyfileobj(source, dest)
                 os.chmod(target, item.mode & 0o777)
+        # Set directory modes last: private or read-only folders must not block extraction of their children.
+        for target, mode in reversed(directories):
+            os.chmod(target, mode)
 
 
 def _retag_images(job, images):
@@ -484,6 +496,7 @@ def restore(project, pid, sid, confirmed=False):
             # Capture the current runtime while it is quiescent for rollback.
             current = _capture_stopped(job, rollback / "previous", pid, "Rollback",
                                        volumes, mounts, running, images)
+            _write_manifest(rollback / "previous", current)
             _apply(job, data, folder, volumes)
             recovered = True
         except BaseException:

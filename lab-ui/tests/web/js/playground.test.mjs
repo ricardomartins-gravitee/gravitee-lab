@@ -27,7 +27,7 @@ const page = installDom({
     if (route !== "/api/state") server.calls.push(call);
     if (route === "/api/state") return reply(store.state);
     if (route === "/api/places") return server.down ? reply({ error: "Broken" }, 500) : reply(server.places);
-    if (route.endsWith("/saved-states")) return reply({ states: server.states || [] });
+    if (route.endsWith("/saved-states")) return server.savedReply ? server.savedReply() : reply({ states: server.states || [] });
     if (route.endsWith("/guide")) return reply({ markdown: "# Guide\n\n## 1. One\n\nClick it.\n" });
     if (route.endsWith("/check")) return reply({ checks: server.checks(query), dialog: server.dialog(query) });
     if (route.endsWith("/export")) return reply(call.body?.check ? server.exported : { ...server.exported, data: btoa("PK") });
@@ -768,7 +768,7 @@ test("Stop says per place what stays or goes; the deletion waits for the first p
   assert.deepEqual(choices(), [
     ["Keep what it created", "", [["Stays", ["12 APIs in This machine"]], ["Stays", ["3 APIs, 1 Application in Development (My Account)"]]]],
     ["Delete what it created", "", [["Deletes", ["12 APIs in This machine"]], ["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]],
-    ["Save state and delete what it created", "Only supported on This machine", [["Deletes", ["12 APIs in This machine"]], ["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]]]);
+    ["Save state and delete what it created", "Only supported on This machine", [["Saves", ["Local Lab data and configuration"]], ["Pauses", ["All running local Lab services"]], ["Deletes", ["12 APIs in This machine"]], ["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]]]);
   second = true;
   picks.onchange();
   assert.equal(text(page.ids["choice-ok"]), "Stop and delete");
@@ -813,7 +813,7 @@ test("a person with only a Cloud place is not held by what the local seed needs"
   assert.deepEqual(choices(), [
     ["Keep what it created", "", [["Stays", ["3 APIs, 1 Application in Development (My Account)"]]]],
     ["Delete what it created", "", [["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]],
-    ["Save state and delete what it created", "Only supported on This machine", [["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]]]);
+    ["Save state and delete what it created", "Only supported on This machine", [["Saves", ["Local Lab data and configuration"]], ["Pauses", ["All running local Lab services"]], ["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]]]);
   await answer(false);
   await leave();
 });
@@ -824,7 +824,7 @@ test("with a record on This machine alone, Stop is today's: no place named", asy
     section.querySelector('[data-act="stop"]').click();
     await flush();
     assert.deepEqual(choices(), [["Keep what it created", "", []], ["Delete what it created", "", [["Deletes", ["12 APIs"]]]],
-      ["Save state and delete what it created", "", [["Deletes", ["12 APIs"]]]]]);
+      ["Save state and delete what it created", "", [["Saves", ["Local Lab data and configuration"]], ["Pauses", ["All running local Lab services"]], ["Deletes", ["12 APIs"]]]]]);
     await answer(false);
     await leave();
   }
@@ -842,7 +842,7 @@ test("a start that stops a playground asks what to do with what it created, as i
   assert.equal(effects().title, "Start Acme Bakery");
   assert.deepEqual(effects().steps.map(([label]) => label), ["Stops", "Starts", "Deploys to"], "the steps are the start's own");
   assert.deepEqual(choices(), [["Keep what it created", "", []], ["Delete what it created", "", [["Deletes", ["12 APIs"]]]],
-      ["Save state and delete what it created", "", [["Deletes", ["12 APIs"]]]]]);
+      ["Save state and delete what it created", "", [["Saves", ["Local Lab data and configuration"]], ["Pauses", ["All running local Lab services"]], ["Deletes", ["12 APIs"]]]]]);
   second = true;
   picks.onchange();
   assert.equal(text(page.ids["choice-ok"]), "Start and delete");
@@ -903,6 +903,49 @@ test("Saved states list separate checkpoints and confirm a whole Lab restore", a
   assert.deepEqual(posts("/restore").at(-1).body, { confirm: true });
   assert.ok(posts("/restore").at(-1).path.includes("a".repeat(32)));
   server.states = [];
+  await leave();
+});
+
+test("Saved-state controls keep their reason and a failed list offers retry, not a false empty state", async () => {
+  server.states = [{ id: "a".repeat(32), name: "Before edits", created: "2026-11-10T10:00:00Z", size: 1024 }];
+  await visit({});
+  store.state = { ...store.state, wait: "Wait for the running job", job: JOB };
+  playgroundPage.render(store.state);
+  for (const button of section.querySelectorAll("[data-restore-state], [data-delete-state]")) {
+    assert.equal(button.disabled, false, "keyboard focus remains available");
+    assert.deepEqual([isOff(button), offWhy(button)], [true, "Wait for the running job"]);
+  }
+  await leave();
+  server.savedReply = () => reply({ error: "Checkpoint storage unavailable" }, 500);
+  await visit({});
+  const saved = () => section.querySelector("#pg-saved-states");
+  assert.ok(text(saved()).includes("Checkpoint storage unavailable"));
+  assert.ok(!text(saved()).includes("No saved states"));
+  server.savedReply = undefined;
+  saved().querySelector("[data-reload-states]").click();
+  await flush();
+  assert.equal(saved().querySelectorAll("[data-restore-state]").length, 1);
+  server.states = [];
+  await leave();
+});
+
+test("an older checkpoint list cannot replace the answer from a newer visit to the same playground", async () => {
+  const pending = [];
+  server.savedReply = () => new Promise((resolve) => pending.push(resolve));
+  await visit({});
+  playgroundPage.show(["hotels"]);
+  playgroundPage.render(store.state);
+  await flush();
+  assert.equal(pending.length, 2);
+  const row = (name) => ({ id: "a".repeat(32), name, created: "2026-11-10T10:00:00Z", size: 1024 });
+  pending[1](reply({ states: [row("Latest")] }));
+  await flush();
+  pending[0](reply({ states: [row("Stale")] }));
+  await flush();
+  const saved = text(section.querySelector("#pg-saved-states"));
+  assert.ok(saved.includes("Latest"));
+  assert.ok(!saved.includes("Stale"));
+  server.savedReply = undefined;
   await leave();
 });
 
