@@ -112,7 +112,8 @@ def _runtime():
                        "role": labels.get("io.gravitee.role") })
         for mount in container.get("Mounts") or []:
             if mount.get("Type") == "volume" and mount.get("Name") not in volumes:
-                volumes.append(mount["Name"])
+                raise JobFailed("The Lab cannot safely snapshot an external or untracked Docker volume: "
+                                + str(mount.get("Name")))
             elif mount.get("Type") == "bind":
                 mounts.append(mount)
             elif mount.get("Type") not in ("tmpfs", "volume"):
@@ -137,7 +138,7 @@ def _paths_to_save(mounts):
     for mount in mounts:
         if not mount.get("RW"):
             continue
-        relative = _inside_root(mount["Source"])
+        relative = _inside_root(mount.get("Source") or "/")
         if relative is None or relative.startswith(".lab/saved-states"):
             raise JobFailed("An external writable bind mount cannot be saved exactly: " + mount["Destination"])
         if not any(relative == item or relative.startswith(item + "/") for item in CONFIG):
@@ -281,6 +282,11 @@ def _verified(pid, sid):
         raise ValueError("The saved state belongs to another playground")
     if data.get("core_sha256") != _digest(ROOT / "docker-compose.yml"):
         raise RuntimeError("The Lab's core Compose file changed since this state was saved")
+    project = compose.project_name()
+    for volume in data.get("volumes") or []:
+        name = volume.get("name")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) or not name.startswith(project + "_"):
+            raise ValueError("The saved state contains a volume outside this Lab")
     for entry in [data["config"], *(data.get("volumes") or [])]:
         name = entry.get("file") or ""
         file = folder / name
