@@ -201,9 +201,11 @@ class SavedStates(unittest.TestCase):
 
     def test_switch_to_previously_seeded_playground_still_runs_save_and_delete(self):
         from lab_ui.library import layers
-        before = lambda job: None
+        def before(job):
+            pass
         after = ["docker", "compose", "up"]
-        delete = lambda job: None
+        def delete(job):
+            pass
         plan = {"id": "welcome", "label": "Start", "fresh": False}
         project = {"playgrounds": {"welcome": {"name": "Welcome"}}}
         with mock.patch.object(layers, "steps", return_value=[before, after]), \
