@@ -109,7 +109,8 @@ def _runtime():
         if container.get("State", {}).get("Running"):
             running.append(container["Id"])
         images.append({"service": labels.get("com.docker.compose.service"), "reference": cfg.get("Image"),
-                       "id": container.get("Image"), "running": bool(container.get("State", {}).get("Running"))})
+                       "id": container.get("Image"), "running": bool(container.get("State", {}).get("Running")),
+                       "role": labels.get("io.gravitee.role") })
         for mount in container.get("Mounts") or []:
             if mount.get("Type") == "volume" and mount.get("Name") not in volumes:
                 volumes.append(mount["Name"])
@@ -364,10 +365,18 @@ def restore(project, pid, sid, confirmed=False):
                 # Starting all services would run seed containers again. Only start those
                 # which were running in the saved state, by Compose service name.
                 services = [x["service"] for x in data["images"] if x.get("running") and x.get("service")
-                            and x["service"] in project["services"] and
-                            x["service"] != project["playgrounds"][pid].get("seed")]
+                            and x.get("role") != "seed"]
                 if services:
-                    job.exec([*compose.COMPOSE, "up", "-d", "--no-build", "--pull", "never", *services])
+                    job.exec([*compose.COMPOSE, "up", "-d", "--no-deps", "--no-build", "--pull", "never", *services])
+                    deadline = time.monotonic() + 300
+                    while time.monotonic() < deadline:
+                        now = compose.ps()
+                        if all(svc in now and now[svc].get("state") == "running" and
+                               now[svc].get("health") in ("", "healthy") for svc in services):
+                            break
+                        time.sleep(2)
+                    else:
+                        raise JobFailed("Restored services did not become healthy")
             except BaseException:
                 job.lines.append("Restore failed; restoring the previous local runtime")
                 job.exec([*compose.by_name(), "down"])
@@ -379,7 +388,7 @@ def restore(project, pid, sid, confirmed=False):
                 if running:
                     old_services = [x["service"] for x in current["images"] if x.get("running") and x.get("service")]
                     if old_services:
-                        job.exec([*compose.COMPOSE, "up", "-d", "--no-build", "--pull", "never", *old_services])
+                        job.exec([*compose.COMPOSE, "up", "-d", "--no-deps", "--no-build", "--pull", "never", *old_services])
                 raise
         finally:
             shutil.rmtree(rollback)
