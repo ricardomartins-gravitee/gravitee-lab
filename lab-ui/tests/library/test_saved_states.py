@@ -3,10 +3,7 @@
 No Docker daemon is needed for these tests. The engine's archive and Docker commands
 are separately tested with mocks so failure cannot silently run seed deletion.
 """
-import hashlib
 import json
-import os
-import tarfile
 import tempfile
 import unittest
 from pathlib import Path
