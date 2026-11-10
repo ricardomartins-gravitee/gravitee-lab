@@ -532,7 +532,7 @@ captured state includes managed persistent files and volumes, not RAM, live conn
 
 **Turn off** replaces Stop while nothing of the playground runs.
 
-The **Start** of another playground stops the one that runs, and its dialog says so first, with the same two ways for what
+The **Start** of another playground stops the one that runs, and its dialog says so first, with the same choices for what
 that one created: *Keep what it created* (the first) or *Delete what it created*, which runs its seed's delete before
 anything stops, as its own Stop would, and refuses in the same cases. A row of a list never says what its Start would
 stop: the dialog does, once.
