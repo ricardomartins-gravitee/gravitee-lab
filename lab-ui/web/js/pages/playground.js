@@ -31,6 +31,57 @@ let checks = null;   // what starting it takes; null while it is read
 // What its Start says before it runs, as the checks read it (their `dialog`, null when it does no more than the
 // playground): what installing its plugins restarts too. Undefined while they are read.
 let said;
+let savedStates = [], savedFor = null;
+async function loadSavedStates() {
+  const pid = shown;
+  if (!pid) return;
+  try {
+    const result = await api(`/api/playgrounds/${pid}/saved-states`);
+    if (pid !== shown) return;
+    savedStates = result.states || [];
+  } catch (error) {
+    if (pid !== shown) return;
+    savedStates = [];
+    toast(error.message, true);
+  }
+  savedFor = pid;
+  const section = $("#pg-saved-states", root);
+  if (section) setHTML(section, savedStatesHtml());
+}
+function savedStatesHtml() {
+  if (savedFor !== shown) return "<h3>Saved states</h3><p class=\"muted\">Loading…</p>";
+  if (!savedStates.length) return "<h3>Saved states</h3><p class=\"muted\">No saved states yet.</p>";
+  return `<h3>Saved states</h3><ul class="pg-list">${savedStates.map((s) => `<li class="pg-place">
+    <span class="pg-place-name">${esc(s.name)}<span class="sub">${esc(new Date(s.created).toLocaleString())} · ${Math.round(s.size / 1048576)} MB</span></span>
+    <span class="row-icons"><button class="btn" data-restore-state="${esc(s.id)}">Restore</button>
+    <button class="icon-btn" data-delete-state="${esc(s.id)}" aria-label="Delete saved state" data-tip="Delete saved state">${icon("trash")}</button></span>
+  </li>`).join("")}</ul>`;
+}
+async function restoreSavedState(item, id) {
+  const state = savedStates.find((s) => s.id === id);
+  if (!state) return;
+  const chosen = await effectsDialog({ title: `Restore ${state.name}`,
+    options: [{ value: true, rows: [
+      { label: "Replaces", items: ["Local Lab data and configuration, including other playgrounds' data"], tone: "danger" },
+      { label: "Uses", items: ["Saved persistent volumes and exact image versions"] }] }],
+    action: () => "Restore state", danger: () => true });
+  if (!chosen) return;
+  runJob(() => api(`/api/playgrounds/${item.id}/saved-states/${id}/restore`, { confirm: true }),
+    { key: keyOf(item), verb: "restore" });
+}
+async function deleteSavedState(item, id) {
+  const state = savedStates.find((s) => s.id === id);
+  if (!state) return;
+  const chosen = await effectsDialog({ title: `Delete ${state.name}`,
+    options: [{ value: true, rows: [{ label: "Deletes", items: ["Only this saved checkpoint"], tone: "danger" }] }],
+    action: () => "Delete saved state", danger: () => true });
+  if (!chosen) return;
+  try {
+    await api(`/api/playgrounds/${item.id}/saved-states/${id}/delete`, {});
+    await loadSavedStates();
+  } catch (error) { toast(error.message, true); }
+}
+
 let settled;         // the finished job the checks were read after; undefined until they are read
 let asked = 0;       // the last read of the checks: only its answer is kept
 let timer = null;    // ticks the seconds of the running job while the page is on screen
@@ -578,7 +629,7 @@ function about(item) {
           <div><dt>Add-ons</dt><dd>${linked(item.addons, "addon") || "None"}</dd></div>
           ${originLink(item) ? `<div><dt>Catalog</dt><dd>${originLink(item)}</dd></div>` : ""}
           ${plugins ? `<div><dt>Plugins</dt><dd>${plugins}</dd></div>` : ""}
-        </dl>${deployed(item)}
+        </dl>${deployed(item)}<section id="pg-saved-states">${savedStatesHtml()}</section>
         <div class="pg-meta">
           ${item.duration ? `<span>About ${esc(item.duration)}</span>` : ""}
           ${item.source ? `<a class="text-link" href="${esc(item.source)}" target="_blank" rel="noopener">Source</a>` : ""}
@@ -655,6 +706,7 @@ function side(item) {
     <section id="pg-open"><h3>Open</h3><div class="links" id="pg-links"></div></section>
     ${accountsHtml(item)}
     <section id="pg-attention" hidden></section>
+    <section id="pg-saved-states">${savedStatesHtml()}</section>
     <section class="pg-side-services"><h3>Services</h3><ul class="pg-list" id="pg-services"></ul></section>`;
 }
 
@@ -769,6 +821,7 @@ function render(state) {
   if (settled === undefined || (ended && ended !== settled)) {
     settled = ended;
     loadChecks();
+    loadSavedStates();
   } else if (read !== chosenId(item)) {
     checks = null;
     loadChecks();
@@ -803,7 +856,10 @@ function keepOrDelete(item, shown) {
   const rows = (word, tone) => (remote ? found.map((r) => ({ label: word, items: [at(r)], tone })) : [{ label: word, items: found[0].what, tone }]);
   return { steps: planRows({ ...shown, keeps: (shown.keeps || []).filter((row) => row.kind !== "data") }),
     options: [{ value: false, label: "Keep what it created", rows: remote ? rows("Stays") : [] },
-      { value: true, label: "Delete what it created", disabled: !!why, reason: why, rows: rows("Deletes", "danger") }] };
+      { value: true, label: "Delete what it created", disabled: !!why, reason: why, rows: rows("Deletes", "danger") },
+      { value: "save", label: "Save state and delete what it created",
+        disabled: !!why || remote, reason: why || (remote ? "Only supported on This machine" : ""),
+        rows: rows("Deletes", "danger") }] };
 }
 
 export async function stopPlayground(item) {
@@ -811,11 +867,11 @@ export async function stopPlayground(item) {
   const choice = keepOrDelete(item, plan);
   const deletes = await effectsDialog({
     title: `${label} ${item.name}`, steps: choice?.steps || [], options: choice?.options || [{ value: false, label, rows: planRows(plan) }],
-    action: (chosen) => (chosen ? `${label} and delete` : label),
-    danger: (chosen) => chosen,
+    action: (chosen) => (chosen === "save" ? `${label} and save state` : chosen ? `${label} and delete` : label),
+    danger: (chosen) => chosen !== false,
   });
   if (deletes === null) return;
-  runJob(() => api(`/api/playgrounds/${item.id}/stop`, { remove: deletes, accept: accepted(plan) }),
+  runJob(() => api(`/api/playgrounds/${item.id}/stop`, { remove: deletes !== false, save: deletes === "save", accept: accepted(plan) }),
     { key: keyOf(item), verb: "stop" });
 }
 
@@ -838,8 +894,8 @@ export async function confirmStart(item, label, dialog, { offer } = {}) {
   const choice = gone && keepOrDelete(gone, shown);
   if (!choice) return offer ? { accept: accepted(shown || {}), remove: false, ...more } : undefined;
   const deletes = await effectsDialog({ title: `${label} ${item.name}`, steps: choice.steps, options: choice.options,
-    action: (chosen) => (chosen ? `${label} and delete` : label), danger: (chosen) => chosen });
-  return deletes === null ? null : { accept: accepted(shown), remove: deletes, ...more };
+    action: (chosen) => (chosen === "save" ? `${label} and save state` : chosen ? `${label} and delete` : label), danger: (chosen) => chosen !== false });
+  return deletes === null ? null : { accept: accepted(shown), remove: deletes !== false, save: deletes === "save", ...more };
 }
 
 // Re-seed, or Deploy: the same job on a remote place, which holds nothing yet for a Deploy
@@ -933,6 +989,10 @@ export const playgroundPage = {
       if (where) return choosePlace(item, where);
       const fix = on("[data-fix]");
       if (fix) return answer(item, fix.dataset.fix);
+      const restoreState = on("[data-restore-state]");
+      if (restoreState) return restoreSavedState(item, restoreState.dataset.restoreState);
+      const deleteState = on("[data-delete-state]");
+      if (deleteState) return deleteSavedState(item, deleteState.dataset.deleteState);
       const drop = on("[data-delete-place]");
       if (drop && !drop.disabled) return deletePlace(item, drop.dataset.deletePlace);
       // Its own settings, or those of an add-on that a line of the checks names
@@ -953,11 +1013,12 @@ export const playgroundPage = {
   },
 
   show([id, page]) {
-    if (id !== shown) checks = null;
+    if (id !== shown) { checks = null; savedFor = null; savedStates = []; }
     // Read again, what the checks say may have changed since the last visit; not for another page of the guide
     if (!(stepping && id === shown)) settled = undefined;
     stepping = false;
     shown = id;
+    loadSavedStates();
     step = page || "";
     timer = setInterval(tick, 1000);
     clearInterval(refresher);
