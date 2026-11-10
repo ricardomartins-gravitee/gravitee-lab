@@ -37,6 +37,7 @@ class GraviteeStates(unittest.TestCase):
                                                    "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG") if key in os.environ}
         self.env.update(compose.NO_REMOTE, COMPOSE_FILE="docker-compose.yml:.lab/on.yml")
         self.log = self.root / "lab.log"
+        self.log.touch()
         self.addCleanup(self.cleanup_lab)
         self.make_lab()
         print("Starting isolated Gravitee lab " + self.name, flush=True)
@@ -60,6 +61,7 @@ class GraviteeStates(unittest.TestCase):
         shutil.copytree(SOURCE / "lab-ui", self.root / "lab-ui", ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copytree(SOURCE / "seeder", self.root / "seeder", ignore=shutil.ignore_patterns("__pycache__"))
         (self.root / ".lab").mkdir()
+        (self.root / "plugins/apim").mkdir(parents=True)
         (self.root / ".lab/on.yml").write_text("")
         # Resolve the real core without any settings or credentials from the user's Lab.
         core = subprocess.run([*compose.COMPOSE, "-f", str(SOURCE / "docker-compose.yml"), "config", "--format", "json"],
