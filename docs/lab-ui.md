@@ -516,11 +516,19 @@ and *Stop*. Once a [Gravitee Cloud account](#gravitee-cloud) is connected it als
 needs and names the service that does not run, such as *Management API is not running*. It needs the playground to be
 on.
 
-**Stop** offers two ways, in a dialog that first lists what else it stops:
+**Stop** offers three choices, in a dialog that first lists what else it stops:
 
 - **Keep what it created**: the apps stop, and so do the add-ons only it uses. What it created in Gravitee stays.
 - **Delete what it created**: the seed first deletes what it recorded, through Gravitee's APIs, which must run. If that
   fails, nothing else changes. It is offered once the seed has recorded something.
+
+- **Save state and delete what it created**: captures and verifies the local Lab's persistent data and configuration,
+  then runs the same seeder cleanup as Delete. A failed save never starts deletion. It is unavailable for Cloud
+  deployments and unsupported storage. Image IDs are retained with lightweight Docker tags.
+
+**Saved states** appear on the playground's page, with Restore and Delete actions. Multiple checkpoints may be kept.
+Restoring one replaces the entire local Lab's data, not just one API or playground, and requires confirmation. The
+captured state includes managed persistent files and volumes, not RAM, live connections or external services.
 
 **Turn off** replaces Stop while nothing of the playground runs.
 
