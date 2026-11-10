@@ -19,7 +19,6 @@ from pathlib import Path
 from .. import paths
 from ..docker import compose
 from ..docker.jobs import JOBS, JobFailed
-from . import layers
 
 ROOT = paths.ROOT
 STATES = ROOT / ".lab" / "saved-states"
