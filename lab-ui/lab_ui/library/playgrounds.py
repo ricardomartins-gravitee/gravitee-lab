@@ -709,7 +709,13 @@ def _started(project, plan, delete, undo=None):
     playground = project["playgrounds"][pid]
     title = f"{plan['label']} {playground['name']}"
     if not plan["fresh"]:
-        return layers.apply(project, plan, title, undo)
+        if not delete:
+            return layers.apply(project, plan, title, undo)
+        # An already-seeded destination takes the normal layers plan, but the
+        # departing playground still needs its checkpoint and delete first.
+        commands = layers.steps(project, plan, undo=undo)
+        return _job(title, [commands[0], delete, *commands[1:]], pid, "start", [],
+                    layers.waits(project, plan), layers.changes(project, plan))
     phase = WITH_PLATFORM if any(_of_platform(project, row) for row in plan["starts"]) else APPS
     installs, changes, loads, stopped = [], layers.changes(project, plan), {}, []
     for product, names in (playground["requires"].get("plugins") or {}).items():
