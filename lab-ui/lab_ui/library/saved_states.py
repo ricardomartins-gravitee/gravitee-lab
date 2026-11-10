@@ -99,6 +99,8 @@ def _runtime():
     ids = _docker(["ps", "-aq", "--filter", f"label=com.docker.compose.project={name}"]).split()
     containers = json.loads(_docker(["inspect", *ids])) if ids else []
     volumes = _docker(["volume", "ls", "-q", "--filter", f"label=com.docker.compose.project={name}"]).split()
+    if any(not name_of.startswith(name + "_") for name_of in volumes):
+        raise JobFailed("Custom volume names need a storage adapter for exact saved states")
     mounts = []
     running = []
     images = []
@@ -363,6 +365,11 @@ def restore(project, pid, sid, confirmed=False):
                                            volumes, mounts, running, images)
                 # Existing containers need to be removed to overwrite mounted data.
                 job.exec([*compose.by_name(), "down"])
+                desired = {item["name"] for item in data["volumes"]}
+                # A full-runtime checkpoint must not leave unrelated B-only volumes around.
+                for name in volumes:
+                    if name not in desired:
+                        _docker(["volume", "rm", name])
                 for item in data["volumes"]:
                     _docker(["volume", "create", item["name"]])
                     _volume(job, item["name"], folder / item["file"], restore=True)
