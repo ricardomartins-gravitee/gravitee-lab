@@ -228,7 +228,7 @@ def _capture_stopped(job, folder, pid, label, volumes, mounts, running, images):
         entries.append({"name": name, "file": archive.name, "sha256": _digest(archive)})
     files = [{"file": "config.tar.gz", "sha256": _digest(folder / "config.tar.gz")}, *entries]
     return {"schema": SCHEMA, "complete": True, "playground": pid,
-            "id": folder.name, "name": label or "Saved " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "id": folder.name, "name": label or "Saved " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") + " (" + folder.name[-6:] + ")",
             "created": datetime.now(timezone.utc).isoformat(), "volumes": entries,
             "config": files[0], "images": images, "running": running,
             "size": sum((folder / record["file"]).stat().st_size for record in files),
