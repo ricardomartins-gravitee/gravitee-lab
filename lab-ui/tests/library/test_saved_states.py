@@ -231,9 +231,9 @@ class SavedStates(unittest.TestCase):
             "com.docker.compose.service": "apim-management-api",
             "com.docker.compose.config-hash": "saved-hash",
         }}}
-        with mock.patch.object(compose, "run", return_value=(0, "apim-management-api saved-hash\\n", "")):
+        with mock.patch.object(compose, "run", return_value=(0, "apim-management-api saved-hash\n", "")):
             saved_states._check_applied([container])
-        with mock.patch.object(compose, "run", return_value=(0, "apim-management-api newer-hash\\n", "")):
+        with mock.patch.object(compose, "run", return_value=(0, "apim-management-api newer-hash\n", "")):
             with self.assertRaisesRegex(JobFailed, "Apply the pending settings"):
                 saved_states._check_applied([container])
 
