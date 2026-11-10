@@ -269,8 +269,8 @@ def capture(job, project, pid, name=None):
     if pid not in project["playgrounds"]:
         raise paths.NotFound(f"No such playground: {pid}")
     from ..gravitee import places
-    if places.recorded(pid):
-        raise JobFailed("Saved states currently support This machine only, not Gravitee Cloud deployments")
+    if any(places.recorded(uid) for uid in project["playgrounds"]):
+        raise JobFailed("Local saved states cannot capture the Lab while any playground holds resources in Gravitee Cloud")
     job.step("Save state")
     volumes, mounts, running, images = _runtime()
     if not volumes:
