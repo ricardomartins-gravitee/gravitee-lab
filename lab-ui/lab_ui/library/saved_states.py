@@ -5,7 +5,6 @@ also hold other playgrounds' data. Only local Docker-managed volumes and files u
 can be captured; unsupported writable external bind mounts refuse a save.
 """
 import hashlib
-import io
 import json
 import os
 import re
@@ -141,6 +140,9 @@ def _paths_to_save(mounts):
         relative = _inside_root(mount["Source"])
         if relative is None or relative.startswith(".lab/saved-states"):
             raise JobFailed("An external writable bind mount cannot be saved exactly: " + mount["Destination"])
+        if not any(relative == item or relative.startswith(item + "/") for item in CONFIG):
+            raise JobFailed("This writable bind mount needs a storage adapter before its state can be saved: "
+                            + mount["Destination"])
         names.add(relative)
     return sorted(names)
 
@@ -167,7 +169,7 @@ def _volume(job, name, archive, restore=False):
     """Tar operates in a disposable container. The database writers have been stopped."""
     if restore:
         cmd = ("find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; "
-               f"tar -xzf /backup/{archive} -C /data")
+               f"tar -xzf /backup/{archive.name} -C /data")
         job.exec(["docker", "run", "--rm", "--pull=missing", "-v", f"{name}:/data",
                   "-v", f"{archive.parent}:/backup:ro", IMAGE, "sh", "-c", cmd])
     else:
@@ -242,6 +244,7 @@ def capture(job, project, pid, name=None):
     volumes, mounts, running, images = _runtime()
     if not volumes:
         raise JobFailed("No managed data volumes were found for this Lab")
+    _paths_to_save(mounts)  # Validate external mounts before stopping anything
     home = _home(pid)
     if home.is_symlink():
         raise JobFailed("Saved states folder must not be a symlink")
@@ -292,7 +295,7 @@ def _verified(pid, sid):
 
 
 def _restore_config(folder):
-    """Restore trusted regular files under ROOT, never .git or the saved-state store."""
+    """Replace managed config and secret files, never the saved-state store or Git."""
     with tarfile.open(folder / "config.tar.gz", "r:gz") as archive:
         members = archive.getmembers()
         for item in members:
@@ -303,6 +306,16 @@ def _restore_config(folder):
                 # Writable bind mounts may be elsewhere under the repository; they are
                 # described in the manifest in a future archive format, so fail closed.
                 raise ValueError("Saved state includes a path outside supported configuration")
+        # Remove stale files that were not present when the snapshot was taken.
+        # The backup stays outside these paths and is used on any rollback.
+        for name in CONFIG:
+            target = ROOT / name
+            if target.is_symlink():
+                raise ValueError("Cannot restore over a linked configuration path")
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
         for item in members:
             target = ROOT / item.name
             if item.isdir():
@@ -328,6 +341,8 @@ def restore(project, pid, sid, confirmed=False):
     if not confirmed:
         raise ValueError("Confirm replacing the current local Lab data before restoring")
     folder, data = _verified(pid, sid)
+    # Verify storage inputs and reject foreign writable bind mounts before stopping the Lab.
+    _paths_to_save(_runtime()[1])
 
     def action(job):
         job.step("Restore state")
