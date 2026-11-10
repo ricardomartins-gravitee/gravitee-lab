@@ -149,7 +149,7 @@ def _paths_to_save(mounts):
 
 
 def _include(info):
-    relative = info.name.lstrip("./")
+    relative = info.name.removeprefix("./")
     if any(relative == prefix or relative.startswith(prefix + "/") for prefix in EXCLUDE):
         return None
     # Refuse symlinks: a malicious catalog must not redirect an archive outside the Lab.
@@ -351,6 +351,7 @@ def restore(project, pid, sid, confirmed=False):
         rollback = Path(tempfile.mkdtemp(prefix=".rollback-", dir=str(STATES)))
         try:
             _stop(job, running)
+            current = None
             try:
                 # Capture the current runtime while it is quiescent for rollback.
                 current = _capture_stopped(job, rollback / "previous", pid, "Rollback",
@@ -379,6 +380,10 @@ def restore(project, pid, sid, confirmed=False):
                         raise JobFailed("Restored services did not become healthy")
             except BaseException:
                 job.lines.append("Restore failed; restoring the previous local runtime")
+                if current is None:
+                    # Nothing was replaced yet. Resume the containers we stopped.
+                    _restart(job, running)
+                    raise
                 job.exec([*compose.by_name(), "down"])
                 for item in current["volumes"]:
                     _docker(["volume", "create", item["name"]])
