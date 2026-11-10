@@ -66,6 +66,8 @@ jobs:
         uses: ./.github/actions/compose
       - name: Check with the Compose the lab pins
         run: make check
+      - name: Verify saved-state Docker transactions
+        run: PYTHONPATH=lab-ui python3 -m tests.saved_states_docker
       - name: Install the newest Compose
         uses: ./.github/actions/compose
         with:

@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from ..docker import compose, images
-from . import layers, model, plugins, project as projects, tested
+from . import layers, model, plugins, project as projects, saved_states, tested
 from ..gravitee import license, places, platforms
 from .. import paths
 from ..catalogs import trust
@@ -840,7 +840,6 @@ def _delete_created(project, playground, elsewhere):
 
 def _save_before_delete(project, leaving, delete):
     """Capture managed persistent state before the *existing* seed cleanup."""
-    from . import saved_states
 
     def save_then_delete(job):
         saved_states.capture(job, project, leaving["id"])

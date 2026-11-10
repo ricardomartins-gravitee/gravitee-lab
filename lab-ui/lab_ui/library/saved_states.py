@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .. import paths
 from ..docker import compose
+from ..gravitee import places
 from ..docker.jobs import JOBS, JobFailed
 
 ROOT = paths.ROOT
@@ -27,7 +28,7 @@ SID = re.compile(r"[a-f0-9]{32}")
 MAX_MANIFEST = 1 << 20
 # The files that determine a Lab's running state. Every playground and add-on settings,
 # seed ownership record and catalog revision lives under .lab/catalogs.
-CONFIG = (".env", ".lab/on.yml", ".lab/core.json", ".lab/catalogs", "plugins", "secrets", "certs/mtls")
+CONFIG = (".env", ".lab/on.yml", ".lab/core.json", ".lab/platforms.json", ".lab/targets", ".lab/catalogs", "plugins", "secrets", "certs/mtls")
 EXCLUDE = (".lab/saved-states", ".lab/lab-ui.flock", ".git")
 SCHEMA = 1
 
@@ -40,7 +41,11 @@ def _home(pid):
 def _location(pid, sid):
     if not isinstance(sid, str) or not SID.fullmatch(sid):
         raise ValueError("Invalid saved state")
-    return _home(pid) / sid
+    home = _home(pid)
+    target = home / sid
+    if any(path.is_symlink() for path in (ROOT / ".lab", STATES, home, target)):
+        raise ValueError("Saved state storage must not be linked")
+    return target
 
 
 def _read(path):
@@ -55,7 +60,7 @@ def _read(path):
 def list_states(pid):
     """Only complete, regular manifests are exposed; partial saves are never restorable."""
     home = _home(pid)
-    if STATES.is_symlink() or not home.is_dir() or home.is_symlink():
+    if (ROOT / ".lab").is_symlink() or STATES.is_symlink() or not home.is_dir() or home.is_symlink():
         return []
     found = []
     for path in home.iterdir():
@@ -82,9 +87,10 @@ def delete_state(project, pid, sid):
     meta = _read(target / "manifest.json")
     if meta.get("playground") != pid or meta.get("id") != sid:
         raise ValueError("The saved state does not belong to this playground")
-    if JOBS.current and not JOBS.current.done:
-        raise RuntimeError("Wait for the running job before deleting a saved state")
-    shutil.rmtree(target)
+    with JOBS._lock:
+        if JOBS.current and not JOBS.current.done:
+            raise RuntimeError("Wait for the running job before deleting a saved state")
+        shutil.rmtree(target)
     failed = []
     for tag in {image.get("locked_tag") for image in meta.get("images") or [] if image.get("locked_tag")}:
         try:
@@ -113,7 +119,7 @@ def _check_applied(containers):
     files = ["-f", str(ROOT / "docker-compose.yml")]
     if (ROOT / ".lab/on.yml").is_file():
         files += ["-f", str(ROOT / ".lab/on.yml")]
-    rc, out, err = compose.run([*compose.COMPOSE, *files, "config", "--hash"], timeout=90)
+    rc, out, err = compose.run([*compose.COMPOSE, *files, "config", "--hash", "*"], timeout=90)
     if rc:
         raise JobFailed("Could not check applied Compose configuration: " + (err.strip() or out.strip()))
     hashes = dict(parts for line in out.splitlines() if len(parts := line.split()) == 2)
@@ -135,6 +141,10 @@ def _runtime():
     volumes = _docker(["volume", "ls", "-q", "--filter", f"label=com.docker.compose.project={name}"]).split()
     if any(not name_of.startswith(name + "_") for name_of in volumes):
         raise JobFailed("Custom volume names need a storage adapter for exact saved states")
+    if volumes:
+        details = json.loads(_docker(["volume", "inspect", *volumes]))
+        if any(v.get("Driver") != "local" or v.get("Options") for v in details):
+            raise JobFailed("Only local Docker volumes without driver options can be saved")
     mounts = []
     running = []
     images = []
@@ -142,6 +152,8 @@ def _runtime():
         cfg = container.get("Config") or {}
         labels = cfg.get("Labels") or {}
         if container.get("State", {}).get("Running"):
+            if labels.get("io.gravitee.role") == "seed" or labels.get("com.docker.compose.oneoff") == "True":
+                raise JobFailed("Wait for the running seed or one-off container before saving")
             running.append(container["Id"])
         images.append({"service": labels.get("com.docker.compose.service"), "reference": cfg.get("Image"),
                        "id": container.get("Image"), "running": bool(container.get("State", {}).get("Running")),
@@ -172,16 +184,14 @@ def _inside_root(path):
 def _paths_to_save(mounts):
     names = set(CONFIG)
     for mount in mounts:
-        if not mount.get("RW"):
-            continue
         relative = _inside_root(mount.get("Source") or "/")
         if relative is None or relative.startswith(".lab/saved-states"):
-            raise JobFailed("An external writable bind mount cannot be saved exactly: " + mount["Destination"])
+            raise JobFailed("An external bind mount cannot be saved exactly: " + mount["Destination"])
         if not any(relative == item or relative.startswith(item + "/") for item in CONFIG):
-            raise JobFailed("This writable bind mount needs a storage adapter before its state can be saved: "
+            raise JobFailed("This bind mount needs a storage adapter before its state can be saved: "
                             + mount["Destination"])
         names.add(relative)
-    return sorted(names)
+    return sorted(name for name in names if not any(name.startswith(other + "/") for other in names if other != name))
 
 
 def _include(info):
@@ -298,7 +308,6 @@ def capture(job, project, pid, name=None):
     """
     if pid not in project["playgrounds"]:
         raise paths.NotFound(f"No such playground: {pid}")
-    from ..gravitee import places
     if any(places.recorded(uid) for uid in project["playgrounds"]):
         raise JobFailed("Local saved states cannot capture the Lab while any playground holds resources in Gravitee Cloud")
     job.step("Save state")
@@ -307,7 +316,7 @@ def capture(job, project, pid, name=None):
         raise JobFailed("No managed data volumes were found for this Lab")
     _paths_to_save(mounts)  # Validate external mounts before stopping anything
     home = _home(pid)
-    if STATES.is_symlink() or home.is_symlink():
+    if (ROOT / ".lab").is_symlink() or STATES.is_symlink() or home.is_symlink():
         raise JobFailed("Saved states folder must not be a symlink")
     home.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(home, 0o700)
@@ -318,8 +327,8 @@ def capture(job, project, pid, name=None):
     stopped = False
     locked = []
     try:
-        _stop(job, running)
         stopped = True
+        _stop(job, running)
         data = _capture_stopped(job, staged, pid, name, volumes, mounts, running, images)
         data["id"] = sid
         locked = _pin_images(job, data["images"], sid)
@@ -330,18 +339,36 @@ def capture(job, project, pid, name=None):
         finished = True
         job.lines.append("Saved checkpoint: " + data["name"])
     finally:
-        if stopped:
-            # A failed restart is a hard failure: never delete anything afterwards.
-            _restart(job, running)
-        if not finished:
-            for tag in locked:
-                try:
-                    _docker(["image", "rm", tag])
-                except JobFailed:
-                    pass
-            if staged.exists():
-                shutil.rmtree(staged)
+        try:
+            if stopped:
+                # Recovery must run even if the job was canceled while stopping containers.
+                _restart(_Recovery(job), running)
+        finally:
+            if not finished:
+                _discard(staged, locked)
     return sid
+
+
+def _discard(staged, locked):
+    for tag in locked:
+        try:
+            _docker(["image", "rm", tag])
+        except JobFailed:
+            pass
+    if staged.exists():
+        shutil.rmtree(staged)
+
+
+class _Recovery:
+    """Cancellation ends the requested operation, but must not interrupt recovery."""
+
+    def __init__(self, job):
+        self.lines = job.lines
+
+    def exec(self, cmd):
+        rc, out, err = compose.run(cmd, timeout=360)
+        if rc:
+            raise JobFailed((err or out).strip() or "Runtime recovery failed")
 
 
 def _verified(pid, sid):
@@ -358,6 +385,12 @@ def _verified(pid, sid):
         name = volume.get("name")
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) or not name.startswith(project + "_"):
             raise ValueError("The saved state contains a volume outside this Lab")
+    existing = set(_docker(["volume", "ls", "-q"]).split())
+    for volume in data.get("volumes") or []:
+        if volume["name"] in existing:
+            info = json.loads(_docker(["volume", "inspect", volume["name"]]))[0]
+            if (info.get("Labels") or {}).get("com.docker.compose.project") != project:
+                raise ValueError("A saved volume name is now used outside this Lab")
     for entry in [data["config"], *(data.get("volumes") or [])]:
         name = entry.get("file") or ""
         file = folder / name
@@ -365,6 +398,7 @@ def _verified(pid, sid):
             raise ValueError("A saved state archive is missing")
         if _digest(file) != entry.get("sha256"):
             raise ValueError("Saved state archive integrity check failed")
+    _config_members(folder)
     for item in data.get("images") or []:
         if item.get("id"):
             _docker(["image", "inspect", item["id"]])
@@ -375,8 +409,8 @@ def _verified(pid, sid):
     return folder, data
 
 
-def _restore_config(folder):
-    """Replace managed config and secret files, never the saved-state store or Git."""
+def _config_members(folder):
+    """Validate the archive and its destination before any live data is replaced."""
     with tarfile.open(folder / "config.tar.gz", "r:gz") as archive:
         members = archive.getmembers()
         for item in members:
@@ -384,9 +418,18 @@ def _restore_config(folder):
             if name.startswith("/") or ".." in Path(name).parts or _include(item) is None:
                 raise ValueError("Unsafe saved configuration path")
             if not any(name == root or name.startswith(root + "/") for root in CONFIG):
-                # Writable bind mounts may be elsewhere under the repository; they are
-                # described in the manifest in a future archive format, so fail closed.
                 raise ValueError("Saved state includes a path outside supported configuration")
+        for name in CONFIG:
+            target = ROOT / name
+            if any(part.is_symlink() for part in (target, *target.parents) if part == ROOT or ROOT in part.parents):
+                raise ValueError("Cannot restore over a linked configuration path")
+        return members
+
+
+def _restore_config(folder):
+    """Replace managed config and secret files, never the saved-state store or Git."""
+    members = _config_members(folder)
+    with tarfile.open(folder / "config.tar.gz", "r:gz") as archive:
         # Remove stale files that were not present when the snapshot was taken.
         # The backup stays outside these paths and is used on any rollback.
         for name in CONFIG:
@@ -411,7 +454,7 @@ def _restore_config(folder):
 def _retag_images(job, images):
     for item in images:
         reference, iid = item.get("reference"), item.get("id")
-        if reference and iid and not reference.startswith("sha256:"):
+        if reference and iid and not reference.startswith("sha256:") and "@" not in reference:
             job.exec(["docker", "tag", iid, reference])
 
 
@@ -421,66 +464,74 @@ def restore(project, pid, sid, confirmed=False):
         raise paths.NotFound(f"No such playground: {pid}")
     if not confirmed:
         raise ValueError("Confirm replacing the current local Lab data before restoring")
+    if any(places.recorded(uid) for uid in project["playgrounds"]):
+        raise ValueError("Cannot replace local configuration while playgrounds hold resources in Gravitee Cloud")
     folder, data = _verified(pid, sid)
     # Verify storage inputs and reject foreign writable bind mounts before stopping the Lab.
     _paths_to_save(_runtime()[1])
 
     def action(job):
         job.step("Restore state")
+        # Recheck after the job owns the runtime: no stale validation or deleted checkpoint.
+        folder, data = _verified(pid, sid)
         volumes, mounts, running, images = _runtime()
+        _paths_to_save(mounts)
         rollback = Path(tempfile.mkdtemp(prefix=".rollback-", dir=str(STATES)))
+        current = None
+        recovered = False
         try:
             _stop(job, running)
-            current = None
+            # Capture the current runtime while it is quiescent for rollback.
+            current = _capture_stopped(job, rollback / "previous", pid, "Rollback",
+                                       volumes, mounts, running, images)
+            _apply(job, data, folder, volumes)
+            recovered = True
+        except BaseException:
+            job.lines.append("Restore failed; restoring the previous local runtime")
+            recovery = _Recovery(job)
             try:
-                # Capture the current runtime while it is quiescent for rollback.
-                current = _capture_stopped(job, rollback / "previous", pid, "Rollback",
-                                           volumes, mounts, running, images)
-                # Existing containers need to be removed to overwrite mounted data.
-                job.exec([*compose.by_name(), "down"])
-                desired = {item["name"] for item in data["volumes"]}
-                # A full-runtime checkpoint must not leave unrelated B-only volumes around.
-                for name in volumes:
-                    if name not in desired:
-                        _docker(["volume", "rm", name])
-                for item in data["volumes"]:
-                    _docker(["volume", "create", item["name"]])
-                    _volume(job, item["name"], folder / item["file"], restore=True)
-                _restore_config(folder)
-                _retag_images(job, data["images"])
-                # Starting all services would run seed containers again. Only start those
-                # which were running in the saved state, by Compose service name.
-                services = [x["service"] for x in data["images"] if x.get("running") and x.get("service")
-                            and x.get("role") != "seed"]
-                if services:
-                    job.exec([*compose.COMPOSE, "up", "-d", "--no-deps", "--no-build", "--pull", "never", *services])
-                    deadline = time.monotonic() + 300
-                    while time.monotonic() < deadline:
-                        now = compose.ps()
-                        if all(svc in now and now[svc].get("state") == "running" and
-                               now[svc].get("health") in ("", "healthy") for svc in services):
-                            break
-                        time.sleep(2)
-                    else:
-                        raise JobFailed("Restored services did not become healthy")
-            except BaseException:
-                job.lines.append("Restore failed; restoring the previous local runtime")
                 if current is None:
-                    # Nothing was replaced yet. Resume the containers we stopped.
-                    _restart(job, running)
-                    raise
-                job.exec([*compose.by_name(), "down"])
-                for item in current["volumes"]:
-                    _docker(["volume", "create", item["name"]])
-                    _volume(job, item["name"], rollback / "previous" / item["file"], restore=True)
-                _restore_config(rollback / "previous")
-                _retag_images(job, current["images"])
-                if running:
-                    old_services = [x["service"] for x in current["images"] if x.get("running") and x.get("service")]
-                    if old_services:
-                        job.exec([*compose.COMPOSE, "up", "-d", "--no-deps", "--no-build", "--pull", "never", *old_services])
+                    _restart(recovery, running)
+                else:
+                    _apply(recovery, current, rollback / "previous",
+                           set(volumes) | {item["name"] for item in data["volumes"]})
+                recovered = True
+            except BaseException:
+                job.lines.append("Recovery incomplete; previous data retained at " + str(rollback))
                 raise
+            raise
         finally:
-            shutil.rmtree(rollback)
+            if recovered:
+                shutil.rmtree(rollback)
     return JOBS.start("Restore " + data["name"], [action], key=f"playground:{pid}",
                       verb="restore", phases=["Restore state"], waits=[None])
+
+
+def _apply(job, data, folder, volumes):
+    """Replace a stopped runtime, for a restore or its rollback, without executing seeds."""
+    job.exec([*compose.by_name(), "down"])
+    desired = {item["name"] for item in data["volumes"]}
+    for name in sorted(set(volumes) - desired):
+        # A failed apply may not have created all of its volumes yet.
+        if name in _docker(["volume", "ls", "-q"]).split():
+            _docker(["volume", "rm", name])
+    project = compose.project_name()
+    for item in data["volumes"]:
+        name = item["name"]
+        _docker(["volume", "create", "--label", "com.docker.compose.project=" + project,
+                 "--label", "com.docker.compose.volume=" + name[len(project) + 1:], name])
+        _volume(job, name, folder / item["file"], restore=True)
+    _restore_config(folder)
+    _retag_images(job, data["images"])
+    services = [x["service"] for x in data["images"] if x.get("running") and x.get("service")
+                and x.get("role") != "seed"]
+    if services:
+        job.exec([*compose.COMPOSE, "up", "-d", "--no-deps", "--no-build", "--pull", "never", *services])
+        deadline = time.monotonic() + 300
+        while time.monotonic() < deadline:
+            now = compose.ps()
+            if all(svc in now and now[svc].get("state") == "running" and
+                   now[svc].get("health") in ("", "healthy") for svc in services):
+                return
+            time.sleep(2)
+        raise JobFailed("Restored services did not become healthy")

@@ -801,7 +801,7 @@ ROUTES = [(method, re.compile(pattern), handler) for method, pattern, handler in
      lambda r, kind, uid, do: stack.unit_action(project.load(), kind, uid, do)),
     ("POST", f"/api/playgrounds/{UNIT}/start", start_playground),
     ("POST", f"/api/playgrounds/{UNIT}/stop", lambda r, pid: playgrounds.stop(
-         project.load(), pid, bool(r.body.get("remove")), accepted(r), save_state=bool(r.body.get("save")))),
+         project.load(), pid, bool(r.body.get("remove")), accepted(r), **({"save_state": True} if r.body.get("save") else {}))),
     ("GET", f"/api/playgrounds/{UNIT}/saved-states", lambda r, pid: {"states": saved_states.list_states(pid)}),
     ("POST", f"/api/playgrounds/{UNIT}/saved-states/([a-f0-9]{{32}})/restore",
      lambda r, pid, sid: saved_states.restore(project.load(), pid, sid, confirmed=r.body.get("confirm") is True)),

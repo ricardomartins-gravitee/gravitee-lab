@@ -1108,6 +1108,12 @@ class PlaceRoutes(LabUI):
         self.request("POST", "/api/playgrounds/welcome/start", {"place": self.PLACE, "switch": True})
         self.assertNotIn("switching", self.calls["start"].call_args.kwargs)
 
+    def test_save_is_forwarded_only_when_requested_with_seed_deletion(self):
+        self.request("POST", "/api/playgrounds/welcome/stop", {"remove": True, "save": True})
+        self.calls["stop"].assert_called_once_with(PROJECT, "welcome", True, [], save_state=True)
+        self.request("POST", "/api/playgrounds/welcome/start", {"remove": True, "save": True})
+        self.calls["start"].assert_called_once_with(PROJECT, "welcome", [], remove=True, save_state=True)
+
     def test_a_place_goes_to_what_deploys_there_with_what_its_dialog_showed(self):
         self.request("GET", f"/api/playgrounds/welcome/check?place={self.PLACE}")
         self.calls["check"].assert_called_once_with(PROJECT, "welcome", place=self.PLACE)

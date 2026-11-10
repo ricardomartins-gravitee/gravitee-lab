@@ -51,10 +51,12 @@ async function loadSavedStates() {
 function savedStatesHtml() {
   if (savedFor !== shown) return "<h3>Saved states</h3><p class=\"muted\">Loading…</p>";
   if (!savedStates.length) return "<h3>Saved states</h3><p class=\"muted\">No saved states yet.</p>";
+  const why = store.wait() || (store.state.job && !store.state.job.done ? "Wait for the running job" : "");
+  const off = why ? `disabled data-tip="${esc(why)}"` : "";
   return `<h3>Saved states</h3><ul class="pg-list">${savedStates.map((s) => `<li class="pg-place">
-    <span class="pg-place-name">${esc(s.name)}<span class="sub">${esc(new Date(s.created).toLocaleString())} · ${Math.round(s.size / 1048576)} MB</span></span>
-    <span class="row-icons"><button class="btn" data-restore-state="${esc(s.id)}">Restore</button>
-    <button class="icon-btn" data-delete-state="${esc(s.id)}" aria-label="Delete saved state" data-tip="Delete saved state">${icon("trash")}</button></span>
+    <span class="pg-place-name">${esc(s.name)}<span class="sub">${esc(new Date(s.created).toLocaleString())}, ${Math.round(s.size / 1048576)} MB</span></span>
+    <span class="row-icons"><button class="btn" ${off} data-restore-state="${esc(s.id)}">Restore</button>
+    <button class="icon-btn" ${why ? "disabled" : ""} data-delete-state="${esc(s.id)}" aria-label="Delete saved state" data-tip="${esc(why || "Delete saved state")}">${icon("trash")}</button></span>
   </li>`).join("")}</ul>`;
 }
 async function restoreSavedState(item, id) {
@@ -872,7 +874,7 @@ export async function stopPlayground(item) {
     danger: (chosen) => chosen !== false,
   });
   if (deletes === null) return;
-  runJob(() => api(`/api/playgrounds/${item.id}/stop`, { remove: deletes !== false, save: deletes === "save", accept: accepted(plan) }),
+  runJob(() => api(`/api/playgrounds/${item.id}/stop`, { remove: deletes !== false, ...(deletes === "save" ? { save: true } : {}), accept: accepted(plan) }),
     { key: keyOf(item), verb: "stop" });
 }
 
@@ -896,7 +898,7 @@ export async function confirmStart(item, label, dialog, { offer } = {}) {
   if (!choice) return offer ? { accept: accepted(shown || {}), remove: false, ...more } : undefined;
   const deletes = await effectsDialog({ title: `${label} ${item.name}`, steps: choice.steps, options: choice.options,
     action: (chosen) => (chosen === "save" ? `${label} and save state` : chosen ? `${label} and delete` : label), danger: (chosen) => chosen !== false });
-  return deletes === null ? null : { accept: accepted(shown), remove: deletes !== false, save: deletes === "save", ...more };
+  return deletes === null ? null : { accept: accepted(shown), remove: deletes !== false, ...(deletes === "save" ? { save: true } : {}), ...more };
 }
 
 // Re-seed, or Deploy: the same job on a remote place, which holds nothing yet for a Deploy
@@ -1019,7 +1021,6 @@ export const playgroundPage = {
     if (!(stepping && id === shown)) settled = undefined;
     stepping = false;
     shown = id;
-    loadSavedStates();
     step = page || "";
     timer = setInterval(tick, 1000);
     clearInterval(refresher);

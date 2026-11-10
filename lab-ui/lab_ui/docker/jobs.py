@@ -88,6 +88,9 @@ def _pull_before(cmd):
     if not found or found[1] != "up":
         return None
     index = found[0]
+    args = cmd[index + 1:]
+    if "--pull=never" in args or any(args[i:i + 2] == ["--pull", "never"] for i in range(len(args))):
+        return None
     options, names = [], []
     for word in cmd[index + 1:]:
         (options if word.startswith("-") else names).append(word)

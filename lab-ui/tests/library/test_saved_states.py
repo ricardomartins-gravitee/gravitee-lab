@@ -38,7 +38,7 @@ class SavedStates(unittest.TestCase):
         folder.mkdir(parents=True)
         (folder / "manifest.json").write_text(json.dumps({
             "schema": 1, "complete": True, "playground": pid, "id": sid,
-            "name": name, "created": f"2026-11-{9 if sid == self.sid1 else 10}T00:00:00+00:00",
+            "name": name, "created": f"2026-11-{9 if sid == self.sid1 else 10:02d}T00:00:00+00:00",
             "images": [], "size": 1,
         }), encoding="utf-8")
         return folder
@@ -83,7 +83,7 @@ class SavedStates(unittest.TestCase):
     def test_external_or_unknown_writable_mount_refuses_an_exact_save(self):
         outside = {"Type": "bind", "RW": True, "Source": "/var/lib/foreign-data",
                    "Destination": "/data"}
-        with self.assertRaisesRegex(JobFailed, "external writable bind mount"):
+        with self.assertRaisesRegex(JobFailed, "external bind mount"):
             saved_states._paths_to_save([outside])
         untracked = {"Type": "bind", "RW": True, "Source": str(self.root / "app-data"),
                      "Destination": "/data"}
@@ -91,12 +91,13 @@ class SavedStates(unittest.TestCase):
             saved_states._paths_to_save([untracked])
         tracked = {"Type": "bind", "RW": True, "Source": str(self.root / ".lab/catalogs/sample/.state"),
                    "Destination": "/state"}
-        self.assertIn(".lab/catalogs/sample/.state", saved_states._paths_to_save([tracked]))
+        self.assertIn(".lab/catalogs", saved_states._paths_to_save([tracked]))
 
     def test_manifest_integrity_is_checked_before_restore(self):
         folder = self.record("welcome", self.sid1, "Good")
         archive = folder / "config.tar.gz"
-        archive.write_bytes(b"test")
+        with tarfile.open(archive, "w:gz"):
+            pass
         data = json.loads((folder / "manifest.json").read_text())
         data.update(core_sha256=saved_states._digest(self.root / "docker-compose.yml"),
                     config={"file": "config.tar.gz", "sha256": saved_states._digest(archive)},
@@ -193,6 +194,55 @@ class SavedStates(unittest.TestCase):
         saved_states._restore_config(folder)
         self.assertTrue((original / "kept.txt").is_file())
         self.assertFalse((original / "stale.txt").exists())
+
+    def test_unsafe_configuration_is_refused_before_any_file_is_removed(self):
+        folder = self.root / "snapshot"
+        folder.mkdir()
+        live = self.root / ".env"
+        live.write_text("KEEP=live\n")
+        for name in ("../escape", "/absolute", ".git/config", ".lab/saved-states/overwrite"):
+            with self.subTest(name=name):
+                with tarfile.open(folder / "config.tar.gz", "w:gz") as archive:
+                    archive.addfile(tarfile.TarInfo(name))
+                with self.assertRaises((ValueError, JobFailed)):
+                    saved_states._restore_config(folder)
+                self.assertEqual(live.read_text(), "KEEP=live\n")
+
+    def test_partial_stop_failure_still_resumes_containers_and_keeps_no_checkpoint(self):
+        job = mock.Mock(lines=[])
+        with mock.patch.object(places, "recorded", return_value=[]), \
+             mock.patch.object(saved_states, "_runtime", return_value=(["gravitee_data"], [], ["one", "two"], [])), \
+             mock.patch.object(saved_states, "_stop", side_effect=JobFailed("Canceled during stop")), \
+             mock.patch.object(saved_states, "_restart") as restart:
+            with self.assertRaisesRegex(JobFailed, "Canceled during stop"):
+                saved_states.capture(job, {"playgrounds": {"welcome": {}}}, "welcome")
+        self.assertEqual(restart.call_args.args[1], ["one", "two"])
+        self.assertIsInstance(restart.call_args.args[0], saved_states._Recovery)
+        self.assertEqual(saved_states.list_states("welcome"), [])
+
+    def test_failed_rollback_keeps_the_previous_runtime_archive(self):
+        folder = self.root / "state"
+        folder.mkdir()
+        data = {"name": "Saved", "volumes": [], "images": []}
+        job = mock.Mock(lines=[])
+
+        def capture(job, destination, *args):
+            destination.mkdir(parents=True)
+            (destination / "config.tar.gz").write_bytes(b"previous config")
+            return data
+
+        with mock.patch.object(places, "recorded", return_value=[]), \
+             mock.patch.object(saved_states, "_verified", return_value=(folder, data)), \
+             mock.patch.object(saved_states, "_runtime", return_value=([], [], [], [])), \
+             mock.patch.object(saved_states, "_capture_stopped", side_effect=capture), \
+             mock.patch.object(saved_states, "_apply", side_effect=JobFailed("Disk unavailable")), \
+             mock.patch.object(saved_states.JOBS, "start") as start:
+            saved_states.restore({"playgrounds": {"welcome": {}}}, "welcome", self.sid1, confirmed=True)
+            with self.assertRaisesRegex(JobFailed, "Disk unavailable"):
+                start.call_args.args[1][0](job)
+        backups = list(saved_states.STATES.glob(".rollback-*/previous/config.tar.gz"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), b"previous config")
 
     def test_unconfirmed_restore_never_reads_or_replaces_volumes(self):
         with self.assertRaisesRegex(ValueError, "Confirm replacing"):

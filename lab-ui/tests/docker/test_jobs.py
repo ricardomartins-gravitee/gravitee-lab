@@ -152,6 +152,11 @@ class Running(Case):
         self.assertEqual((job.ok, job.lines[-1]), (True, "✓ Démo"))
         self.assertEqual((asked[0]["encoding"], asked[0]["errors"]), ("utf-8", "replace"))
 
+    def test_restore_with_pull_never_never_prepares_a_pull(self):
+        for options in (["--pull", "never"], ["--pull=never"]):
+            self.assertIsNone(jobs._pull_before([*compose.COMPOSE, "up", "-d", *options, "api"]))
+        self.assertIsNotNone(jobs._pull_before([*compose.COMPOSE, "up", "-d", "api"]))
+
     def test_one_at_a_time(self):
         release = threading.Event()
         first = self.start("Start Kazoo", [lambda job: release.wait(5)])
