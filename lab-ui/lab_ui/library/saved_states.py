@@ -95,11 +95,37 @@ def _docker(args):
     return stdout.strip()
 
 
+def _check_applied(containers):
+    """Do not save a new .env/config with old running image state ('Apply needed').
+
+    The checkpoint must describe the settings *used* by the containers it saved. A
+    platform upgrade prepared by the next playground is therefore never mistaken for
+    the version that created the old playground's database.
+    """
+    if not containers:
+        return
+    files = ["-f", str(ROOT / "docker-compose.yml")]
+    if (ROOT / ".lab/on.yml").is_file():
+        files += ["-f", str(ROOT / ".lab/on.yml")]
+    rc, out, err = compose.run([*compose.COMPOSE, *files, "config", "--hash"], timeout=90)
+    if rc:
+        raise JobFailed("Could not check applied Compose configuration: " + (err.strip() or out.strip()))
+    hashes = dict(parts for line in out.splitlines() if len(parts := line.split()) == 2)
+    for container in containers:
+        if not container.get("State", {}).get("Running"):
+            continue
+        labels = (container.get("Config") or {}).get("Labels") or {}
+        name = labels.get("com.docker.compose.service")
+        if not name or hashes.get(name) != labels.get("com.docker.compose.config-hash"):
+            raise JobFailed("Apply the pending settings before saving the playground's state: " + str(name))
+
+
 def _runtime():
     """Read active and inactive Compose containers and all managed volume names."""
     name = compose.project_name()
     ids = _docker(["ps", "-aq", "--filter", f"label=com.docker.compose.project={name}"]).split()
     containers = json.loads(_docker(["inspect", *ids])) if ids else []
+    _check_applied(containers)
     volumes = _docker(["volume", "ls", "-q", "--filter", f"label=com.docker.compose.project={name}"]).split()
     if any(not name_of.startswith(name + "_") for name_of in volumes):
         raise JobFailed("Custom volume names need a storage adapter for exact saved states")
