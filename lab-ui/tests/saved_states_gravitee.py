@@ -123,11 +123,26 @@ class GraviteeStates(unittest.TestCase):
             (folder / "backend" / version).mkdir()
             (folder / "backend" / version / "index.html").write_text(letter + ":" + version)
         definition = json.loads((SOURCE / "lab-ui/tests/data/local/playgrounds/sandbox/seed/apim/apis/sandbox.json").read_text())
-        definition["api"].update(name="Saved state " + letter.upper(), description="Seed definition " + letter)
+        definition["api"].update(name="Saved state " + letter.upper(), description="Seed definition " + letter,
+                                 crossId="saved-state-" + letter)
         definition["api"]["listeners"][0]["paths"][0]["path"] = "/state-" + letter + "/"
         definition["api"]["endpointGroups"][0]["sharedConfiguration"] = {}
         definition["api"]["endpointGroups"][0]["endpoints"][0]["configuration"]["target"] = "${STATE_BACKEND_URL}"
         (folder / "seed/apim/apis/api.json").write_text(json.dumps(definition))
+        if letter == "a":
+            portal = folder / "seed/apim/portal"
+            for name, text in {
+                "theme.yaml": "hrid: state-a-theme\nname: State A theme\ndefinition: {}\n",
+                "portal.yaml": "hrid: state-a-portal\nname: State A portal\nactiveThemeHrid: state-a-theme\n"
+                               "structure:\n  topNavbar:\n    - path: State A\n",
+                "pages/home.yaml": "hrid: state-a-home\nname: State A home\narea: HOMEPAGE\nfile: ../content/home.md\n",
+                "pages/contact.yaml": "hrid: state-a-contact\nname: Contact\nlocation: State A\nfile: ../content/contact.md\n",
+                "listings/apis.yaml": "hrid: state-a-apis\napis:\n  - apiHrid: saved-state-a\n    location: State A\n",
+                "content/home.md": "# State A home\n", "content/contact.md": "# Contact\n",
+                "api-overview.md": "# Saved API overview\n", "api-details.md": "# Saved API details\n",
+            }.items():
+                (portal / name).parent.mkdir(parents=True, exist_ok=True)
+                (portal / name).write_text(text)
         services = {
             letter + "-backend": {
                 "image": "busybox:1.37.0", "command": ["httpd", "-f", "-p", "8080", "-h", "/www"],
@@ -174,7 +189,7 @@ class GraviteeStates(unittest.TestCase):
             self.command([*compose.COMPOSE, "-p", self.name, "down", "-v", "--remove-orphans"])
         finally:
             for manifest in self.root.glob(".lab/saved-states/*/*/manifest.json"):
-                for tag in {image["locked_tag"] for image in json.loads(manifest.read_text())["images"]}:
+                for tag in {image["locked_tag"] for image in json.loads(manifest.read_text()).get("images", [])}:
                     self.command(["docker", "image", "rm", tag])
             subprocess.run(["docker", "image", "rm", self.seed_image], cwd=self.root, env=self.env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
@@ -256,8 +271,30 @@ class GraviteeStates(unittest.TestCase):
     def states(self):
         return self.json(self.lab + "/api/playgrounds/@linked/a/saved-states")["states"]
 
+    def portal_entities(self, edit=False):
+        rows = json.loads((self.linked / "playgrounds/a/.state/created.json").read_text())
+        result = {}
+        base = self.endpoint("apim-management-api", 8083) + "/automation/organizations/DEFAULT/environments/DEFAULT"
+        for row in rows:
+            collection = {"portal": "/portals", "portal-theme": "/portal-themes",
+                          "portal-page": "/portals/" + row.get("portal", "") + "/documentations"}.get(row["kind"])
+            if not collection:
+                continue
+            body = self.json(base + collection + "/" + row["hrid"], auth=True)
+            if edit and row["kind"] == "portal-page":
+                payload = {key: value for key, value in body.items() if key in
+                           ("hrid", "name", "type", "content", "area", "location", "order", "visibility")}
+                payload["content"] = "# User-edited saved portal page\n"
+                self.json(base + collection, "PUT", payload, auth=True)
+                body = self.json(base + collection + "/" + row["hrid"], auth=True)
+            result[row["id"]] = {key: value for key, value in body.items()
+                                 if key not in ("activeThemeHrid", "navigation", "organizationId", "environmentId")}
+        return result
+
     def assert_restored(self, sid, expected):
-        self.job("/api/playgrounds/@linked/a/saved-states/" + sid + "/restore", {"confirm": True})
+        plan = self.json(self.lab + "/api/playgrounds/@linked/a/saved-states/" + sid + "/plan")
+        accept = [row["kind"] + ":" + row["id"] for part in ("stops", "turns_off") for row in plan.get(part, [])]
+        self.job("/api/playgrounds/@linked/a/saved-states/" + sid + "/restore", {"confirm": True, "accept": accept})
         self.assertTrue((self.root / ".lab/catalogs/linked").is_symlink())
         self.assertTrue((self.linked / "playgrounds/a").is_symlink())
         self.assertEqual((self.linked / "playgrounds/a/.state/created.json").read_bytes(), self.ownership)
@@ -267,12 +304,26 @@ class GraviteeStates(unittest.TestCase):
                 self.assertEqual(actual.get(key), expected[key], key)
         version = expected["description"].split(":", 1)[1]
         self.assert_serves("a", version)
+        self.assertEqual(self.portal_entities(), self.expected_portals, "Owned portal edits were not restored")
         self.assertEqual(self.command([*compose.COMPOSE, "ps", "-aq", "a-seed"]), "", "Restore ran the seed again")
+        if hasattr(self, "unrecorded"):
+            actual = self.management("/apis/" + self.unrecorded["id"])
+            self.assertEqual(actual, self.unrecorded, "An unrecorded API changed during restore")
+            self.assertEqual(self.command([*compose.COMPOSE, "exec", "-T", "redis", "redis-cli", "GET", "not-this-playground"]),
+                             "changed-after-save", "Shared Redis data was rewound")
+            navigation = self.management("/portal-navigation-items?area=TOP_NAVBAR")["items"]
+            self.assertEqual(next(item for item in navigation if item["id"] == self.unowned_navigation["id"]),
+                             self.unowned_navigation, "Unowned portal navigation was changed")
+            for service, started in self.core_started.items():
+                ident = self.command([*compose.COMPOSE, "ps", "-q", service])
+                self.assertEqual(self.command(["docker", "inspect", "--format", "{{.State.StartedAt}}", ident]), started,
+                                 "Shared service was restarted: " + service)
 
     def test_saved_api_edits_survive_switch_stop_and_multiple_restores(self):
         print("Creating and editing playground A through Gravitee APIs", flush=True)
         self.job("/api/playgrounds/@linked/a/start", {})
         first_api = self.edit("a", "edited")
+        self.expected_portals = self.portal_entities(edit=True)
         self.ownership = (self.linked / "playgrounds/a/.state/created.json").read_bytes()
         print("Saving A before seeder cleanup while switching to B", flush=True)
         self.job("/api/playgrounds/@linked/b/start", {"remove": True, "save": True, "accept": ["playground:@linked/a"]})
@@ -280,17 +331,40 @@ class GraviteeStates(unittest.TestCase):
         self.management("/apis/" + first_api["id"], expected=(404,))
         self.assert_serves("b", "seed")
         b_id = self.api("b")["id"]
+        b_edited = self.edit("b", "edited-again")
+        core_ids = {service: self.command([*compose.COMPOSE, "ps", "-q", service])
+                    for service in ("mongodb", "elasticsearch", "redis", "apim-management-api", "apim-gateway")}
+        self.core_started = {service: self.command(["docker", "inspect", "--format", "{{.State.StartedAt}}", ident])
+                             for service, ident in core_ids.items()}
+        definition = json.loads((SOURCE / "lab-ui/tests/data/local/playgrounds/sandbox/seed/apim/apis/sandbox.json").read_text())
+        definition["api"]["name"] = "Unrecorded API created after A was saved"
+        definition["api"]["listeners"][0]["paths"][0]["path"] = "/unrecorded/"
+        definition["api"]["endpointGroups"][0]["sharedConfiguration"] = {}
+        definition["api"]["endpointGroups"][0]["endpoints"][0]["configuration"]["target"] = "http://b-backend:8080/seed/"
+        unrecorded_id = self.management("/apis/_import/definition", "POST", definition)["id"]
+        self.unrecorded = self.management("/apis/" + unrecorded_id)
+        nav_id = str(uuid.uuid4())
+        self.management("/portal-navigation-items", "POST", {"id": nav_id, "type": "LINK", "title": "Unowned docs",
+                        "area": "TOP_NAVBAR", "visibility": "PUBLIC", "url": "https://example.invalid/"})
+        self.unowned_navigation = next(item for item in self.management("/portal-navigation-items?area=TOP_NAVBAR")["items"]
+                                      if item["id"] == nav_id)
+        self.command([*compose.COMPOSE, "exec", "-T", "redis", "redis-cli", "SET", "not-this-playground", "changed-after-save"])
+        other_source = self.linked / "playgrounds/b/seed/apim/apis/api.json"
+        other_source.write_bytes(other_source.read_bytes() + b"\n")
         source = self.linked / "playgrounds/a/seed/apim/apis/api.json"
         original = source.read_bytes()
         source.write_bytes(original + b"\n")
         refused = self.json(self.lab + "/api/playgrounds/@linked/a/saved-states/" + first + "/restore",
                             "POST", {"confirm": True}, expected=(400,))
         self.assertIn("source or links changed", refused["error"])
-        self.assert_serves("b", "seed")
+        self.assert_serves("b", "edited-again")
         source.write_bytes(original)
         print("Restoring A and checking API identity and real gateway traffic", flush=True)
         self.assert_restored(first, first_api)
-        self.management("/apis/" + b_id, expected=(404,))
+        b_after = self.management("/apis/" + b_id)
+        for key in ("id", "description", "endpointGroups", "state", "lifecycleState", "updatedAt"):
+            self.assertEqual(b_after.get(key), b_edited.get(key), "Playground B changed: " + key)
+        self.assertEqual(core_ids, {service: self.command([*compose.COMPOSE, "ps", "-q", service]) for service in core_ids})
         self.assertTrue(next(row for row in self.json(self.lab + "/api/state")["playgrounds"] if row["id"] == "@linked/a")["on"])
         second_api = self.edit("a", "edited-again")
         print("Saving a second checkpoint using Stop, then restoring both versions", flush=True)

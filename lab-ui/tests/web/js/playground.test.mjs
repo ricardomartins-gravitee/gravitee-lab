@@ -28,6 +28,7 @@ const page = installDom({
     if (route === "/api/state") return reply(store.state);
     if (route === "/api/places") return server.down ? reply({ error: "Broken" }, 500) : reply(server.places);
     if (route.endsWith("/saved-states")) return server.savedReply ? server.savedReply() : reply({ states: server.states || [] });
+    if (route.includes("/saved-states/") && route.endsWith("/plan")) return reply(server.restorePlan || {});
     if (route.endsWith("/guide")) return reply({ markdown: "# Guide\n\n## 1. One\n\nClick it.\n" });
     if (route.endsWith("/check")) return reply({ checks: server.checks(query), dialog: server.dialog(query) });
     if (route.endsWith("/export")) return reply(call.body?.check ? server.exported : { ...server.exported, data: btoa("PK") });
@@ -768,7 +769,7 @@ test("Stop says per place what stays or goes; the deletion waits for the first p
   assert.deepEqual(choices(), [
     ["Keep what it created", "", [["Stays", ["12 APIs in This machine"]], ["Stays", ["3 APIs, 1 Application in Development (My Account)"]]]],
     ["Delete what it created", "", [["Deletes", ["12 APIs in This machine"]], ["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]],
-    ["Save state and delete what it created", "Only supported on This machine", [["Saves", ["Local Lab data and configuration"]], ["Pauses", ["All running local Lab services"]], ["Deletes", ["12 APIs in This machine"]], ["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]]]);
+    ["Save state and delete what it created", "Only supported on This machine", [["Saves", ["Only this playground's recorded resources"]], ["Deletes", ["12 APIs in This machine"]], ["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]]]);
   second = true;
   picks.onchange();
   assert.equal(text(page.ids["choice-ok"]), "Stop and delete");
@@ -813,7 +814,7 @@ test("a person with only a Cloud place is not held by what the local seed needs"
   assert.deepEqual(choices(), [
     ["Keep what it created", "", [["Stays", ["3 APIs, 1 Application in Development (My Account)"]]]],
     ["Delete what it created", "", [["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]],
-    ["Save state and delete what it created", "Only supported on This machine", [["Saves", ["Local Lab data and configuration"]], ["Pauses", ["All running local Lab services"]], ["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]]]);
+    ["Save state and delete what it created", "Only supported on This machine", [["Saves", ["Only this playground's recorded resources"]], ["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]]]);
   await answer(false);
   await leave();
 });
@@ -824,7 +825,7 @@ test("with a record on This machine alone, Stop is today's: no place named", asy
     section.querySelector('[data-act="stop"]').click();
     await flush();
     assert.deepEqual(choices(), [["Keep what it created", "", []], ["Delete what it created", "", [["Deletes", ["12 APIs"]]]],
-      ["Save state and delete what it created", "", [["Saves", ["Local Lab data and configuration"]], ["Pauses", ["All running local Lab services"]], ["Deletes", ["12 APIs"]]]]]);
+      ["Save state and delete what it created", "", [["Saves", ["Only this playground's recorded resources"]], ["Deletes", ["12 APIs"]]]]]);
     await answer(false);
     await leave();
   }
@@ -842,7 +843,7 @@ test("a start that stops a playground asks what to do with what it created, as i
   assert.equal(effects().title, "Start Acme Bakery");
   assert.deepEqual(effects().steps.map(([label]) => label), ["Stops", "Starts", "Deploys to"], "the steps are the start's own");
   assert.deepEqual(choices(), [["Keep what it created", "", []], ["Delete what it created", "", [["Deletes", ["12 APIs"]]]],
-      ["Save state and delete what it created", "", [["Saves", ["Local Lab data and configuration"]], ["Pauses", ["All running local Lab services"]], ["Deletes", ["12 APIs"]]]]]);
+      ["Save state and delete what it created", "", [["Saves", ["Only this playground's recorded resources"]], ["Deletes", ["12 APIs"]]]]]);
   second = true;
   picks.onchange();
   assert.equal(text(page.ids["choice-ok"]), "Start and delete");
@@ -884,7 +885,8 @@ test("Save state is the third Stop and Switch choice, and requests saving before
   await leave();
 });
 
-test("Saved states list separate checkpoints and confirm a whole Lab restore", async () => {
+test("Saved states confirm only the playground's resources and show any app switch separately", async () => {
+  server.restorePlan = { stops: [{ kind: "playground", id: "bank", name: "Bank apps" }] };
   server.states = [
     { id: "a".repeat(32), name: "First <edited>", created: "2026-11-10T10:00:00Z", size: 2048, images: [] },
     { id: "b".repeat(32), name: "Second", created: "2026-11-10T11:00:00Z", size: 4096, images: [] }];
@@ -894,16 +896,18 @@ test("Saved states list separate checkpoints and confirm a whole Lab restore", a
   first.click();
   await flush();
   assert.equal(effects().title, "Restore First <edited>");
-  assert.ok(effects().steps.some(([label, items]) => label === "Replaces" && items.some((s) => s.includes("other playgrounds"))));
-  assert.ok(effects().steps.some(([label, items]) => label === "Replaces" && items.some((s) => s.includes("linked folders"))));
+  assert.ok(effects().steps.some(([label, items]) => label === "Replaces" && items.some((s) => s.includes("Only this playground's recorded resources"))));
+  assert.ok(effects().steps.some(([label, items]) => label === "Stops" && items.some((s) => s.includes("Bank apps"))));
+  assert.ok(!JSON.stringify(effects()).includes("Local Lab data"));
   await answer(false);
   assert.equal(posts("/restore").length, 0);
   first.click();
   await flush();
   await answer(true);
-  assert.deepEqual(posts("/restore").at(-1).body, { confirm: true });
+  assert.deepEqual(posts("/restore").at(-1).body, { confirm: true, accept: ["playground:bank"] });
   assert.ok(posts("/restore").at(-1).path.includes("a".repeat(32)));
   server.states = [];
+  delete server.restorePlan;
   await leave();
 });
 

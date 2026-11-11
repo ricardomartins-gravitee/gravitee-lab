@@ -88,10 +88,11 @@ PYTHONPATH=lab-ui python3 -m tests.saved_states_gravitee
 ```
 
 Both create uniquely named temporary projects with separate volumes, networks and loopback ports, and remove them
-afterward. They can run alongside an existing Lab. The first checks archive transactions and rollback with files and
-Redis. The second builds the seeder from this checkout and uses the Lab HTTP API, a real API Management platform and
+afterward. They can run alongside an existing Lab. The first checks adapter isolation and recovery-file handling while other playground files and
+shared Redis data stay unchanged. The second builds the seeder from this checkout and uses the Lab HTTP API, a real API Management platform and
 gateway traffic to verify save, cleanup, switching, repeated restore and checkpoint deletion. It uses a registered folder
-catalog with nested worktree links and checks that source changes refuse restore safely. It needs internet access to
+catalog with nested worktree links and proves restoring A preserves B's later edits and the core containers.
+Changes to A's inputs refuse restoration; changes to B's source do not. It needs internet access to
 build and pull missing images. Set `GRAVITEE_STATE_E2E_ARTIFACTS` to a directory to keep its diagnostic logs.
 
 ## Documentation

@@ -1,7 +1,8 @@
-"""Real Docker checkpoint transactions, separate from the daemon-free unit suite.
+"""Real Docker adapter isolation and transaction-file handling, without a Gravitee platform.
 
-Run from the repository with PYTHONPATH=lab-ui python3 -m tests.saved_states_docker.
-Only a unique temporary Compose project is created and removed; an existing Lab is untouched.
+A small stand-in adapter proves the engine mounts only the selected ownership folder,
+runs current source over an existing image, and never rewinds a shared Redis database.
+The real adapter and management APIs are exercised by saved_states_gravitee.
 """
 
 import json
@@ -17,61 +18,71 @@ from lab_ui.docker import compose
 from lab_ui.docker.jobs import Job, JobFailed, Jobs
 from lab_ui.library import saved_states
 
+ADAPTER = '''import json, sys
+from pathlib import Path
+operation, file = sys.argv[1:]
+p = Path(file)
+state = Path('/state')
+if (state/'crash').exists():
+    raise SystemExit(2)
+result = {'ok': True}
+if (state/'refuse').exists():
+    result = {'ok': False, 'error': 'Unsupported resource kind; nothing was deleted'}
+elif operation == 'save':
+    p.write_text(json.dumps({'scope': 'playground', 'value': (state/'value').read_text()}))
+elif operation == 'restore':
+    if (state/'fail-recovery').exists():
+        (p.parent/'previous.json').write_text(json.dumps({'value': (state/'value').read_text()}))
+        result = {'ok': False, 'error': 'Recovery incomplete'}
+    else:
+        (state/'value').write_text(json.loads(p.read_text())['value'])
+(p.parent/'result.json').write_text(json.dumps(result))
+'''
+
 
 class DockerStates(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="lab-saved-states-")
+        self.temp = tempfile.TemporaryDirectory(prefix="lab-scoped-states-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
-        self.linked_temp = tempfile.TemporaryDirectory(prefix="lab-state-folder-")
+        self.linked_temp = tempfile.TemporaryDirectory(prefix="lab-state-worktree-")
         self.addCleanup(self.linked_temp.cleanup)
         self.linked = Path(self.linked_temp.name).resolve()
-        self.machine = self.linked / ".worktrees/playgrounds/demo/.state"
-        self.machine.mkdir(parents=True)
-        (self.machine.parent / "compose.yml").write_text("services: {}\n")
-        (self.linked / "playgrounds").mkdir()
-        (self.linked / "playgrounds/demo").symlink_to(self.machine.parent, target_is_directory=True)
-        self.project = "lab-state-test-" + uuid.uuid4().hex[:12]
-        self.states = self.root / ".lab/saved-states"
-        self.states.mkdir(parents=True)
+        self.machine = self.linked / ".state"
+        self.machine.mkdir()
+        (self.machine / "value").write_text("Saved own data")
         self.catalog = self.root / ".lab/catalogs/local/playgrounds/demo"
-        self.catalog.mkdir(parents=True)
-        (self.catalog / "edited.json").write_text('{"api":"edited before save"}')
-        (self.root / ".lab/catalogs/folder").symlink_to(self.linked, target_is_directory=True)
-        (self.root / ".lab/catalogs.json").write_text(json.dumps({"schema": 1, "catalogs": [
-            {"id": "folder", "kind": "folder", "path": str(self.linked)}]}))
+        self.catalog.parent.mkdir(parents=True)
         (self.root / ".lab/on.yml").write_text("services: {}\n")
-        (self.root / "docker-compose.yml").write_text(f"""name: {self.project}
+        self.catalog.symlink_to(self.linked, target_is_directory=True)
+        (self.linked / "compose.yml").write_text('services: {}\n')
+        self.other = self.catalog.parent / "other/.state"
+        self.other.mkdir(parents=True)
+        (self.other / "value").write_text("Other playground original")
+        source = self.root / "seeder/lab_seeder"
+        source.mkdir(parents=True)
+        (source / "__init__.py").touch()
+        (source / "checkpoints.py").write_text(ADAPTER)
+        self.name = "lab-state-test-" + uuid.uuid4().hex[:12]
+        (self.root / "docker-compose.yml").write_text(f'''name: {self.name}
 services:
-  app:
-    image: alpine:3.20
-    command: [sh, -c, 'exec sleep 86400']
-    volumes:
-      - data:/data
-      - ./.lab/catalogs/folder/playgrounds/demo/.state:/state
-  database:
+  shared:
     image: redis:8.10.2-alpine
-    command: [redis-server, --appendonly, 'yes']
-    volumes:
-      - database:/data
+    volumes: [database:/data]
     healthcheck:
       test: [CMD, redis-cli, ping]
       interval: 1s
       timeout: 1s
       retries: 30
-  seed:
-    image: alpine:3.20
-    command: [sh, -c, 'echo seed-ran >> /data/seed-runs']
-    labels:
-      io.gravitee.role: seed
+  demo-seed:
+    image: python:3.15.1-slim
     volumes:
-      - data:/data
+      - ./.lab/catalogs/local/playgrounds/demo/.state:/state
 volumes:
-  data: {{}}
   database: {{}}
-""")
-        for module, name, value in ((saved_states, "ROOT", self.root),
-                                    (saved_states, "STATES", self.states),
+''')
+        self.states = self.root / ".lab/saved-states"
+        for module, name, value in ((saved_states, "ROOT", self.root), (saved_states, "STATES", self.states),
                                     (compose, "ROOT", self.root), (paths, "ROOT", self.root),
                                     (saved_states, "JOBS", Jobs())):
             patch = mock.patch.object(module, name, value)
@@ -79,11 +90,12 @@ volumes:
             self.addCleanup(patch.stop)
         compose._name.clear()
         self.addCleanup(compose._name.clear)
-        self.model = {"playgrounds": {"local/demo": {}}}
-        self.job = Job("Docker checkpoint test", [], key="playground:local/demo", verb="stop")
+        self.model = {"playgrounds": {"local/demo": {"seed": "demo-seed", "file": str(self.linked / "compose.yml")}}}
+        self.job = Job("Playground checkpoint", [], key="playground:local/demo", verb="stop")
         self.addCleanup(self.cleanup_docker)
-        self.exec([*compose.COMPOSE, "up", "-d", "--wait", "app", "database"])
-        self.exec([*compose.COMPOSE, "run", "--rm", "--no-deps", "seed"])
+        self.exec([*compose.COMPOSE, "up", "-d", "--wait", "shared"])
+        self.exec(["docker", "pull", "python:3.15.1-slim"])
+        self.exec([*compose.COMPOSE, "exec", "-T", "shared", "redis-cli", "SET", "other-playground", "before"])
 
     def exec(self, command):
         rc, out, err = compose.run(command, timeout=120)
@@ -92,104 +104,52 @@ volumes:
 
     def cleanup_docker(self):
         self.exec([*compose.COMPOSE, "down", "-v", "--remove-orphans"])
-        # Include volumes that a deliberately failed restore left outside the Compose model.
-        names = self.exec(["docker", "volume", "ls", "-q", "--filter",
-                           "label=com.docker.compose.project=" + self.project]).split()
-        if names:
-            self.exec(["docker", "volume", "rm", *names])
-        for folder in self.states.rglob("manifest.json"):
-            for tag in {item["locked_tag"] for item in json.loads(folder.read_text())["images"]}:
-                self.exec(["docker", "image", "rm", tag])
-
-    def write(self, value):
-        (self.machine / "created.json").write_text(value)
-        self.exec([*compose.COMPOSE, "exec", "-T", "database", "redis-cli", "SET", "edited-api", value])
-        self.exec([*compose.COMPOSE, "exec", "-T", "app", "sh", "-c",
-                   "printf '%s' '" + value + "' > /data/api.json"])
-
-    def read(self):
-        value = self.exec([*compose.COMPOSE, "exec", "-T", "app", "cat", "/data/api.json"])
-        self.assertEqual(self.exec([*compose.COMPOSE, "exec", "-T", "database", "redis-cli", "GET", "edited-api"]), value)
-        self.assertEqual(self.exec([*compose.COMPOSE, "exec", "-T", "app", "cat", "/state/created.json"]), value)
-        self.assertEqual((self.machine / "created.json").read_text(), value)
-        self.assertTrue((self.root / ".lab/catalogs/folder").is_symlink())
-        self.assertTrue((self.linked / "playgrounds/demo").is_symlink())
-        return value
-
-    def save(self, name):
-        return saved_states.capture(self.job, self.model, "local/demo", name)
 
     def restore(self, sid, ok=True):
-        job = saved_states.restore(self.model, "local/demo", sid, confirmed=True)
-        deadline = time.monotonic() + 90
+        current = saved_states.restore(self.model, "local/demo", sid, confirmed=True)
+        deadline = time.monotonic() + 60
+        job = saved_states.JOBS.current
+        self.assertEqual(current.id, job.id)
         while not job.done and time.monotonic() < deadline:
-            time.sleep(0.1)
+            time.sleep(.1)
         self.assertTrue(job.done, "Restore did not finish")
-        self.assertEqual(job.ok, ok, "\n".join(job.lines))
-        return job
+        self.assertEqual(job.ok, ok, job.error)
 
-    def test_multiple_checkpoints_restore_and_resave_exact_data_without_reseeding(self):
-        # An old seed container can outlive its removed image, as on a Lab after a seeder upgrade.
-        template = self.exec(["docker", "create", "--label", "com.docker.compose.project=" + self.project,
-                              "alpine:3.20", "true"])
-        retired_image = self.project + "/retired-seed:local"
-        iid = self.exec(["docker", "commit", "--change", "LABEL io.gravitee.test=" + self.project,
-                         template, retired_image])
-        self.exec(["docker", "rm", template])
-        self.exec(["docker", "create", "--label", "com.docker.compose.project=" + self.project,
-                   "--label", "com.docker.compose.service=retired-seed", "--label", "io.gravitee.role=seed",
-                   retired_image, "true"])
-        self.exec(["docker", "image", "rm", "--force", retired_image])
-        if compose.run(["docker", "image", "inspect", iid])[0] == 0:
-            # The containerd store may keep the untagged image until it is removed by ID too.
-            self.exec(["docker", "image", "rm", "--force", iid])
-        self.assertNotEqual(compose.run(["docker", "image", "inspect", iid])[0], 0)
-        self.write("edited API A")
-        first = self.save("Before more edits")
-        self.write("edited API B")
-        (self.catalog / "edited.json").write_text('{"api":"later edit"}')
-        second = self.save("After more edits")
-        self.write("data created after save")
-        (self.catalog / "stale.txt").write_text("remove on restore")
-        self.restore(first)
-        self.assertEqual(self.read(), "edited API A")
-        self.assertEqual(json.loads((self.catalog / "edited.json").read_text())["api"], "edited before save")
-        self.assertFalse((self.catalog / "stale.txt").exists())
-        self.assertEqual(self.exec([*compose.COMPOSE, "exec", "-T", "app", "cat", "/data/seed-runs"]), "seed-ran")
-        third = self.save("After restore")
-        self.restore(second)
-        self.assertEqual(self.read(), "edited API B")
-        self.restore(third)
-        self.assertEqual(self.read(), "edited API A")
-        saved_states.delete_state(self.model, "local/demo", second)
-        self.assertEqual({row["id"] for row in saved_states.list_states("local/demo")}, {first, third})
-        self.assertEqual(self.read(), "edited API A")
-
-    def test_failed_restore_recovers_live_data_and_removes_new_volumes(self):
-        extra = self.project + "_extra"
-        self.exec(["docker", "volume", "create", "--label", "com.docker.compose.project=" + self.project, extra])
-        self.write("saved A")
-        sid = self.save("A")
-        self.exec(["docker", "volume", "rm", extra])
-        self.write("live B")
-        original = saved_states._retag_images
-        calls = []
-
-        def fail_once(job, images):
-            calls.append(True)
-            if len(calls) == 1:
-                raise JobFailed("Injected startup failure")
-            return original(job, images)
-
-        with mock.patch.object(saved_states, "_retag_images", side_effect=fail_once):
-            job = self.restore(sid, ok=False)
-        self.assertIn("Injected startup failure", job.error())
-        self.assertEqual(self.read(), "live B")
-        self.assertNotIn(extra, self.exec(["docker", "volume", "ls", "-q"]).split())
-        self.assertEqual(list(self.states.glob(".rollback-*")), [])
-        self.assertEqual(len(saved_states.list_states("local/demo")), 1)
+    def test_linked_playground_restore_keeps_other_playgrounds_and_shared_database_live(self):
+        shared = self.exec([*compose.COMPOSE, "ps", "-q", "shared"])
+        started = self.exec(["docker", "inspect", "--format", "{{.State.StartedAt}}", shared])
+        sid = saved_states.capture(self.job, self.model, "local/demo")
+        (self.machine / "value").write_text("Own later data")
+        (self.other / "value").write_text("Other playground edited after save")
+        self.exec([*compose.COMPOSE, "exec", "-T", "shared", "redis-cli", "SET", "other-playground", "after-save"])
         self.restore(sid)
-        self.assertEqual(self.read(), "saved A")
+        self.assertEqual((self.machine / "value").read_text(), "Saved own data")
+        self.assertEqual((self.other / "value").read_text(), "Other playground edited after save")
+        self.assertEqual(self.exec([*compose.COMPOSE, "exec", "-T", "shared", "redis-cli", "GET", "other-playground"]), "after-save")
+        self.assertEqual(self.exec([*compose.COMPOSE, "ps", "-q", "shared"]), shared)
+        self.assertEqual(self.exec(["docker", "inspect", "--format", "{{.State.StartedAt}}", shared]), started)
+        self.assertTrue(self.catalog.is_symlink())
+        files = {p.name for p in saved_states._location("local/demo", sid).iterdir()}
+        self.assertEqual(files, {"manifest.json", "resources.json"})
+
+    def test_adapter_refusal_and_failed_recovery_keep_data_and_only_own_recovery_files(self):
+        (self.machine / "crash").touch()
+        with self.assertRaisesRegex(JobFailed, "stopped without a result"):
+            saved_states.capture(self.job, self.model, "local/demo")
+        (self.machine / "crash").unlink()
+        (self.machine / "refuse").touch()
+        with self.assertRaisesRegex(JobFailed, "Unsupported resource"):
+            saved_states.capture(self.job, self.model, "local/demo")
+        self.assertEqual(saved_states.list_states("local/demo"), [])
+        (self.machine / "refuse").unlink()
+        sid = saved_states.capture(self.job, self.model, "local/demo")
+        (self.machine / "value").write_text("Own current data")
+        (self.machine / "fail-recovery").touch()
+        self.restore(sid, ok=False)
+        retained = list(self.states.glob(".restore-*/previous.json"))
+        self.assertEqual(len(retained), 1)
+        self.assertEqual(json.loads(retained[0].read_text()), {"value": "Own current data"})
+        self.assertEqual((self.other / "value").read_text(), "Other playground original")
 
 
 if __name__ == "__main__":

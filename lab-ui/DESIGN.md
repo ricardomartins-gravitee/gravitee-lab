@@ -1334,15 +1334,15 @@ The Containers page acts on containers and keeps what is on (`stack.py`).
   gateway is not part of it. **Reset** (Containers) keeps its typed word and adds the sentence *Stays: ...* for the records
   of other places: it empties This machine's record only, because Cloud was not touched.
 - **Saved states** are on the playground's page, in its stopped view and its running Details. *Save state and delete what
-  it created* is the third Stop/Switch choice; it says that it saves the local Lab's configuration and data and pauses all
-  its running services before the existing cleanup. Cloud records hold it with a reason. The list shows each checkpoint's
-  name, date and archive size, with *Restore* and *Delete saved state*. Restore confirms that it replaces the whole local
-  Lab's data and configuration, including other playgrounds' data and linked playgrounds' local settings, secrets and seed
-  records. Catalog links and development source stay; changed source or link targets block a restore. Both actions keep
-  keyboard focus and explain their wait
-  through the shared disabled-control pattern. Loading and empty lists use `.empty`; a failed read says why and offers
-  *Try again*, and an older response cannot replace a newer one. [Saved playground states](../docs/saved-playground-states.md)
-  describes storage, credentials, image retention and recovery.
+  it created* is the third Stop/Switch choice and exports only the selected playground's recorded resources before the
+  existing cleanup. Unsupported resources fail before deletion. Cloud records hold it with a reason. The list shows each
+  state's name, date and size, with *Restore* and *Delete saved state*. Restore shows any app switch and confirms replacing
+  only this playground's resources and seed ownership record. Other playgrounds' data, shared databases, catalog links and
+  source stay in place. Only changes to this playground's inputs or link block restoration. Legacy whole-Lab checkpoints
+  stay on disk but are hidden and rejected. Both actions keep keyboard focus and explain their wait through the shared
+  disabled-control pattern. Loading and empty lists use `.empty`; a failed read says why and offers *Try again*, and an
+  older response cannot replace a newer one. [Saved playground states](../docs/saved-playground-states.md) describes
+  supported resources, credentials and recovery.
 - **The Playgrounds list**: a playground that can go to a platform has a neutral cloud mark (its tooltip *Deploys to Gravitee
   Cloud*) in the marks slot, while one is registered. The note of its row, by the usual priority, adds *Needs a hybrid
   gateway*, *Needs a Cloud Token*, *Invalid token* or *Unreachable* for the place chosen, each leading to the form or the

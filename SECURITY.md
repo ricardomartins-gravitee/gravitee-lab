@@ -34,14 +34,14 @@ Only the latest version, the current `main` branch, is supported, and fixes land
 
 ## Saved playground states
 
-Saved states under `.lab/saved-states/` can contain the Lab's database contents, `.env` files, tokens, license and
-private keys. Checkpoint directories are private, but the archives are not encrypted. Protect copies as you would
-the live credentials, and never attach an archive to an issue, pull request or log. Deleting a saved state does not
-revoke credentials that were copied. [Saved playground states](docs/saved-playground-states.md) lists what is captured
-and how restore replaces the local data and configuration.
-Registered folder catalogs keep their links and development source. Restoring a checkpoint replaces their local
-settings, secrets and seed records too; changed source or link destinations block restore before runtime data changes.
-Other links and external mounts remain unsupported.
+Saved states under `.lab/saved-states/` contain the selected playground's exported resources and ownership records.
+API definitions can contain credentials. Directories are private, but files are not encrypted: protect copies as you
+would live credentials, and never attach them to an issue, pull request or log. Deleting a saved state does not revoke
+credentials copied into it. Restore validates ownership and collisions, then changes only the selected playground's
+resources; it never restores shared database volumes, other playgrounds' data or catalog settings. Linked catalogs and
+source repositories stay in place. [Saved playground states](docs/saved-playground-states.md) lists the supported
+resources and recovery files. Legacy whole-Lab checkpoints remain sensitive backups on disk, but cannot be restored
+through the playground API.
 
 ## Demo credentials
 

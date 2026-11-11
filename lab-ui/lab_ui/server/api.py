@@ -803,8 +803,11 @@ ROUTES = [(method, re.compile(pattern), handler) for method, pattern, handler in
     ("POST", f"/api/playgrounds/{UNIT}/stop", lambda r, pid: playgrounds.stop(
          project.load(), pid, bool(r.body.get("remove")), accepted(r), **({"save_state": True} if r.body.get("save") else {}))),
     ("GET", f"/api/playgrounds/{UNIT}/saved-states", lambda r, pid: {"states": saved_states.list_states(pid)}),
+    ("GET", f"/api/playgrounds/{UNIT}/saved-states/([a-f0-9]{{32}})/plan",
+     lambda r, pid, sid: layers.dialog(playgrounds.saved_state_plan(project.load(), pid, sid))),
     ("POST", f"/api/playgrounds/{UNIT}/saved-states/([a-f0-9]{{32}})/restore",
-     lambda r, pid, sid: saved_states.restore(project.load(), pid, sid, confirmed=r.body.get("confirm") is True)),
+     lambda r, pid, sid: playgrounds.restore_state(project.load(), pid, sid, confirmed=r.body.get("confirm") is True,
+                                                accept=accepted(r))),
     ("POST", f"/api/playgrounds/{UNIT}/saved-states/([a-f0-9]{{32}})/delete",
      lambda r, pid, sid: saved_states.delete_state(project.load(), pid, sid)),
     ("POST", f"/api/playgrounds/{UNIT}/terminal", terminal_input),

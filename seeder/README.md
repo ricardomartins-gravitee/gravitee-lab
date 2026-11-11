@@ -66,3 +66,12 @@ listed, with their defaults, in [the seed's settings](../docs/playgrounds.md#set
 
 The module contract, what the Lab UI reads from a run, the behavior to keep and how to run the tests are in
 [AGENTS.md](AGENTS.md).
+
+## Playground saved states
+
+The Lab UI runs `python -m lab_seeder.checkpoints save|check|restore /checkpoint/resources.json` in the playground's
+seed service, with the current seeder source mounted read-only. The adapter uses that service's endpoints and
+credentials, its own `/state/created.json`, and a private transaction folder. It never runs the seed or reads a shared
+database volume. `check` validates ownership and conflicts without changing resources; restore keeps only this
+playground's previous resources for rollback. See [Saved playground states](../docs/saved-playground-states.md) for
+supported resources and recovery files.

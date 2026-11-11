@@ -684,6 +684,22 @@ def start(project, pid, accept, place=None, remove=False, switching=False, save_
         raise
 
 
+def saved_state_plan(project, pid, sid):
+    """A restore starts the playground's apps without running its seed or changing versions."""
+    saved_states._verified(pid, sid)
+    now = _now(project)
+    plan = layers.plan(project, layers.current(project), now[0], "playground", pid, "start", behind=now[1])
+    if plan.get("switch"):
+        raise ValueError("Apply compatible platform versions before restoring this playground")
+    return plan
+
+
+def restore_state(project, pid, sid, confirmed=False, accept=()):
+    plan = saved_state_plan(project, pid, sid)
+    layers.check(project, plan, accept)
+    return saved_states.restore(project, pid, sid, confirmed=confirmed, before=layers.steps(project, plan))
+
+
 def _saved(project, values):
     """Saves versions (images.save) and answers what puts back the .env files it wrote as they were: the core's, and
     each unit's whose services share a version (images.as_saved)."""

@@ -95,14 +95,13 @@ function savedStatesHtml() {
 async function restoreSavedState(item, id) {
   const state = savedStates.find((s) => s.id === id);
   if (!state) return;
-  const chosen = await effectsDialog({ title: `Restore ${state.name}`,
+  const plan = await api(`/api/playgrounds/${item.id}/saved-states/${id}/plan`);
+  const chosen = await effectsDialog({ title: `Restore ${state.name}`, steps: planRows(plan),
     options: [{ value: true, rows: [
-      { label: "Replaces", items: ["Local Lab data and configuration, including other playgrounds' data",
-        "Playground settings, secrets and seed records, including linked folders"], tone: "danger" },
-      { label: "Uses", items: ["Saved persistent volumes and exact image versions"] }] }],
+      { label: "Replaces", items: ["Only this playground's recorded resources and seed ownership record"], tone: "danger" }] }],
     action: () => "Restore state", danger: () => true });
   if (!chosen) return;
-  runJob(() => api(`/api/playgrounds/${item.id}/saved-states/${id}/restore`, { confirm: true }),
+  runJob(() => api(`/api/playgrounds/${item.id}/saved-states/${id}/restore`, { confirm: true, accept: accepted(plan) }),
     { key: keyOf(item), verb: "restore" });
 }
 async function deleteSavedState(item, id) {
@@ -873,8 +872,7 @@ function keepOrDelete(item, shown) {
       { value: true, label: "Delete what it created", disabled: !!why, reason: why, rows: rows("Deletes", "danger") },
       { value: "save", label: "Save state and delete what it created",
         disabled: !!why || remote, reason: why || (remote ? "Only supported on This machine" : ""),
-        rows: [{ label: "Saves", items: ["Local Lab data and configuration"] },
-          { label: "Pauses", items: ["All running local Lab services"] }, ...rows("Deletes", "danger")] }] };
+        rows: [{ label: "Saves", items: ["Only this playground's recorded resources"] }, ...rows("Deletes", "danger")] }] };
 }
 
 export async function stopPlayground(item) {

@@ -521,14 +521,14 @@ on.
 - **Keep what it created**: the apps stop, and so do the add-ons only it uses. What it created in Gravitee stays.
 - **Delete what it created**: the seed first deletes what it recorded, through Gravitee's APIs, which must run. If that
   fails, nothing else changes. It is offered once the seed has recorded something.
-- **Save state and delete what it created**: pauses the local Lab to capture its persistent data and configuration,
-  restarts it, then runs the same seeder cleanup as Delete. A failed save never starts deletion. It is unavailable for
-  Cloud deployments and unsupported storage.
+- **Save state and delete what it created**: exports only this playground's recorded resources, then runs the same
+  seeder cleanup as Delete. A failed save never starts deletion. Unsupported resource kinds and Cloud deployments
+  refuse saving.
 
-**Saved states** appear on the playground's page, with Restore and Delete actions. Multiple checkpoints may be kept.
-Restoring one replaces the entire local Lab's data, not just one API or playground, and requires confirmation. The
-captured state includes managed persistent files and volumes, not RAM, live connections or external services. Read
-[Saved playground states](saved-playground-states.md) for the steps, storage limits, image retention and recovery.
+**Saved states** appear on the playground's page, with Restore and Delete actions. Multiple states may be kept.
+Restore confirms replacing only the selected playground's resources and ownership record, and shows any app switch
+separately. Shared databases and other playgrounds' resources stay as they are. Read
+[Saved playground states](saved-playground-states.md) for supported resources, linked folders and recovery.
 
 **Turn off** replaces Stop while nothing of the playground runs.
 
