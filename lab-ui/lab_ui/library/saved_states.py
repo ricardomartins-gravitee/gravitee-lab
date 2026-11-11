@@ -81,7 +81,8 @@ def list_states(pid):
             continue
         try:
             meta = _read(path / "manifest.json")
-            if meta.get("playground") != pid or meta.get("id") != path.name:
+            if (meta.get("playground") != pid or meta.get("id") != path.name
+                    or meta.get("scope") != "playground"):
                 continue
             found.append({key: meta[key] for key in ("id", "name", "created", "size", "images")
                           if key in meta})
@@ -330,6 +331,7 @@ def capture(job, project, pid, name=None):
     Stops the whole local Lab momentarily to keep databases consistent; starts exactly
     the containers that ran before, so the existing deletion step can use the APIs.
     """
+    raise JobFailed("Saving is unavailable until playground-only snapshots are supported; nothing was deleted")
     if pid not in project["playgrounds"]:
         raise paths.NotFound(f"No such playground: {pid}")
     if any(places.recorded(uid) for uid in project["playgrounds"]):
@@ -410,6 +412,8 @@ def _verified(pid, sid):
         raise ValueError("Saved state storage is linked outside the Lab")
     folder = _location(pid, sid)
     data = _read(folder / "manifest.json")
+    if data.get("scope") != "playground":
+        raise ValueError("This legacy checkpoint contains the whole Lab and cannot restore a single playground")
     if data.get("id") != sid or data.get("playground") != pid:
         raise ValueError("The saved state belongs to another playground")
     if data.get("core_sha256") != _digest(ROOT / "docker-compose.yml"):
