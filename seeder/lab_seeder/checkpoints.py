@@ -43,11 +43,13 @@ def _write(file, obj):
     temporary = file.with_suffix(".tmp")
     with temporary.open("w", encoding="utf-8") as stream:
         os.chmod(temporary, 0o600)
-        owner = os.getenv("LAB_SAVED_STATE_OWNER")
-        if owner and os.geteuid() == 0:
+        owner = file.parent / "owner.json"
+        if owner.is_file() and os.geteuid() == 0:
             # Docker writes as root on Linux; the host UI must be able to read its private output.
-            uid, gid = owner.split(":")
-            os.fchown(stream.fileno(), int(uid), int(gid))
+            ids = json.loads(owner.read_text(encoding="utf-8"))
+            if not all(type(ids.get(key)) is int and ids[key] >= 0 for key in ("uid", "gid")):
+                raise SeedError("Invalid saved-state output owner")
+            os.fchown(stream.fileno(), ids["uid"], ids["gid"])
         json.dump(obj, stream, indent=2)
         stream.write("\n")
         stream.flush()

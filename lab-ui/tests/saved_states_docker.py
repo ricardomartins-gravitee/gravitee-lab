@@ -64,6 +64,12 @@ class DockerStates(unittest.TestCase):
         (source / "__init__.py").touch()
         (source / "checkpoints.py").write_text(ADAPTER)
         self.name = "lab-state-test-" + uuid.uuid4().hex[:12]
+        self.old_image = self.name + "/older-seeder:local"
+        old = self.root / "older-image/lab_seeder"
+        old.mkdir(parents=True)
+        (old / "__init__.py").touch()
+        (old / "checkpoints.py").write_text("from pathlib import Path\nPath('/state/old-image-code-ran').touch()\n")
+        (old.parent / "Dockerfile").write_text("FROM python:3.15.1-slim\nWORKDIR /app\nCOPY lab_seeder lab_seeder\n")
         (self.root / "docker-compose.yml").write_text(f'''name: {self.name}
 services:
   shared:
@@ -75,7 +81,7 @@ services:
       timeout: 1s
       retries: 30
   demo-seed:
-    image: python:3.15.1-slim
+    image: {self.old_image}
     volumes:
       - ./.lab/catalogs/local/playgrounds/demo/.state:/state
 volumes:
@@ -93,8 +99,8 @@ volumes:
         self.model = {"playgrounds": {"local/demo": {"seed": "demo-seed", "file": str(self.linked / "compose.yml")}}}
         self.job = Job("Playground checkpoint", [], key="playground:local/demo", verb="stop")
         self.addCleanup(self.cleanup_docker)
+        self.exec(["docker", "build", "-t", self.old_image, str(old.parent)])
         self.exec([*compose.COMPOSE, "up", "-d", "--wait", "shared"])
-        self.exec(["docker", "pull", "python:3.15.1-slim"])
         self.exec([*compose.COMPOSE, "exec", "-T", "shared", "redis-cli", "SET", "other-playground", "before"])
 
     def exec(self, command):
@@ -104,6 +110,7 @@ volumes:
 
     def cleanup_docker(self):
         self.exec([*compose.COMPOSE, "down", "-v", "--remove-orphans"])
+        compose.run(["docker", "image", "rm", self.old_image])
 
     def restore(self, sid, ok=True):
         current = saved_states.restore(self.model, "local/demo", sid, confirmed=True)
@@ -129,6 +136,7 @@ volumes:
         self.assertEqual(self.exec([*compose.COMPOSE, "ps", "-q", "shared"]), shared)
         self.assertEqual(self.exec(["docker", "inspect", "--format", "{{.State.StartedAt}}", shared]), started)
         self.assertTrue(self.catalog.is_symlink())
+        self.assertFalse((self.machine / "old-image-code-ran").exists(), "Loaded the image's stale adapter instead of current source")
         files = {p.name for p in saved_states._location("local/demo", sid).iterdir()}
         self.assertEqual(files, {"manifest.json", "resources.json"})
 

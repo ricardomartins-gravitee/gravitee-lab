@@ -192,8 +192,8 @@ class Checkpoints(Seed):
         self.assertEqual(self.platform.changes(), [])
 
     def test_private_adapter_outputs_remain_readable_by_the_host_user_on_linux(self):
-        with mock.patch.dict("os.environ", LAB_SAVED_STATE_OWNER="1001:1002"), \
-             mock.patch("os.geteuid", return_value=0), mock.patch("os.fchown") as chown:
+        (self.path.parent / "owner.json").write_text('{"uid":1001,"gid":1002}')
+        with mock.patch("os.geteuid", return_value=0), mock.patch("os.fchown") as chown:
             checkpoints._write(self.path, {"ok": True})
         self.assertEqual(chown.call_args.args[1:], (1001, 1002))
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)

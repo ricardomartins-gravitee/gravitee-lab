@@ -158,8 +158,7 @@ def _foreign(project, pid):
 def _command(project, pid, operation, folder):
     playground = _playground(project, pid)
     return [*compose.COMPOSE, *compose.all_files([playground["file"]]), "run", "-d", "--rm", "--no-deps", "--pull=missing",
-            "--entrypoint", "python", "-e", "PYTHONPATH=/checkpoint-code",
-            "-e", f"LAB_SAVED_STATE_OWNER={os.getuid()}:{os.getgid()}",
+            "--entrypoint", "python", "--workdir", "/checkpoint-code",
             "-v", f"{ROOT / 'seeder'}:/checkpoint-code:ro", "-v", f"{folder}:/checkpoint",
             playground["seed"], "-m", "lab_seeder.checkpoints", operation, "/checkpoint/resources.json"]
 
@@ -172,6 +171,7 @@ def _execute(job, project, pid, operation, folder):
     position = command.index("--entrypoint")
     command[position:position] = ["--name", name]
     marker = folder / "in-flight.json"
+    _write(folder / "owner.json", {"uid": os.getuid(), "gid": os.getgid()})
     _write(marker, {"container": name, "operation": operation})
     rc, out, err = compose.run(command, timeout=120, env={"COMPOSE_IGNORE_ORPHANS": "true"})
     if rc:
@@ -223,6 +223,7 @@ def capture(job, project, pid, name=None):
                 "binding": binding, "sha256": _digest(file), "size": file.stat().st_size}
         (staged / "foreign.json").unlink()
         (staged / "result.json").unlink(missing_ok=True)
+        (staged / "owner.json").unlink(missing_ok=True)
         _write(staged / "manifest.json", meta)
         staged.rename(final)
         job.lines.append("Saved playground state: " + meta["name"])
