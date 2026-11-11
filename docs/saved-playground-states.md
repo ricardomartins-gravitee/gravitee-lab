@@ -75,6 +75,8 @@ certificates, a license and application data. Protect copies as you would the li
 archive to an issue or pull request; see [Saved playground states](../SECURITY.md#saved-playground-states).
 
 Docker tags named `gravitee-lab-saved:<state-id>-<number>` keep the saved images available without copying their layers.
+The Lab retains images for the services that were running, before pausing them. Exited seed containers are not recreated
+by restore, so their old images are not needed for a checkpoint. Persistent volumes are captured even when unused.
 Keep those tags and images while you need the checkpoints. Removing them with Docker's image commands can make a
 checkpoint unrestorable. Allow space for each checkpoint and for a copy of the current runtime during restore.
 

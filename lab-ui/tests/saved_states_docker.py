@@ -129,6 +129,21 @@ volumes:
         return job
 
     def test_multiple_checkpoints_restore_and_resave_exact_data_without_reseeding(self):
+        # An old seed container can outlive its removed image, as on a Lab after a seeder upgrade.
+        template = self.exec(["docker", "create", "--label", "com.docker.compose.project=" + self.project,
+                              "alpine:3.20", "true"])
+        retired_image = self.project + "/retired-seed:local"
+        iid = self.exec(["docker", "commit", "--change", "LABEL io.gravitee.test=" + self.project,
+                         template, retired_image])
+        self.exec(["docker", "rm", template])
+        self.exec(["docker", "create", "--label", "com.docker.compose.project=" + self.project,
+                   "--label", "com.docker.compose.service=retired-seed", "--label", "io.gravitee.role=seed",
+                   retired_image, "true"])
+        self.exec(["docker", "image", "rm", "--force", retired_image])
+        if compose.run(["docker", "image", "inspect", iid])[0] == 0:
+            # The containerd store may keep the untagged image until it is removed by ID too.
+            self.exec(["docker", "image", "rm", "--force", iid])
+        self.assertNotEqual(compose.run(["docker", "image", "inspect", iid])[0], 0)
         self.write("edited API A")
         first = self.save("Before more edits")
         self.write("edited API B")

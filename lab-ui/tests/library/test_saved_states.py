@@ -105,9 +105,12 @@ class SavedStates(Case):
         data = json.loads((folder / "manifest.json").read_text())
         data.update(core_sha256=saved_states._digest(self.root / "docker-compose.yml"),
                     config={"file": "config.tar.gz", "sha256": saved_states._digest(archive)},
-                    volumes=[])
+                    volumes=[], images=[{"id": "sha256:removed", "reference": "seed:obsolete", "running": False}])
         (folder / "manifest.json").write_text(json.dumps(data), encoding="utf-8")
-        with mock.patch.object(saved_states, "_docker", return_value=""), \
+        def without_seed(args):
+            self.assertNotIn("sha256:removed", args)
+            return ""
+        with mock.patch.object(saved_states, "_docker", side_effect=without_seed), \
              mock.patch.object(compose, "project_name", return_value="gravitee"):
             self.assertEqual(saved_states._verified("welcome", self.sid1)[1]["name"], "Good")
             archive.write_bytes(b"corrupted")
@@ -146,6 +149,16 @@ class SavedStates(Case):
                 saved_states.capture(job, {"playgrounds": {pid: {}}}, pid)
         self.assertEqual(events, ["stop", "restart"])
         self.assertEqual(saved_states.list_states(pid), [])
+        # A missing running image fails before services are stopped, rather than after archiving their data.
+        with mock.patch.object(places, "recorded", return_value=[]), \
+             mock.patch.object(saved_states, "_runtime", return_value=(["gravitee_data"], [], ["one"], [])), \
+             mock.patch.object(saved_states, "_pin_images", side_effect=JobFailed("Required image missing")), \
+             mock.patch.object(saved_states, "_stop") as stopped, \
+             mock.patch.object(saved_states, "_restart") as restarted:
+            with self.assertRaisesRegex(JobFailed, "Required image missing"):
+                saved_states.capture(job, {"playgrounds": {pid: {}}}, pid)
+        stopped.assert_not_called()
+        restarted.assert_not_called()
 
     def test_two_successful_checkpoints_are_published_only_after_restart(self):
         events = []
@@ -276,15 +289,33 @@ class SavedStates(Case):
         self.assertEqual(job.call_args.args[1], [before, delete, after])
 
     def test_checkpoint_image_tags_pin_exact_images_without_copying_layers(self):
+        # The image of an exited seed may have been removed; restore does not recreate that container.
+        containers = [
+            {"Id": "app", "Image": "sha256:live", "State": {"Running": True},
+             "Config": {"Image": "app:local", "Labels": {"com.docker.compose.service": "app"}}},
+            {"Id": "seed", "Image": "sha256:removed", "State": {"Running": False},
+             "Config": {"Image": "seed:obsolete", "Labels": {"com.docker.compose.service": "seed", "io.gravitee.role": "seed"}}},
+        ]
+        with mock.patch.object(compose, "project_name", return_value="gravitee"), \
+             mock.patch.object(saved_states, "_check_applied"), \
+             mock.patch.object(saved_states, "_docker", side_effect=["app seed", json.dumps(containers), ""]):
+            _, _, running, images = saved_states._runtime()
+        self.assertEqual(running, ["app"])
+        self.assertEqual([image["id"] for image in images], ["sha256:live"])
         commands = []
         job = mock.Mock()
         job.exec.side_effect = commands.append
-        items = [{"id": "sha256:a"}, {"id": "sha256:a"}, {"id": "sha256:b"}]
+        items = [{"id": "sha256:a"}, {"id": "sha256:a"}, {"id": "sha256:b"},
+                 {"id": "sha256:removed", "reference": "seed:obsolete", "running": False}]
         tags = saved_states._pin_images(job, items, self.sid1)
         self.assertEqual(len(tags), 2)
         self.assertEqual(items[0]["locked_tag"], items[1]["locked_tag"])
         self.assertNotEqual(items[1]["locked_tag"], items[2]["locked_tag"])
         self.assertEqual(commands[0][:3], ["docker", "tag", "sha256:a"])
+        self.assertNotIn("locked_tag", items[-1])
+        commands.clear()
+        saved_states._retag_images(job, [items[-1]])
+        self.assertEqual(commands, [])
         job = mock.Mock(lines=[])
         job.exec.side_effect = [None, JobFailed("Pin failed")]
         with mock.patch.object(saved_states, "_docker", side_effect=JobFailed("Image in use")):

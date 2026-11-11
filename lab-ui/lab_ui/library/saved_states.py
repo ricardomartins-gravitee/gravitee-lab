@@ -160,9 +160,9 @@ def _runtime():
             if labels.get("io.gravitee.role") == "seed" or labels.get("com.docker.compose.oneoff") == "True":
                 raise JobFailed("Wait for the running seed or one-off container before saving")
             running.append(container["Id"])
-        images.append({"service": labels.get("com.docker.compose.service"), "reference": cfg.get("Image"),
-                       "id": container.get("Image"), "running": bool(container.get("State", {}).get("Running")),
-                       "role": labels.get("io.gravitee.role")})
+            # Restore starts only this running set. An exited seed's obsolete image is not a prerequisite.
+            images.append({"service": labels.get("com.docker.compose.service"), "reference": cfg.get("Image"),
+                           "id": container.get("Image"), "running": True, "role": labels.get("io.gravitee.role")})
         for mount in container.get("Mounts") or []:
             if mount.get("Type") == "volume" and mount.get("Name") not in volumes:
                 raise JobFailed("The Lab cannot safely snapshot an external or untracked Docker volume: "
@@ -282,6 +282,8 @@ def _pin_images(job, images, sid):
     locked, seen = [], {}
     try:
         for item in images:
+            if item.get("running") is False:
+                continue
             iid = item.get("id")
             if not iid:
                 continue
@@ -349,11 +351,12 @@ def capture(job, project, pid, name=None):
     stopped = False
     locked = []
     try:
+        # Retain and verify required images before any interruption of the live services.
+        locked = _pin_images(job, images, sid)
         stopped = True
         _stop(job, running)
         data = _capture_stopped(job, staged, pid, name, volumes, mounts, running, images)
         data["id"] = sid
-        locked = _pin_images(job, data["images"], sid)
         _write_manifest(staged, data)
         _restart(job, running)
         stopped = False
@@ -431,6 +434,8 @@ def _verified(pid, sid):
             raise ValueError("Saved state archive integrity check failed")
     _config_members(folder)
     for item in data.get("images") or []:
+        if item.get("running") is False:
+            continue
         if item.get("id"):
             _docker(["image", "inspect", item["id"]])
         if item.get("locked_tag"):
@@ -511,6 +516,8 @@ def _restore_config(folder):
 
 def _retag_images(job, images):
     for item in images:
+        if item.get("running") is False:
+            continue
         reference, iid = item.get("reference"), item.get("id")
         if reference and iid and not reference.startswith("sha256:") and "@" not in reference:
             job.exec(["docker", "tag", iid, reference])
