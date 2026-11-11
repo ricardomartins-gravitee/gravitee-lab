@@ -41,18 +41,34 @@ managed data volume. The Lab supports local Docker volumes with the project's st
 It refuses anonymous, external and custom-named volumes, and storage managed by another volume driver.
 
 Bind mounts must be inside the captured configuration folders: `.lab/catalogs/`, `.lab/targets/`, `plugins/`,
-`secrets/` or `certs/mtls/`, or be one of the captured configuration files. This applies to read-only mounts too.
-Links and special files are refused. An external service or a container's writable layer is not part of a checkpoint.
+`secrets/` or `certs/mtls/`, or be one of the captured configuration files. Read-only files elsewhere inside the Lab,
+such as its console helper scripts, are checked by content before restore and kept in place. Other external mounts,
+unregistered links and special files are refused. An external service or a container's writable layer is not captured.
 
 Saving and restoring are refused while any playground has a recorded deployment in Gravitee Cloud: a local archive
 cannot restore those remote resources. Use [Gravitee Cloud's deployment controls](cloud.md#use-both-places) for them.
+
+## Linked playground folders
+
+Use the same Save and Restore actions for a playground in Personal, a downloaded catalog or a linked folder catalog.
+No copy or relinking is needed. A registered folder catalog may include links into worktrees inside its source folder.
+
+For a linked folder, the checkpoint saves `.env`, `.state/` and `secrets/` at the catalog root and inside its add-ons and
+playgrounds. Restore replaces these local machine files, including the seed's ownership records, while preserving the
+catalog link, nested worktree links, source files and Git metadata. The confirmation includes these linked folders.
+Writable mounts in linked folders must be inside those machine files.
+
+Keep the source version used for the checkpoint. Restore checks the linked folders' source content and link destinations
+before stopping containers or replacing data. If you edit the source, add an item, move a folder or retarget a link,
+restore refuses and asks for the saved source version. Revert that source change yourself before restoring; the Lab
+never overwrites newer development work to make a checkpoint fit. Git metadata and unrelated worktrees are not restored.
 
 ## Files and images
 
 The Lab keeps checkpoints under `.lab/saved-states/`, outside Git. Each contains checksums, compressed volume archives
 and a configuration archive. Configuration includes `.env`, `.lab/on.yml`, `.lab/core.json`, `.lab/platforms.json`,
-`.lab/targets/`, `.lab/catalogs/`, `plugins/`, `secrets/` and `certs/mtls/` when present. The catalogs carry the personal
-files and the seeds' ownership records. Browser preferences and stars are not restored.
+`.lab/targets/`, `.lab/catalogs/`, `.lab/catalogs.json`, `.lab/catalogs.lock`, `plugins/`, `secrets/` and `certs/mtls/` when
+present. The catalogs carry the personal files and the seeds' ownership records. Browser preferences and stars are not restored.
 
 Checkpoint directories are private, but the archives are not encrypted. They can contain tokens, passwords,
 certificates, a license and application data. Protect copies as you would the live Lab's credentials. Never attach an

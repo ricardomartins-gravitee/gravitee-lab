@@ -39,6 +39,9 @@ private keys. Checkpoint directories are private, but the archives are not encry
 the live credentials, and never attach an archive to an issue, pull request or log. Deleting a saved state does not
 revoke credentials that were copied. [Saved playground states](docs/saved-playground-states.md) lists what is captured
 and how restore replaces the local data and configuration.
+Registered folder catalogs keep their links and development source. Restoring a checkpoint replaces their local
+settings, secrets and seed records too; changed source or link destinations block restore before runtime data changes.
+Other links and external mounts remain unsupported.
 
 ## Demo credentials
 

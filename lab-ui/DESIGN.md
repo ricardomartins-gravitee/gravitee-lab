@@ -1337,7 +1337,9 @@ The Containers page acts on containers and keeps what is on (`stack.py`).
   it created* is the third Stop/Switch choice; it says that it saves the local Lab's configuration and data and pauses all
   its running services before the existing cleanup. Cloud records hold it with a reason. The list shows each checkpoint's
   name, date and archive size, with *Restore* and *Delete saved state*. Restore confirms that it replaces the whole local
-  Lab's data and configuration, including other playgrounds' data. Both actions keep keyboard focus and explain their wait
+  Lab's data and configuration, including other playgrounds' data and linked playgrounds' local settings, secrets and seed
+  records. Catalog links and development source stay; changed source or link targets block a restore. Both actions keep
+  keyboard focus and explain their wait
   through the shared disabled-control pattern. Loading and empty lists use `.empty`; a failed read says why and offers
   *Try again*, and an older response cannot replace a newer one. [Saved playground states](../docs/saved-playground-states.md)
   describes storage, credentials, image retention and recovery.

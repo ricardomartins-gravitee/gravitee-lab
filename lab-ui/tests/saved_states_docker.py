@@ -23,12 +23,23 @@ class DockerStates(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="lab-saved-states-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
+        self.linked_temp = tempfile.TemporaryDirectory(prefix="lab-state-folder-")
+        self.addCleanup(self.linked_temp.cleanup)
+        self.linked = Path(self.linked_temp.name).resolve()
+        self.machine = self.linked / ".worktrees/playgrounds/demo/.state"
+        self.machine.mkdir(parents=True)
+        (self.machine.parent / "compose.yml").write_text("services: {}\n")
+        (self.linked / "playgrounds").mkdir()
+        (self.linked / "playgrounds/demo").symlink_to(self.machine.parent, target_is_directory=True)
         self.project = "lab-state-test-" + uuid.uuid4().hex[:12]
         self.states = self.root / ".lab/saved-states"
         self.states.mkdir(parents=True)
         self.catalog = self.root / ".lab/catalogs/local/playgrounds/demo"
         self.catalog.mkdir(parents=True)
         (self.catalog / "edited.json").write_text('{"api":"edited before save"}')
+        (self.root / ".lab/catalogs/folder").symlink_to(self.linked, target_is_directory=True)
+        (self.root / ".lab/catalogs.json").write_text(json.dumps({"schema": 1, "catalogs": [
+            {"id": "folder", "kind": "folder", "path": str(self.linked)}]}))
         (self.root / ".lab/on.yml").write_text("services: {}\n")
         (self.root / "docker-compose.yml").write_text(f"""name: {self.project}
 services:
@@ -37,6 +48,7 @@ services:
     command: [sh, -c, 'exec sleep 86400']
     volumes:
       - data:/data
+      - ./.lab/catalogs/folder/playgrounds/demo/.state:/state
   database:
     image: redis:8.10.2-alpine
     command: [redis-server, --appendonly, 'yes']
@@ -90,6 +102,7 @@ volumes:
                 self.exec(["docker", "image", "rm", tag])
 
     def write(self, value):
+        (self.machine / "created.json").write_text(value)
         self.exec([*compose.COMPOSE, "exec", "-T", "database", "redis-cli", "SET", "edited-api", value])
         self.exec([*compose.COMPOSE, "exec", "-T", "app", "sh", "-c",
                    "printf '%s' '" + value + "' > /data/api.json"])
@@ -97,6 +110,10 @@ volumes:
     def read(self):
         value = self.exec([*compose.COMPOSE, "exec", "-T", "app", "cat", "/data/api.json"])
         self.assertEqual(self.exec([*compose.COMPOSE, "exec", "-T", "database", "redis-cli", "GET", "edited-api"]), value)
+        self.assertEqual(self.exec([*compose.COMPOSE, "exec", "-T", "app", "cat", "/state/created.json"]), value)
+        self.assertEqual((self.machine / "created.json").read_text(), value)
+        self.assertTrue((self.root / ".lab/catalogs/folder").is_symlink())
+        self.assertTrue((self.linked / "playgrounds/demo").is_symlink())
         return value
 
     def save(self, name):

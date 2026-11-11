@@ -31,6 +31,9 @@ class GraviteeStates(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="lab-gravitee-states-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
+        self.linked_temp = tempfile.TemporaryDirectory(prefix="lab-linked-catalog-")
+        self.addCleanup(self.linked_temp.cleanup)
+        self.linked = Path(self.linked_temp.name).resolve()
         self.name = "lab-gravitee-test-" + uuid.uuid4().hex[:12]
         self.seed_image = self.name + "/seeder:local"
         self.env = {key: os.environ[key] for key in ("PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR",
@@ -100,6 +103,16 @@ class GraviteeStates(unittest.TestCase):
         self.command(["docker", "build", "-t", self.seed_image, "seeder"], timeout=600)
         for letter in ("a", "b"):
             self.make_playground(letter)
+        # Match a developer's installation: a folder catalog linked into the Lab, with items linked into worktrees.
+        shutil.move(str(self.root / ".lab/catalogs/local"), self.linked / ".worktrees")
+        (self.linked / "playgrounds").mkdir()
+        for letter in ("a", "b"):
+            (self.linked / "playgrounds" / letter).symlink_to(self.linked / ".worktrees/playgrounds" / letter,
+                                                            target_is_directory=True)
+        (self.root / ".lab/catalogs/linked").symlink_to(self.linked, target_is_directory=True)
+        (self.linked / "catalog.yml").write_text("id: linked\nname: Linked checkpoint test\n")
+        (self.root / ".lab/catalogs.json").write_text(json.dumps({"schema": 1, "catalogs": [
+            {"id": "linked", "kind": "folder", "path": str(self.linked)}]}))
 
     def make_playground(self, letter):
         folder = self.root / ".lab/catalogs/local/playgrounds" / letter
@@ -131,7 +144,7 @@ class GraviteeStates(unittest.TestCase):
                                letter + "-backend": {"condition": "service_started"}},
                 "volumes": ["./seed:/seed:ro", "./.state:/state"], "networks": ["internal"],
                 "environment": {"APIM_MANAGEMENT_URL": "http://apim-management-api:8083", "APIM_USERNAME": "admin",
-                                "APIM_PASSWORD": "${STATE_TEST_PASSWORD:-admin}",
+                                "APIM_PASSWORD": "${LINKED_" + letter.upper() + "_TEST_PASSWORD:-admin}",
                                 "STATE_BACKEND_URL": "http://" + letter + "-backend:8080/seed/"},
             },
         }
@@ -241,10 +254,13 @@ class GraviteeStates(unittest.TestCase):
         self.until(correct, "gateway response " + letter + ":" + version, timeout=120)
 
     def states(self):
-        return self.json(self.lab + "/api/playgrounds/local/a/saved-states")["states"]
+        return self.json(self.lab + "/api/playgrounds/@linked/a/saved-states")["states"]
 
     def assert_restored(self, sid, expected):
-        self.job("/api/playgrounds/local/a/saved-states/" + sid + "/restore", {"confirm": True})
+        self.job("/api/playgrounds/@linked/a/saved-states/" + sid + "/restore", {"confirm": True})
+        self.assertTrue((self.root / ".lab/catalogs/linked").is_symlink())
+        self.assertTrue((self.linked / "playgrounds/a").is_symlink())
+        self.assertEqual((self.linked / "playgrounds/a/.state/created.json").read_bytes(), self.ownership)
         actual = self.management("/apis/" + expected["id"])
         for key in ("id", "name", "description", "endpointGroups", "plans", "state", "lifecycleState"):
             if key in expected:
@@ -255,28 +271,37 @@ class GraviteeStates(unittest.TestCase):
 
     def test_saved_api_edits_survive_switch_stop_and_multiple_restores(self):
         print("Creating and editing playground A through Gravitee APIs", flush=True)
-        self.job("/api/playgrounds/local/a/start", {})
+        self.job("/api/playgrounds/@linked/a/start", {})
         first_api = self.edit("a", "edited")
+        self.ownership = (self.linked / "playgrounds/a/.state/created.json").read_bytes()
         print("Saving A before seeder cleanup while switching to B", flush=True)
-        self.job("/api/playgrounds/local/b/start", {"remove": True, "save": True, "accept": ["playground:local/a"]})
+        self.job("/api/playgrounds/@linked/b/start", {"remove": True, "save": True, "accept": ["playground:@linked/a"]})
         first = self.states()[0]["id"]
         self.management("/apis/" + first_api["id"], expected=(404,))
         self.assert_serves("b", "seed")
         b_id = self.api("b")["id"]
+        source = self.linked / "playgrounds/a/seed/apim/apis/api.json"
+        original = source.read_bytes()
+        source.write_bytes(original + b"\n")
+        refused = self.json(self.lab + "/api/playgrounds/@linked/a/saved-states/" + first + "/restore",
+                            "POST", {"confirm": True}, expected=(400,))
+        self.assertIn("source or links changed", refused["error"])
+        self.assert_serves("b", "seed")
+        source.write_bytes(original)
         print("Restoring A and checking API identity and real gateway traffic", flush=True)
         self.assert_restored(first, first_api)
         self.management("/apis/" + b_id, expected=(404,))
-        self.assertTrue(next(row for row in self.json(self.lab + "/api/state")["playgrounds"] if row["id"] == "local/a")["on"])
+        self.assertTrue(next(row for row in self.json(self.lab + "/api/state")["playgrounds"] if row["id"] == "@linked/a")["on"])
         second_api = self.edit("a", "edited-again")
         print("Saving a second checkpoint using Stop, then restoring both versions", flush=True)
-        self.job("/api/playgrounds/local/a/stop", {"remove": True, "save": True})
+        self.job("/api/playgrounds/@linked/a/stop", {"remove": True, "save": True})
         self.management("/apis/" + first_api["id"], expected=(404,))
         states = self.states()
         self.assertEqual(len(states), 2)
         second = next(state["id"] for state in states if state["id"] != first)
         self.assert_restored(second, second_api)
         self.assert_restored(first, first_api)
-        self.json(self.lab + "/api/playgrounds/local/a/saved-states/" + second + "/delete", "POST", {})
+        self.json(self.lab + "/api/playgrounds/@linked/a/saved-states/" + second + "/delete", "POST", {})
         self.assertEqual([state["id"] for state in self.states()], [first])
         self.assert_serves("a", "edited")
         print("Verified real Gravitee API save/switch/restore/stop/resave and checkpoint deletion", flush=True)

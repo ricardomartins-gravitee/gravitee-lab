@@ -97,7 +97,8 @@ async function restoreSavedState(item, id) {
   if (!state) return;
   const chosen = await effectsDialog({ title: `Restore ${state.name}`,
     options: [{ value: true, rows: [
-      { label: "Replaces", items: ["Local Lab data and configuration, including other playgrounds' data"], tone: "danger" },
+      { label: "Replaces", items: ["Local Lab data and configuration, including other playgrounds' data",
+        "Playground settings, secrets and seed records, including linked folders"], tone: "danger" },
       { label: "Uses", items: ["Saved persistent volumes and exact image versions"] }] }],
     action: () => "Restore state", danger: () => true });
   if (!chosen) return;

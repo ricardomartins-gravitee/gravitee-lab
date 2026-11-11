@@ -21,6 +21,7 @@ from .. import paths
 from ..docker import compose
 from ..docker.jobs import JOBS, JobFailed
 from ..gravitee import places
+from . import saved_catalogs
 
 ROOT = paths.ROOT
 STATES = ROOT / ".lab" / "saved-states"
@@ -30,6 +31,7 @@ MAX_MANIFEST = 1 << 20
 # The files that determine a Lab's running state. Each playground's and add-on's settings,
 # seed ownership record and catalog revision lives under .lab/catalogs.
 CONFIG = (".env", ".lab/on.yml", ".lab/core.json", ".lab/platforms.json", ".lab/targets", ".lab/catalogs",
+          ".lab/catalogs.json", ".lab/catalogs.lock",
           "plugins", "secrets", "certs/mtls")
 EXCLUDE = (".lab/saved-states", ".lab/lab-ui.flock", ".git")
 SCHEMA = 1
@@ -174,7 +176,7 @@ def _runtime():
 
 def _inside_root(path):
     base = ROOT.resolve()
-    resolved = Path(path).resolve()
+    resolved = saved_catalogs.source_path(path)
     try:
         rel = resolved.relative_to(base)
     except ValueError:
@@ -184,12 +186,21 @@ def _inside_root(path):
     return str(rel)
 
 
+def _configured(relative):
+    return relative is not None and any(relative == item or relative.startswith(item + "/") for item in CONFIG)
+
+
 def _paths_to_save(mounts):
+    catalogs = saved_catalogs.read(ROOT)
     for mount in mounts:
+        if saved_catalogs.accepts(ROOT, catalogs, mount):
+            continue
         relative = _inside_root(mount.get("Source") or "/")
         if relative is None or relative.startswith(".lab/saved-states"):
             raise JobFailed("An external bind mount cannot be saved exactly: " + mount["Destination"])
-        if not any(relative == item or relative.startswith(item + "/") for item in CONFIG):
+        if not _configured(relative):
+            if mount.get("RW") is False and (ROOT / relative).is_file():
+                continue
             raise JobFailed("This bind mount needs a storage adapter before its state can be saved: "
                             + mount["Destination"])
     return sorted(CONFIG)
@@ -206,11 +217,24 @@ def _include(info):
 
 
 def _archive_config(destination, mounts):
+    catalogs = saved_catalogs.read(ROOT)
+    linked = {".lab/catalogs/" + item["id"] for item in catalogs}
+    readonly = set()
+    for mount in mounts:
+        relative = _inside_root(mount.get("Source") or "/")
+        if (mount.get("RW") is False and relative is not None and not _configured(relative)
+                and not saved_catalogs.accepts(ROOT, catalogs, mount)):
+            readonly.add(relative)
+
+    def include(info):
+        return None if info.name in linked else _include(info)
+
     with tarfile.open(destination, "w:gz") as archive:
         for name in _paths_to_save(mounts):
             path = ROOT / name
             if path.exists():
-                archive.add(path, arcname=name, recursive=True, filter=_include)
+                archive.add(path, arcname=name, recursive=True, filter=include)
+        saved_catalogs.add(archive, ROOT, catalogs, sorted(readonly))
 
 
 def _volume(job, name, archive, restore=False):
@@ -420,10 +444,18 @@ def _config_members(folder):
     """Validate the archive and its destination before any live data is replaced."""
     with tarfile.open(folder / "config.tar.gz", "r:gz") as archive:
         members = archive.getmembers()
+        catalogs = saved_catalogs.verified(archive, ROOT)
+        linked = {".lab/catalogs/" + item["id"] for item in catalogs}
+        seen = set()
         for item in members:
             name = item.name
-            if name.startswith("/") or ".." in Path(name).parts or _include(item) is None:
+            if name in seen or name.startswith("/") or ".." in Path(name).parts or _include(item) is None:
                 raise ValueError("Unsafe saved configuration path")
+            seen.add(name)
+            if name in (saved_catalogs.RECORD, saved_catalogs.READONLY_RECORD) or saved_catalogs.member(name, catalogs):
+                continue
+            if any(name == path or name.startswith(path + "/") for path in linked):
+                raise ValueError("Linked catalog source must not be replaced by a configuration archive")
             if not any(name == root or name.startswith(root + "/") for root in CONFIG):
                 raise ValueError("Saved state includes a path outside supported configuration")
         for name in CONFIG:
@@ -437,18 +469,31 @@ def _restore_config(folder):
     """Replace managed config and secret files, never the saved-state store or Git."""
     members = _config_members(folder)
     with tarfile.open(folder / "config.tar.gz", "r:gz") as archive:
+        catalogs = saved_catalogs.verified(archive, ROOT)
+        linked = {item["id"] for item in catalogs}
         # Remove stale files that were not present when the snapshot was taken.
         # The backup stays outside these paths and is used on any rollback.
         for name in CONFIG:
             target = ROOT / name
             if target.is_symlink():
                 raise ValueError("Cannot restore over a linked configuration path")
+            if name == ".lab/catalogs" and linked:
+                for child in target.iterdir():
+                    if child.name in linked:
+                        continue
+                    if child.is_symlink() or not child.is_dir():
+                        child.unlink()
+                    else:
+                        shutil.rmtree(child)
+                continue
             if target.is_dir():
                 shutil.rmtree(target)
             elif target.exists():
                 target.unlink()
         directories = []
         for item in members:
+            if item.name in (saved_catalogs.RECORD, saved_catalogs.READONLY_RECORD) or saved_catalogs.member(item.name, catalogs):
+                continue
             target = ROOT / item.name
             if item.isdir():
                 target.mkdir(parents=True, exist_ok=True)
@@ -461,6 +506,7 @@ def _restore_config(folder):
         # Set directory modes last: private or read-only folders must not block extraction of their children.
         for target, mode in reversed(directories):
             os.chmod(target, mode)
+        saved_catalogs.restore(archive, ROOT, catalogs)
 
 
 def _retag_images(job, images):

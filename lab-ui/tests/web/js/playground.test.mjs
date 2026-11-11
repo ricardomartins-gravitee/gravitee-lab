@@ -895,6 +895,7 @@ test("Saved states list separate checkpoints and confirm a whole Lab restore", a
   await flush();
   assert.equal(effects().title, "Restore First <edited>");
   assert.ok(effects().steps.some(([label, items]) => label === "Replaces" && items.some((s) => s.includes("other playgrounds"))));
+  assert.ok(effects().steps.some(([label, items]) => label === "Replaces" && items.some((s) => s.includes("linked folders"))));
   await answer(false);
   assert.equal(posts("/restore").length, 0);
   first.click();
