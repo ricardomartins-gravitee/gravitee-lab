@@ -30,7 +30,7 @@ const privateRow = { id: "local/a", name: "Private A", mode: "independent", sele
   ports: ["31000"], problem: null, state: "Stopped", running: 0, active: false, memory_bytes: 0, cpu_percent: 0,
   cleanup: { containers: { enabled: true }, data: { enabled: true } } };
 let root, panel;
-async function show(rows = [privateRow]) {
+async function show(rows = [privateRow], playground = null) {
   store.state = structuredClone(base);
   store.error = null;
   store.offline = false;
@@ -38,7 +38,7 @@ async function show(rows = [privateRow]) {
   payload = { default: "independent", runtimes: structuredClone(rows), shared_storage: [{ kind: "Images", bytes: 9000 }], problems: [] };
   root = page.doc.createElement("section");
   page.doc.body.append(root);
-  panel = runtimePanel(root);
+  panel = runtimePanel(root, playground);
   panel.show();
   await flush();
 }
@@ -141,5 +141,16 @@ test("management controls wait for an inventory refresh and become usable again"
   await flush();
   assert.ok(!isOff(root.querySelector("[data-runtime-act]")));
   assert.ok(!isOff(root.querySelector("[data-runtime-menu]")));
+  close();
+});
+
+
+test("a playground lists only its named children and offers Create runtime rather than mode settings", async () => {
+  await show([{ ...privateRow, id: "runtime-demo", playground: "local/a", name: "Demo" },
+    { ...privateRow, id: "runtime-other", playground: "local/b", name: "Not here" }], "local/a");
+  assert.match(text(root), /Demo/);
+  assert.doesNotMatch(text(root), /Not here|Runtime settings/);
+  assert.ok(root.querySelector("[data-runtime-create]"));
+  assert.equal(calls[0].path, "/api/runtimes?playground=local%2Fa");
   close();
 });

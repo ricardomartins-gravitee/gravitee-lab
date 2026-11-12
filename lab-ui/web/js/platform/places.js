@@ -67,6 +67,7 @@ export function forgetPlace() {
 // else This machine (null): Acme Bakery, which needs Gamma, is on This machine with API Management in the Cloud. A platform that cannot be
 // used answers for the place proposed, with its reason: it is not given up for This machine.
 export function chosenPlace(item) {
+  if (item?.runtime?.parent) return null;
   const id = registered() ? proposedFor(item) : null;
   const place = id && entry(store.places, id);
   return place && goes(item, place) ? place : null;

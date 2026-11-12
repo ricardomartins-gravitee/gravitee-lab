@@ -25,10 +25,13 @@ Keep port 9000. The platform's consoles and the playground apps let only that ad
 
 ## Independent playgrounds
 
-Choose *Runtime settings* in Containers (also available from Playgrounds) to set the default for newly assigned
-playgrounds. Choose *Runtime* in a playground's More menu to give that playground an *Independent* or *Shared* runtime.
-Stop it before changing the choice. The initial default is Shared; Independent is an explicit choice.
-Existing playgrounds stay Shared when you upgrade; changing the default never moves their data.
+Normal playgrounds always use the shared platform. To create a separate instance, open a playground and choose
+*Create runtime* in its Runtimes section or More menu. Give it a name such as Demo or Sandbox. It opens as a stopped
+child of that playground; Start prepares and starts its own platform. Creating it never starts, stops or reassigns
+another runtime. There are no global runtime defaults or per-playground Shared/Independent settings.
+
+Create several named runtimes from the same playground and run them concurrently. Open a named runtime to work in it;
+open its source playground to use Shared. Its links, consoles, Start and Stop target only that named instance.
 
 An independent playground starts its own platform services and dependencies, in a separate Compose project with its own
 networks, storage and loopback ports. Several can run at once. Use the links and consoles on its page: their ports differ
@@ -38,9 +41,9 @@ Stop keeps its data, including API edits, applications, subscriptions, API keys 
 it without replaying its seed. *Rebuild runtime from current settings* refreshes its configuration, images and read-only
 inputs, preserves its writable data and ports, and does not replay its seed. Choose *Re-seed* explicitly to apply seed data again.
 
-The Lab keeps private configuration and copied mounts in `.lab/runtimes/`, and runtime choices in
-`.lab/playground-runtimes.json`. Catalogs and linked worktrees stay in place. Changing runtime creates no migration: the
-shared platform's existing data stays there, and switching back to a prepared private runtime resumes that runtime's data.
+The Lab keeps private configuration and copied mounts in `.lab/runtimes/`, and named runtime identities in
+`.lab/playground-runtimes.json`. Catalogs and linked worktrees stay in place. Shared data is never migrated into a named
+runtime. Existing private projects appear as named children after an upgrade, with their folders, volumes and ports intact.
 The Containers page's platform controls and `make` commands still act on the shared project. They leave independent
 runtimes untouched; stop those from their playground pages or the runtime inventory in Containers. Catalog replacement
 and removal wait while a private runtime using the catalog is on.
@@ -52,8 +55,8 @@ kept data whose catalog source is unavailable. It shows CPU, memory and storage.
 volumes, runtime files, ports and captured versions. *Refresh storage* reads disk usage again. Images and build caches
 are shown once as machine-wide storage; several runtimes can use the same image layers.
 
-Use a runtime's menu to change its runtime choice, edit its playground settings, restart or rebuild it. Source settings
-apply to an existing private runtime through Rebuild. The platform controls in the page header explicitly manage the
+Use a runtime's menu to open its source playground, restart or rebuild it. Source settings apply at first Start;
+Rebuild applies later changes to that runtime. The platform controls in the page header explicitly manage the
 shared platform. A runtime whose source is unavailable can still be stopped and cleaned up.
 
 Stop an independent runtime before cleanup, then choose:
@@ -61,7 +64,9 @@ Stop an independent runtime before cleanup, then choose:
 | Action | What it removes | What it keeps |
 |---|---|---|
 | *Remove containers* | That runtime's containers and networks | Its volumes, private files and initialized data; Start recreates containers without replaying the seed |
-| *Delete runtime data* | That runtime's containers, networks, volumes and generated runtime folder | Catalog source and links, the runtime choice, all other runtimes, images and build caches; Start initializes fresh data |
+| *Delete runtime data* | That runtime's containers, networks, volumes and generated runtime folder | Its named definition, catalog source and links, all other runtimes, images and build caches; Start initializes fresh data |
+
+| *Delete runtime* | That runtime and its private containers, networks, volumes and generated folder | Its source playground, catalog links, shared data and all other runtimes |
 
 Review the exact resources before confirming. Data deletion also asks you to type `delete`. A resource or file changed
 since the preview requires a new preview. Cleanup refuses ambiguous ownership, resources used outside the runtime and

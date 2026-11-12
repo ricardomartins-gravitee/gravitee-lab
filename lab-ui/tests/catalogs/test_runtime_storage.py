@@ -12,6 +12,7 @@ from unittest.mock import Mock
 from lab_ui import paths
 from lab_ui.catalogs import independent, runtime_storage
 from lab_ui.docker import compose, storage
+from lab_ui.library import runtime_settings
 from tests import Case
 
 
@@ -125,3 +126,20 @@ class RuntimeStorage(Case):
             steps[0](worker)
         self.assertFalse(any(c.args[0][1:3] == ["volume", "rm"] for c in worker.exec.call_args_list))
         self.assertTrue((self.root_path / "mounts/data").exists())
+
+    def test_unused_runtime_deletion_rechecks_its_definition_without_touching_docker_or_a_sibling(self):
+        unused = runtime_settings.create("local/a", "Unused")["id"]
+        sibling = runtime_settings.create("local/a", "Keep")["id"]
+        self.resources = {"containers": [], "volumes": [], "networks": []}
+        plan = runtime_storage.preview(unused, "delete")
+        self.assertEqual(plan["removes"]["runtime"], ["Unused"])
+        jobs = self.patch(runtime_storage, "JOBS")
+        runtime_storage.cleanup(unused, "delete", plan["fingerprint"])
+        _, commands, _ = self.started(jobs)
+        job = Mock()
+        commands[0](job)
+        self.assertNotIn(unused, runtime_settings.instances())
+        self.assertIn(sibling, runtime_settings.instances())
+        job.exec.assert_not_called()
+        with self.assertRaises(paths.NotFound):
+            runtime_storage.preview("local/a", "delete")

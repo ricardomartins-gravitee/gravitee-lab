@@ -174,7 +174,7 @@ def frame(req, pid):
 
 def _terminal(pid):
     """The live shell of a playground's terminal, opened in the container of the service its `terminal` names."""
-    p = project.load()
+    p = runtimes.project_for(project.load(), pid)
     playground = p["playgrounds"].get(pid)
     if not playground:
         raise paths.NotFound(f"No playground {pid}")
@@ -323,7 +323,7 @@ def at(value):
 
 def start_playground(req, pid):
     """Starts a playground, on This machine or in a place. A place sends back what its dialog showed (`accept`)."""
-    if not at(req.body.get("place")) and runtimes.selected(pid):
+    if runtimes.selected(pid):
         return runtimes.action(project.load(), pid, "start", req.body)
     accept = accepted(req)
     more = {"remove": True} if req.body.get("remove") else {}   # delete what the playground it stops created
@@ -336,7 +336,7 @@ def start_playground(req, pid):
 def reseed_playground(req, pid):
     """Seeds a playground again, or seeds it for the first time in a place (Deploy): the place sends back its dialog
     (`accept`), because what it deploys by may need starting."""
-    if not at(req.body.get("place")) and runtimes.selected(pid):
+    if runtimes.selected(pid):
         return runtimes.action(project.load(), pid, "reseed", req.body)
     more, accept = at(req.body.get("place")), accepted(req)
     return playgrounds.reseed(project.load(), pid, **more, **({"accept": accept} if more else {}))
@@ -351,6 +351,8 @@ def delete(req, kind, uid):
         if not place:
             raise ValueError("Choose a place besides This machine")
         return playgrounds.delete_place(p, uid, place)
+    if kind == "playground" and runtimes.selected(uid):
+        raise ValueError("Remove a named runtime through its runtime cleanup actions")
     if kind == "playground" and runtimes.independent.read(uid) and runtimes.info(uid)["on"]:
         raise ValueError("Stop this independent playground first")
     return personal.delete(p, kind, uid, places.deployed(uid, playgrounds.created) if kind == "playground" else ())
@@ -720,11 +722,10 @@ ROUTES = [(method, re.compile(pattern), handler) for method, pattern, handler in
     ("GET", "/(css|js|img)/(.+)", static),
     ("GET", "/favicon.ico", lambda r: r.answer(204)),   # the page carries its own icon
     ("GET", "/api/state", state),
-    ("GET", "/api/runtimes", lambda r: runtimes.listing(project.load(), fresh=r.query.get("refresh") == "1")),
+    ("GET", "/api/runtimes", lambda r: runtimes.listing(project.load(), fresh=r.query.get("refresh") == "1", playground=r.query.get("playground"))),
     ("POST", f"/api/runtimes/{UNIT}/(start|stop|restart|rebuild)", lambda r, pid, op: runtimes.managed_action(project.load(), pid, op)),
     ("POST", f"/api/runtimes/{UNIT}/cleanup", lambda r, pid: runtimes.cleanup(pid, r.body)),
-    ("GET", "/api/playground-runtimes", lambda r: runtimes.settings(project.load())),
-    ("POST", "/api/playground-runtimes", lambda r: runtimes.save(project.load(), r.body)),
+    ("POST", f"/api/playgrounds/{UNIT}/runtimes", lambda r, pid: runtimes.create(project.load(), pid, r.body)),
     ("POST", f"/api/playgrounds/{UNIT}/runtime/rebuild", lambda r, pid: runtimes.action(project.load(), pid, "rebuild", r.body)),
     ("GET", "/api/jobs/([a-f0-9]{8})", stream_job),
     ("GET", "/api/logs", stream_logs),
@@ -749,7 +750,7 @@ ROUTES = [(method, re.compile(pattern), handler) for method, pattern, handler in
      lambda r, pid: runtimes.check(project.load(), pid, rebuild=r.query.get("rebuild") == "1") if not at(r.query.get("place")) and runtimes.selected(pid)
      else playgrounds.check(project.load(), pid, **at(r.query.get("place")))),
     ("GET", f"/api/(addon|setup)s/{UNIT}/check", check_unit),
-    ("GET", f"/api/playgrounds/{UNIT}/guide", lambda r, pid: {"markdown": runtimes.independent.rewrite(playgrounds.guide(pid),
+    ("GET", f"/api/playgrounds/{UNIT}/guide", lambda r, pid: {"markdown": runtimes.independent.rewrite(playgrounds.guide(runtimes.runtime_settings.source(pid)),
          (runtimes.independent.read(pid) or {}).get("ports", {})) if runtimes.selected(pid) else playgrounds.guide(pid)}),
     ("GET", f"/api/playgrounds/{UNIT}/frame", frame),
     ("GET", f"/api/playgrounds/{UNIT}/terminal", terminal_stream),

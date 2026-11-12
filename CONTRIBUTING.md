@@ -148,7 +148,8 @@ Run the isolated Docker workflow explicitly:
 PYTHONPATH=lab-ui python3 -m tests.independent_docker
 ```
 
-It builds the seeder, starts uniquely named temporary projects and checks real Gravitee APIs, applications,
+It builds the seeder, creates two named runtimes of the same playground, starts uniquely named temporary projects
+and checks real Gravitee APIs, applications,
 subscriptions and API keys across stop, resume and rebuild. It also checks concurrent playgrounds, private writable
 binds, volumes and ports, preserved catalog links, and a separate shared Redis sentinel. It exercises container removal
 without data loss, stale cleanup refusal, deletion of private data while another runtime runs, and a fresh start after

@@ -26,8 +26,8 @@ const page = installDom({
     const call = { method: options.method || "GET", path, body: options.body ? JSON.parse(options.body) : undefined };
     if (route !== "/api/state") server.calls.push(call);
     if (route === "/api/state") return reply(store.state);
-    if (route === "/api/playground-runtimes" && call.method !== "POST") return reply(server.runtimes || { default: "shared",
-      playgrounds: store.state.playgrounds.map((item) => ({ id: item.id, mode: item.runtime?.mode || "shared" })) });
+    if (route === "/api/runtimes") return reply({ runtimes: [], shared_storage: [], problems: [] });
+    if (route.endsWith("/runtimes") && call.method === "POST") return reply({ id: "runtime-new", name: call.body.name, playground: "hotels" });
     if (route === "/api/places") return server.down ? reply({ error: "Broken" }, 500) : reply(server.places);
     if (route.endsWith("/guide")) return reply({ markdown: "# Guide\n\n## 1. One\n\nClick it.\n" });
     if (route.endsWith("/check")) return reply({ checks: server.checks(query), dialog: server.dialog(query) });
@@ -283,7 +283,7 @@ const form = (id) => {
   el.checkValidity = () => el.querySelectorAll("[required]").every((e) => e.value);
   return el;
 };
-for (const id of ["gateway-name", "cloud-token-secret", "replace-cloud-token-secret"]) form(id);
+for (const id of ["gateway-name", "cloud-token-secret", "replace-cloud-token-secret", "runtime-create-name"]) form(id);
 
 test("with no platform registered the page is today's, whatever the playground declares: no picker, no place, no new request", async () => {
   await visit({}, { platforms: [], places: [] });
@@ -297,38 +297,24 @@ test("with no platform registered the page is today's, whatever the playground d
   await leave();
 });
 
-test("runtime settings select the saved default or playground choice, even when the page is stale", async () => {
-  const { runtimeSettings } = await import("../../../web/js/dialogs/runtimes.js");
-  await visit({ ...off, runtime: { mode: "independent" } }, { platforms: [], places: [] });
+test("a playground creates a named child without changing the shared playground", async () => {
+  const { createRuntime } = await import("../../../web/js/dialogs/runtimes.js");
+  await visit({ ...off, runtime: { mode: "shared" } }, { platforms: [], places: [] });
   const item = store.state.playgrounds.find((p) => p.id === "hotels");
-  try {
-    for (const [scope, saved, pageMode, fallback] of [
-      ["default", "shared", "independent", "shared"],
-      ["default", "independent", "shared", "independent"],
-      ["playground", "shared", "independent", "independent"],
-      ["playground", "independent", "shared", "shared"],
-      ["playground", "shared", undefined, "independent"],
-    ]) {
-      server.runtimes = { default: fallback, playgrounds: [{ id: item.id, mode: saved }] };
-      item.runtime = pageMode ? { mode: pageMode } : undefined;
-      server.calls = [];
-      const asked = runtimeSettings(scope === "default" ? null : item);
-      await flush();
-      assert.equal(choices()[0][0], saved === "shared" ? "Shared" : "Independent", `${scope}: ${saved}`);
-      assert.equal(picks.querySelector("input:checked").value, "0");
-      await answer(true);
-      await asked;
-      assert.deepEqual(posts("/api/playground-runtimes").map((call) => call.body),
-        [scope === "default" ? { default: saved } : { id: item.id, mode: saved }]);
-    }
-    server.runtimes = { default: "independent", playgrounds: [] };
-    server.calls = [];
-    await runtimeSettings(item);
-    assert.deepEqual(posts("/api/playground-runtimes"), [], "a missing playground never inherits the default silently");
-  } finally {
-    delete server.runtimes;
-    await leave();
-  }
+  server.calls = [];
+  createRuntime(item);
+  await flush();
+  const input = page.doc.querySelector("#runtime-create-name");
+  assert.ok(input);
+  input.value = "Demo";
+  const form = input.closest("form");
+  form.dispatchEvent(new Ev("input", { target: input }));
+  form.dispatchEvent(new Ev("submit", { target: form }));
+  await flush();
+  assert.deepEqual(server.calls.filter((c) => c.method === "POST").map((c) => [c.path, c.body]),
+    [["/api/playgrounds/hotels/runtimes", { name: "Demo" }]]);
+  assert.equal(item.runtime.mode, "shared");
+  await leave();
 });
 
 test("a place kept for the playground is not known before the places are read: nothing deploys, and the picker says it waits", async () => {
@@ -1131,7 +1117,7 @@ test("its file button reads View and shows no path of this machine; the file of 
   const file = section.querySelector("#pg-actions [data-file]");
   assert.deepEqual([file.getAttribute("data-tip"), file.getAttribute("aria-label")], ["View compose.yml", "View compose.yml"]);
   section.querySelector("#pg-actions [data-more]").click();
-  assert.deepEqual(entries(), [["Runtime", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Copy to Personal", ""]],
+  assert.deepEqual(entries(), [["Create runtime", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Copy to Personal", ""]],
     "a playground of a catalog has a More with Export, Export for Docker Compose and Copy to Personal");
   page.doc.dispatchEvent(Object.assign(new Ev("click"), { target: page.doc.body }));
   await leave();
@@ -1146,7 +1132,7 @@ test("a playground of this machine has a More, last of the page's actions, with 
   assert.deepEqual([button.getAttribute("aria-label"), button.getAttribute("data-tip"), button.getAttribute("aria-haspopup")], ["More for Acme Hostels", "More", "true"]);
   assert.ok(section.querySelector("#pg-actions .row-icons").lastElementChild === button, "at the end, after its files");
   button.click();
-  assert.deepEqual(entries(), [["Runtime", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Share", ""], ["Delete", ""]]);
+  assert.deepEqual(entries(), [["Create runtime", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Share", ""], ["Delete", ""]]);
   assert.equal(menu.querySelectorAll(".menu-sep").length, 1);
   assert.ok(menu.querySelectorAll(".menu-item")[4].classList.contains("danger"));
   page.doc.dispatchEvent(Object.assign(new Ev("click"), { target: page.doc.body }));
@@ -1156,7 +1142,7 @@ test("a playground of this machine has a More, last of the page's actions, with 
 test("Delete of the page is held for the reason the list gives, and the Lab UI not answering holds Share and Delete", async () => {
   await visit({ ...off, personal: true, id: "local/hotels", held: { delete: "Stop Acme Hostels first" } }, { platforms: [], places: [], id: "local/hotels" });
   section.querySelector("#pg-actions [data-more]").click();
-  assert.deepEqual(entries(), [["Runtime", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Share", ""], ["Delete", "Stop Acme Hostels first"]]);
+  assert.deepEqual(entries(), [["Create runtime", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Share", ""], ["Delete", "Stop Acme Hostels first"]]);
   page.doc.dispatchEvent(Object.assign(new Ev("click"), { target: page.doc.body }));
   store.offline = true;
   section.querySelector("#pg-actions [data-more]").click();
@@ -1457,7 +1443,7 @@ test("a catalog's name and the author's words are text, never markup, in the hea
 
 
 test("private Start and Rebuild confirm only their runtime, while Stop explicitly keeps every runtime's data", async () => {
-  const { independentAction, runtimeSettings } = await import("../../../web/js/dialogs/runtimes.js");
+  const { independentAction } = await import("../../../web/js/dialogs/runtimes.js");
   await visit({ ...off, runtime: { mode: "independent", prepared: true } }, { platforms: [], places: [] });
   const item = store.state.playgrounds.find((p) => p.id === "hotels");
   for (const verb of ["start", "rebuild", "stop"]) {
@@ -1471,12 +1457,5 @@ test("private Start and Rebuild confirm only their runtime, while Stop explicitl
     const path = `/api/playgrounds/hotels/${verb === "rebuild" ? "runtime/rebuild" : verb}`;
     assert.equal(server.calls.filter((c) => c.method === "POST" && c.path === path).length, 1, verb);
   }
-  server.calls = [];
-  const asked = runtimeSettings(item);
-  await flush();
-  assert.equal(choices()[0][0], "Independent");
-  await answer(true);
-  await asked;
-  assert.deepEqual(posts("/api/playground-runtimes").map((c) => c.body), [{ id: "hotels", mode: "independent" }]);
   await leave();
 });

@@ -20,6 +20,15 @@ def selected(pid):
     return runtime_settings.mode(pid) == "independent"
 
 
+def project_for(project, pid):
+    source = runtime_settings.source(pid)
+    if source == pid:
+        return project
+    unit = layers.lookup(project, "playground", source)
+    return {**project, "playgrounds": {**project["playgrounds"], pid: {**unit, "id": pid,
+            "name": runtime_settings.instances()[pid]["name"]}}}
+
+
 def _snapshot(pid):
     def read():
         rows = independent.containers(pid) if independent.read(pid) else {}
@@ -38,12 +47,13 @@ def _states(rows, value, job=None):
 
 
 def _overlay(body, project):
-    settings = runtime_settings.read()
-    body["playground_runtimes"] = {"default": settings["default"]}
     for item in body.get("playgrounds", []):
         pid = item["id"]
         mode = runtime_settings.mode(pid)
         item["runtime"] = {"mode": mode}
+        if selected(pid):
+            parent = runtime_settings.source(pid)
+            item["runtime"].update(parent=parent, parent_name=project["playgrounds"][parent]["name"])
         if mode != "independent":
             continue
         value = independent.read(pid)
@@ -120,7 +130,7 @@ def _overlay(body, project):
 
 
 def check(project, pid, rebuild=False):
-    unit = layers.lookup(project, "playground", pid)
+    unit = layers.lookup(project, "playground", runtime_settings.source(pid))
     try:
         dialog = independent.plan(pid, rebuild=rebuild)
         checks = [{"name": "Independent runtime", "state": "ok", "detail": "Own platform, data and ports"}]
@@ -132,35 +142,24 @@ def check(project, pid, rebuild=False):
     return {"checks": checks, "dialog": dialog}
 
 
-def settings(project):
-    value = runtime_settings.read()
-    return {"default": value["default"], "playgrounds": [
-        {"id": pid, "name": unit["name"], "mode": runtime_settings.mode(pid)} for pid, unit in project["playgrounds"].items()]}
-
-
-def save(project, body):
+def create(project, pid, body):
+    # A new child is stopped and unprepared: its first Start captures private inputs.
     if JOBS.current and not JOBS.current.done:
-        raise RuntimeError("Wait for the current job before changing runtime settings")
-    pid = body.get("id")
-    if pid is None:
-        runtime_settings.initialize(project["playgrounds"])
-        runtime_settings.save(default=body.get("default"))
-    else:
-        layers.lookup(project, "playground", pid)
-        shared = layers.current(project)["playground"] == pid
-        private = independent.read(pid) and info(pid)["on"]
-        if shared or private:
-            raise ValueError("Stop this playground before changing its runtime")
-        runtime_settings.initialize(project["playgrounds"])
-        runtime_settings.save(pid=pid, selected=body.get("mode"))
-    return settings(project)
+        raise RuntimeError("Wait for the current job before creating a runtime")
+    layers.lookup(project, "playground", pid)
+    if selected(pid):
+        raise ValueError("Create runtimes inside the source playground")
+    independent.plan(pid, rebuild=True)  # Validate the catalog closure before registering anything.
+    return runtime_settings.create(pid, body.get("name"))
 
 
 def action(project, pid, operation, body=None):
-    unit = layers.lookup(project, "playground", pid)
+    layers.lookup(project, "playground", runtime_settings.source(pid))
     if not selected(pid):
         raise ValueError("This playground uses the shared runtime")
     body = body or {}
+    if body.get("place") not in (None, "machine"):
+        raise ValueError("An independent runtime runs only on this machine")
     if operation in ("start", "rebuild"):
         result = check(project, pid, rebuild=operation == "rebuild")
         if any(row["state"] == "warn" for row in result["checks"]):
@@ -175,15 +174,15 @@ def action(project, pid, operation, body=None):
             raise ValueError("Start this playground first")
         value = independent.read(pid)
         lasting = [key for key in value["services"] if key not in value["oneshots"]]
-        return JOBS.start("Restart " + unit["name"], [independent.command(pid, "restart", *lasting)], key=f"playground:{pid}", verb="restart")
+        return JOBS.start("Restart " + independent._label(pid), [independent.command(pid, "restart", *lasting)], key=f"playground:{pid}", verb="restart")
     raise ValueError("Unknown independent runtime action")
 
 
 def services(project):
     # Logs and service actions use the same verified container identities as the state.
     body = {"playgrounds": [], "services": copy.deepcopy(project["services"])}
-    for pid in project["playgrounds"]:
-        if not selected(pid) or not independent.read(pid):
+    for pid in runtime_settings.instances():
+        if not independent.read(pid):
             continue
         value, rows = independent.read(pid), independent.containers(pid)
         for key in value["services"]:
@@ -194,8 +193,11 @@ def services(project):
 
 
 def view(project, pid):
+    project = project_for(project, pid)
     value = independent.read(pid)
     if not value:
+        if selected(pid):
+            raise ValueError("Start this runtime before opening its consoles")
         return project
     return independent.rewrite(project, value["ports"])
 
@@ -209,13 +211,13 @@ def persona_api(persona):
     if not persona.startswith("runtime-"):
         return personas.API
     project = library_project.load()
-    for pid in project["playgrounds"]:
-        if not selected(pid):
+    for pid in runtime_settings.instances():
+        if runtime_settings.source(pid) not in project["playgrounds"]:
             continue
         value = independent.read(pid)
         if not value:
             continue
-        if any(tab.get("persona") and persona_key(pid, tab["persona"]) == persona for tab in frames.declared(project, pid)):
+        if any(tab.get("persona") and persona_key(pid, tab["persona"]) == persona for tab in frames.declared(project, runtime_settings.source(pid))):
             port = value["ports"].get(str(personas.API[1]))
             return (personas.API[0], port) if port else None
     return None
@@ -232,9 +234,22 @@ def overlay(body, project):
             held = True
         if held:
             item["held"] = {**(item.get("held") or {}), "delete": "Stop the independent playground using this item first"}
+    originals = {item["id"]: item for item in body.get("playgrounds", [])}
+    try:
+        instances = runtime_settings.instances()
+    except ValueError as error:
+        body.setdefault("problems", []).append({"file": runtime_settings.FILE, "message": str(error), "editable": False})
+        return body
+    for rid, instance in instances.items():
+        parent = originals.get(instance["playground"])
+        if parent:
+            item = copy.deepcopy(parent)
+            item.update(id=rid, name=instance["name"], personal=False, settings=[], deployed=[], deploys_to=[],
+                        twin=None, first_start=None)
+            body["playgrounds"].append(item)
     for item in body.get("playgrounds", []):
         try:
-            _overlay({**body, "playgrounds": [item]}, project)
+            _overlay({**body, "playgrounds": [item]}, project_for(project, item["id"]))
         except (OSError, ValueError, KeyError, compose.ComposeError) as error:
             body.setdefault("problems", []).append({"file": runtime_settings.FILE, "message": str(error), "editable": False})
             item["runtime"] = {"mode": "independent", "error": str(error)}
@@ -243,27 +258,36 @@ def overlay(body, project):
     return body
 
 
-def listing(project, fresh=False):
+def listing(project, fresh=False, playground=None):
     """The Containers page's central inventory, including stopped and unavailable-source runtimes."""
+    if playground is not None:
+        layers.lookup(project, "playground", playground)
     records, problems = runtime_storage.known()
     prepared = dict(records)
-    ids = set(prepared) | {pid for pid in project["playgrounds"] if selected(pid)}
+    instances = runtime_settings.instances()
+    ids = set(prepared) | set(instances)
+    if playground is not None:
+        ids = {rid for rid in ids if runtime_settings.source(rid) == playground}
     try:
         usage = storage.usage(fresh=fresh)
     except (OSError, ValueError, compose.ComposeError) as error:
         usage = {"volumes": {}, "shared": []}
         problems.append({"file": "Docker storage", "message": str(error)})
-    shared = storage.resources(compose.project_name())
+    shared = storage.resources(compose.project_name()) if playground is None else {"containers": [], "volumes": []}
     rows = [{"id": None, "name": "Shared platform", "mode": "shared", "prepared": True,
              "containers": shared["containers"], "volumes": shared["volumes"], "ports": [],
-             "local_bytes": None, "source": True, "problem": None}]
-    for pid in sorted(ids):
-        unit = project["playgrounds"].get(pid)
+             "local_bytes": None, "source": True, "problem": None}] if playground is None else []
+    names = {rid: instances.get(rid, {}).get("name") or (prepared.get(rid) or {}).get("label") or rid for rid in ids}
+    for pid in sorted(ids, key=lambda rid: (runtime_settings.source(rid), names[rid].casefold(), rid)):
+        parent = runtime_settings.source(pid)
+        unit = project["playgrounds"].get(parent)
         record = prepared.get(pid)
         value = {"resources": {"containers": [], "volumes": [], "networks": []}, "local": None, "error": None, "running": False}
         try:
             if record:
                 value = runtime_storage.inventory(pid)
+            elif independent.folder(pid).exists() or any(storage.resources(independent.name(pid)).values()):
+                value["error"] = "An incomplete runtime has private resources; cleanup is held"
         except (OSError, ValueError, compose.ComposeError) as error:
             value["error"] = str(error)
         damaged = next((problem["message"] for problem in problems if problem["file"] ==
@@ -271,8 +295,9 @@ def listing(project, fresh=False):
         if damaged:
             value["error"] = damaged
         resources = value["resources"]
-        row = {"id": pid, "name": (unit or {}).get("name") or (record or {}).get("label") or pid,
-               "mode": "independent", "selected": selected(pid), "prepared": bool(record), "source": unit is not None,
+        row = {"id": pid, "name": names[pid],
+               "playground": parent, "playground_name": (unit or {}).get("name") or parent,
+               "mode": "independent", "selected": True, "prepared": bool(record), "source": unit is not None,
                "containers": resources["containers"], "volumes": resources["volumes"],
                "local_bytes": value["local"]["bytes"] if value["local"] else None,
                "folder": independent.folder(pid).relative_to(paths.ROOT).as_posix() if record else None,
@@ -283,7 +308,8 @@ def listing(project, fresh=False):
         reason = value["error"] or ("Stop this runtime before cleanup" if value["running"] else None)
         row["cleanup"] = {"containers": {"enabled": bool(record and not reason and (resources["containers"] or resources["networks"])),
                                         "reason": reason or (None if resources["containers"] or resources["networks"] else "Containers already removed")},
-                          "data": {"enabled": bool(record and not reason), "reason": reason or (None if record else "Not started yet")}}
+                          "data": {"enabled": bool(record and not reason), "reason": reason or (None if record else "Not started yet")},
+                          "delete": {"enabled": pid in instances and not reason, "reason": reason or (None if pid in instances else "Unknown runtime definition")}}
         rows.append(row)
     running = [c["name"] for row in rows for c in row["containers"] if c["state"] == "running"]
     try:
@@ -303,7 +329,7 @@ def listing(project, fresh=False):
         row["memory_bytes"] = sum(s["memory_bytes"] for s in each) if all(s is not None for s in each) else None
         row["volumes"] = [{"name": v["name"], "bytes": usage["volumes"].get(v["name"])} for v in row["volumes"]]
         row["containers"] = [{key: c[key] for key in ("name", "service", "state", "ports")} for c in row["containers"]]
-    return {"default": runtime_settings.read()["default"], "runtimes": rows, "shared_storage": usage["shared"], "problems": problems}
+    return {"default": "shared", "runtimes": rows, "shared_storage": usage["shared"] if playground is None else [], "problems": problems}
 
 
 def cleanup(pid, body):
