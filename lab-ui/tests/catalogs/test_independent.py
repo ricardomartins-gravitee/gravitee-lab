@@ -144,6 +144,7 @@ class Independent(Case):
         worker = Mock()
         steps[0](worker)
         sent = worker.exec.call_args.args[0]
+        self.assertTrue(independent.tested.ran("local/a"), "A successful private start must enable the normal Share workflow")
         self.assertIn("--no-recreate", sent)
         self.assertIn("a-app", sent)
         self.assertNotIn("a-seed", sent)
@@ -177,3 +178,17 @@ class Independent(Case):
         with self.assertRaisesRegex(ValueError, "FIXTURE_TOKEN"):
             independent.plan("local/a")
         self.assertFalse(independent.folder("local/a").exists())
+
+    def test_success_evidence_uses_pinned_versions_and_private_container_images(self):
+        gathered = self.inputs["local/a"][1]
+        gathered["unit"]["requires"] = {"images": {"FIXTURE_VERSION": "8.0.0"}}
+        gathered["found"]["services"]["db"].update(raw_image="redis:${FIXTURE_VERSION:-8.0.0}", tag="8.0.0",
+                                                         owner={"name": "Database"})
+        self.patch(independent.images, "components", return_value=[{"id": "FIXTURE_VERSION", "services": ["db"]}])
+        value = self.prepare()
+        identify = self.patch(compose, "image_key", return_value="sha256:private-image")
+        independent._tested("local/a", value)
+        proof = independent.tested.sets("local/a")[-1]
+        self.assertEqual(proof["versions"], {"FIXTURE_VERSION": "8.0.0"})
+        self.assertEqual(proof["images"], {"FIXTURE_VERSION": "sha256:private-image"})
+        self.assertEqual(identify.call_args.args[0]["container"], value["project"] + "-db-1")
