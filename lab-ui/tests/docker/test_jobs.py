@@ -152,6 +152,11 @@ class Running(Case):
         self.assertEqual((job.ok, job.lines[-1]), (True, "✓ Démo"))
         self.assertEqual((asked[0]["encoding"], asked[0]["errors"]), ("utf-8", "replace"))
 
+    def test_restore_with_pull_never_never_prepares_a_pull(self):
+        for options in (["--pull", "never"], ["--pull=never"]):
+            self.assertIsNone(jobs._pull_before([*compose.COMPOSE, "up", "-d", *options, "api"]))
+        self.assertIsNotNone(jobs._pull_before([*compose.COMPOSE, "up", "-d", "api"]))
+
     def test_one_at_a_time(self):
         release = threading.Event()
         first = self.start("Start Kazoo", [lambda job: release.wait(5)])
@@ -162,6 +167,21 @@ class Running(Case):
         self.assertTrue(self.finished(first).ok)
         second = self.finished(self.start("Start Jade", []))
         self.assertEqual((self.jobs.current, self.jobs.jobs), (second, [first, second]))
+        # A synchronous checkpoint deletion holds the same guard as a new job.
+        attempted, started = threading.Event(), []
+
+        def start_after_guard():
+            attempted.set()
+            started.append(self.start("Start guarded", []))
+
+        with self.jobs.idle():
+            thread = threading.Thread(target=start_after_guard)
+            thread.start()
+            self.assertTrue(attempted.wait(2))
+            self.assertEqual(started, [])
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(self.finished(started[0]).ok)
 
     def test_a_job_says_what_it_acts_on_and_what_it_does(self):
         # The button that started it shows it by them; a job that would not say is refused

@@ -27,6 +27,8 @@ const page = installDom({
     if (route !== "/api/state") server.calls.push(call);
     if (route === "/api/state") return reply(store.state);
     if (route === "/api/places") return server.down ? reply({ error: "Broken" }, 500) : reply(server.places);
+    if (route.endsWith("/saved-states")) return server.savedReply ? server.savedReply() : reply({ states: server.states || [] });
+    if (route.includes("/saved-states/") && route.endsWith("/plan")) return reply(server.restorePlan || {});
     if (route.endsWith("/guide")) return reply({ markdown: "# Guide\n\n## 1. One\n\nClick it.\n" });
     if (route.endsWith("/check")) return reply({ checks: server.checks(query), dialog: server.dialog(query) });
     if (route.endsWith("/export")) return reply(call.body?.check ? server.exported : { ...server.exported, data: btoa("PK") });
@@ -253,8 +255,9 @@ async function pick(name) {
 
 // The dialog of what an action does, and its answer, as the Gravitee Cloud page tests read them
 const choice = page.ids.choice, picks = page.ids["choice-list"];
+let third = false;
 let second = false;   // the second option of the choice is the one checked
-picks.querySelector = (selector) => (selector === "input:checked" ? picks.querySelectorAll("input")[second ? 1 : 0] : El.prototype.querySelector.call(picks, selector));
+picks.querySelector = (selector) => (selector === "input:checked" ? picks.querySelectorAll("input")[third ? 2 : second ? 1 : 0] : El.prototype.querySelector.call(picks, selector));
 const said = (el) => (el.children.some((child) => child.tag) ? el.children.filter((child) => child.tag && !child.getAttribute("aria-hidden")).map(said).filter(Boolean).join(" ") : text(el));
 const rowsOf = (el) => el.querySelectorAll(".choice-row").map((n) => [text(n.querySelector(".choice-row-label")), n.querySelectorAll(".pill").map(text)]);
 const effects = () => ({ title: text(page.ids["choice-title"]), action: text(page.ids["choice-ok"]),
@@ -765,7 +768,8 @@ test("Stop says per place what stays or goes; the deletion waits for the first p
   assert.equal(effects().title, "Stop Acme Hostels");
   assert.deepEqual(choices(), [
     ["Keep what it created", "", [["Stays", ["12 APIs in This machine"]], ["Stays", ["3 APIs, 1 Application in Development (My Account)"]]]],
-    ["Delete what it created", "", [["Deletes", ["12 APIs in This machine"]], ["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]]]);
+    ["Delete what it created", "", [["Deletes", ["12 APIs in This machine"]], ["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]],
+    ["Save state and delete what it created", "Only supported on This machine", [["Saves", ["Only this playground's resources and consumer access"]], ["Deletes", ["12 APIs in This machine"]], ["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]]]);
   second = true;
   picks.onchange();
   assert.equal(text(page.ids["choice-ok"]), "Stop and delete");
@@ -809,7 +813,8 @@ test("a person with only a Cloud place is not held by what the local seed needs"
   await flush();
   assert.deepEqual(choices(), [
     ["Keep what it created", "", [["Stays", ["3 APIs, 1 Application in Development (My Account)"]]]],
-    ["Delete what it created", "", [["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]]]);
+    ["Delete what it created", "", [["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]],
+    ["Save state and delete what it created", "Only supported on This machine", [["Saves", ["Only this playground's resources and consumer access"]], ["Deletes", ["3 APIs, 1 Application in Development (My Account)"]]]]]);
   await answer(false);
   await leave();
 });
@@ -819,7 +824,8 @@ test("with a record on This machine alone, Stop is today's: no place named", asy
     await visit({}, { platforms, places: platforms.length ? PLACES : [] });
     section.querySelector('[data-act="stop"]').click();
     await flush();
-    assert.deepEqual(choices(), [["Keep what it created", "", []], ["Delete what it created", "", [["Deletes", ["12 APIs"]]]]]);
+    assert.deepEqual(choices(), [["Keep what it created", "", []], ["Delete what it created", "", [["Deletes", ["12 APIs"]]]],
+      ["Save state and delete what it created", "", [["Saves", ["Only this playground's resources and consumer access"]], ["Deletes", ["12 APIs"]]]]]);
     await answer(false);
     await leave();
   }
@@ -836,7 +842,8 @@ test("a start that stops a playground asks what to do with what it created, as i
   await flush();
   assert.equal(effects().title, "Start Acme Bakery");
   assert.deepEqual(effects().steps.map(([label]) => label), ["Stops", "Starts", "Deploys to"], "the steps are the start's own");
-  assert.deepEqual(choices(), [["Keep what it created", "", []], ["Delete what it created", "", [["Deletes", ["12 APIs"]]]]]);
+  assert.deepEqual(choices(), [["Keep what it created", "", []], ["Delete what it created", "", [["Deletes", ["12 APIs"]]]],
+      ["Save state and delete what it created", "", [["Saves", ["Only this playground's resources and consumer access"]], ["Deletes", ["12 APIs"]]]]]);
   second = true;
   picks.onchange();
   assert.equal(text(page.ids["choice-ok"]), "Start and delete");
@@ -855,6 +862,95 @@ test("a start that stops a playground asks what to do with what it created, as i
   // Nothing created by what goes, or no playground that goes: the dialog of the plan is enough
   assert.equal(await confirmStart(other, "Start", dialogOf({ stops: [] })), undefined);
   assert.equal(await confirmStart(other, "Start", dialogOf({ keeps: [{ kind: "data", id: "unknown", name: "x" }] })), undefined);
+  await leave();
+});
+
+test("Save state is the third Stop and Switch choice, and requests saving before deletion", async () => {
+  await visit({});
+  section.querySelector('[data-act="stop"]').click();
+  await flush();
+  third = true;
+  picks.onchange();
+  assert.equal(text(page.ids["choice-ok"]), "Stop and save state");
+  await answer(true);
+  assert.deepEqual(posts("/stop").at(-1).body, { remove: true, save: true, accept: [] });
+  const asked = confirmStart({ kind: "playground", id: "bank", name: "Bank" }, "Start", dialogOf({
+    stops: [{ kind: "playground", id: "hotels", name: "Acme Hostels apps" }],
+    keeps: [{ kind: "data", id: "hotels", name: "What Acme Hostels created in Gravitee" }] }));
+  await flush();
+  picks.onchange();
+  await answer(true);
+  assert.deepEqual(await asked, { accept: ["playground:hotels"], remove: true, save: true });
+  third = false;
+  await leave();
+});
+
+test("Saved states confirm only the playground's resources and show any app switch separately", async () => {
+  server.restorePlan = { stops: [{ kind: "playground", id: "bank", name: "Bank apps" }] };
+  server.states = [
+    { id: "a".repeat(32), name: "First <edited>", created: "2026-11-10T10:00:00Z", size: 2048, images: [] },
+    { id: "b".repeat(32), name: "Second", created: "2026-11-10T11:00:00Z", size: 4096, images: [] }];
+  await visit({});
+  assert.equal(section.querySelectorAll("[data-restore-state]").length, 2);
+  const first = section.querySelector("[data-restore-state]");
+  first.click();
+  await flush();
+  assert.equal(effects().title, "Restore First <edited>");
+  assert.ok(effects().steps.some(([label, items]) => label === "Replaces" && items.some((s) => s.includes("Only this playground's resources, consumer access and seed ownership record"))));
+  assert.ok(effects().steps.some(([label, items]) => label === "Stops" && items.some((s) => s.includes("Bank apps"))));
+  assert.ok(!JSON.stringify(effects()).includes("Local Lab data"));
+  await answer(false);
+  assert.equal(posts("/restore").length, 0);
+  first.click();
+  await flush();
+  await answer(true);
+  assert.deepEqual(posts("/restore").at(-1).body, { confirm: true, accept: ["playground:bank"] });
+  assert.ok(posts("/restore").at(-1).path.includes("a".repeat(32)));
+  server.states = [];
+  delete server.restorePlan;
+  await leave();
+});
+
+test("Saved-state controls keep their reason and a failed list offers retry, not a false empty state", async () => {
+  server.states = [{ id: "a".repeat(32), name: "Before edits", created: "2026-11-10T10:00:00Z", size: 1024 }];
+  await visit({});
+  store.state = { ...store.state, wait: "Wait for the running job", job: JOB };
+  playgroundPage.render(store.state);
+  for (const button of section.querySelectorAll("[data-restore-state], [data-delete-state]")) {
+    assert.equal(button.disabled, false, "keyboard focus remains available");
+    assert.deepEqual([isOff(button), offWhy(button)], [true, "Wait for the running job"]);
+  }
+  await leave();
+  server.savedReply = () => reply({ error: "Checkpoint storage unavailable" }, 500);
+  await visit({});
+  const saved = () => section.querySelector("#pg-saved-states");
+  assert.ok(text(saved()).includes("Checkpoint storage unavailable"));
+  assert.ok(!text(saved()).includes("No saved states"));
+  server.savedReply = undefined;
+  saved().querySelector("[data-reload-states]").click();
+  await flush();
+  assert.equal(saved().querySelectorAll("[data-restore-state]").length, 1);
+  server.states = [];
+  await leave();
+});
+
+test("an older checkpoint list cannot replace the answer from a newer visit to the same playground", async () => {
+  const pending = [];
+  server.savedReply = () => new Promise((resolve) => pending.push(resolve));
+  await visit({});
+  playgroundPage.show(["hotels"]);
+  playgroundPage.render(store.state);
+  await flush();
+  assert.equal(pending.length, 2);
+  const row = (name) => ({ id: "a".repeat(32), name, created: "2026-11-10T10:00:00Z", size: 1024 });
+  pending[1](reply({ states: [row("Latest")] }));
+  await flush();
+  pending[0](reply({ states: [row("Stale")] }));
+  await flush();
+  const saved = text(section.querySelector("#pg-saved-states"));
+  assert.ok(saved.includes("Latest"));
+  assert.ok(!saved.includes("Stale"));
+  server.savedReply = undefined;
   await leave();
 });
 
@@ -898,7 +994,7 @@ test("a choice with many items to delete folds them under one line that counts t
   const asked = confirmStart({ kind: "playground", id: "bank", name: "Acme Bakery" }, "Start", dialogOf({ stops: [{ kind: "playground", id: "hotels", name: "Acme Hostels apps" }], keeps }));
   await flush();
   const details = picks.querySelectorAll("details.choice-more");
-  assert.equal(details.length, 1, "one fold, in the option that deletes");
+  assert.equal(details.length, 2, "both choices that delete fold the same items");
   assert.equal(text(details[0].querySelector(".choice-summary")), "37 items");
   assert.deepEqual(details[0].querySelectorAll(".choice-detail li").map((li) => [text(li.querySelector("b")), text(li.querySelector("span"))]),
     [["1", "domain"], ["10", "scopes"], ["3", "APIs"], ["8", "Customer entities"], ["12", "access rules"], ["3", "users"]]);
@@ -1243,7 +1339,7 @@ test("an imported playground moves to Personal from its menu: with what it bring
   assert.equal(effects().action, "Allow and move", "what takes more of this machine is allowed by the person, here");
   await answer(true);
   await flush();
-  assert.deepEqual(server.calls.map((call) => [call.path, call.body]), [["/api/playgrounds/@hostels/hotels/move", { check: true }],
+  assert.deepEqual(posts("/move").map((call) => [call.path, call.body]), [["/api/playgrounds/@hostels/hotels/move", { check: true }],
     ["/api/playgrounds/@hostels/hotels/move", { together: true, allow: true }]]);
   await leave();
   // What the import could not delete is said once the move is done
@@ -1273,7 +1369,7 @@ test("a playground of a catalog is copied to Personal from its menu: alone, or w
   assert.equal(effects().action, "Copy");
   await answer(true);
   await flush();
-  assert.deepEqual(server.calls.at(-1).body, { users: false }, "the first choice: the copy alone");
+  assert.deepEqual(posts("/copy").at(-1).body, { users: false }, "the first choice: the copy alone");
   await leave();
 });
 

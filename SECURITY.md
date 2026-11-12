@@ -32,6 +32,17 @@ Only the latest version, the current `main` branch, is supported, and fixes land
 - The Developer Portal turns its frame protection on and names `http://localhost:8084` (the APIM Console) and the Lab UI's pages as the pages that may frame it, with its own `ALLOWED_FRAME_ANCESTOR_URLS` setting.
 - The Lab UI loads marked, DOMPurify, Mermaid, Monaco and xterm.js from cdnjs.cloudflare.com and cdn.jsdelivr.net, each at a pinned version. A Subresource Integrity hash covers the script the page loads, which for Monaco is its loader: the editor's other files are not hashed. You trust those two CDNs: a script that the page runs can use every Docker action of the Lab UI.
 
+## Saved playground states
+
+Saved states under `.lab/saved-states/` contain the selected playground's exported resources, consumer API keys and ownership records.
+API definitions can contain credentials. Directories are private, but files are not encrypted: protect copies as you
+would live credentials, and never attach them to an issue, pull request or log. Deleting a saved state does not revoke
+credentials copied into it. Restore validates ownership and collisions, then changes only the selected playground's
+resources; it never restores shared database volumes, other playgrounds' data or catalog settings. Linked catalogs and
+source repositories stay in place. [Saved playground states](docs/saved-playground-states.md) lists the supported
+resources and recovery files. Legacy whole-Lab checkpoints remain sensitive backups on disk, but cannot be restored
+through the playground API.
+
 ## Demo credentials
 
 The demo logins and secrets are public by design: they are public defaults of the Gravitee images, or the defaults of settings in the Compose files, and [Logins](docs/configuration.md#logins) lists them with their settings. They are not vulnerabilities. Every password, secret, token and key in a Compose file is a setting, never a literal: a demo value is the default of its setting, and the check of a catalog refuses a literal. Change the ones you want, and do not reuse the defaults anywhere else.

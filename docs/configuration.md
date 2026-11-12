@@ -261,7 +261,7 @@ them one after another.
 
 | What | Where | Back up or clear |
 |---|---|---|
-| Core data: MongoDB, Elasticsearch, Redis | Docker volumes `gravitee_data-mongo`, `gravitee_data-elasticsearch`, `gravitee_data-redis` | `make reset` deletes all |
+| Core data: MongoDB, Elasticsearch, Redis | Docker volumes `gravitee_data-mongo`, `gravitee_data-mongo-config`, `gravitee_data-elasticsearch`, `gravitee_data-redis` | `make reset` deletes all |
 | Add-on data | Docker volumes named `gravitee_data-<add-on>` | `make reset` deletes all |
 | What is on, and your stars | `.lab/on.yml`, `.lab/starred.json` | Copy `.lab/` |
 | The core's versions, license and passwords | `.env` | Copy the file |
@@ -271,6 +271,7 @@ them one after another.
 | The catalogs and your own items | `.lab/catalogs/`, your own in `.lab/catalogs/local/` | Copy `.lab/` |
 | Demo certificates | `certs/mtls/` | `make certs` makes new ones |
 | What a seed created | `.lab/catalogs/<catalog>/playgrounds/<id>/.state/created.json` | `make reset` empties it |
+| [Saved playground states](saved-playground-states.md) | `.lab/saved-states/` | Delete each checkpoint on the playground's page; Reset keeps them |
 
 All of these are git-ignored. Never commit them.
 

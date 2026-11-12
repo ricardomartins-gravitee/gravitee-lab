@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlparse
 
-from ..library import check, drift, files, layers, machine, model, personal, playgrounds, plugins, project, starred, updates
+from ..library import check, drift, files, layers, machine, model, personal, playgrounds, plugins, project, saved_states, starred, updates
 from ..docker import compose, images, terminal
 from ..gravitee import core, license, places, platforms, probe
 from . import dashboard, personas, stack
@@ -318,7 +318,9 @@ def at(value):
 def start_playground(req, pid):
     """Starts a playground, on This machine or in a place. A place sends back what its dialog showed (`accept`)."""
     accept = accepted(req)
-    more = {"remove": True} if req.body.get("remove") else {}   # delete what the playground it stops created
+    more = {"remove": True} if req.body.get("remove") else {}
+    if req.body.get("save"):
+        more["save_state"] = True
     found, where = project.load(), at(req.body.get("place"))
     if req.body.get("switch") and not where:   # the person chose the versions it was tested with, on This machine
         more["switching"] = True
@@ -798,7 +800,16 @@ ROUTES = [(method, re.compile(pattern), handler) for method, pattern, handler in
     ("POST", f"/api/(addon|playground)s/{UNIT}/containers/{DO}",
      lambda r, kind, uid, do: stack.unit_action(project.load(), kind, uid, do)),
     ("POST", f"/api/playgrounds/{UNIT}/start", start_playground),
-    ("POST", f"/api/playgrounds/{UNIT}/stop", lambda r, pid: playgrounds.stop(project.load(), pid, bool(r.body.get("remove")), accepted(r))),
+    ("POST", f"/api/playgrounds/{UNIT}/stop", lambda r, pid: playgrounds.stop(
+         project.load(), pid, bool(r.body.get("remove")), accepted(r), **({"save_state": True} if r.body.get("save") else {}))),
+    ("GET", f"/api/playgrounds/{UNIT}/saved-states", lambda r, pid: {"states": saved_states.list_states(pid)}),
+    ("GET", f"/api/playgrounds/{UNIT}/saved-states/([a-f0-9]{{32}})/plan",
+     lambda r, pid, sid: layers.dialog(playgrounds.saved_state_plan(project.load(), pid, sid))),
+    ("POST", f"/api/playgrounds/{UNIT}/saved-states/([a-f0-9]{{32}})/restore",
+     lambda r, pid, sid: playgrounds.restore_state(project.load(), pid, sid, confirmed=r.body.get("confirm") is True,
+                                                accept=accepted(r))),
+    ("POST", f"/api/playgrounds/{UNIT}/saved-states/([a-f0-9]{{32}})/delete",
+     lambda r, pid, sid: saved_states.delete_state(project.load(), pid, sid)),
     ("POST", f"/api/playgrounds/{UNIT}/terminal", terminal_input),
     ("POST", f"/api/playgrounds/{UNIT}/terminal/close", terminal_close),
     ("POST", f"/api/playgrounds/{UNIT}/reseed", reseed_playground),

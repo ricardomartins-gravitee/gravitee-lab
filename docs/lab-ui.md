@@ -516,18 +516,26 @@ and *Stop*. Once a [Gravitee Cloud account](#gravitee-cloud) is connected it als
 needs and names the service that does not run, such as *Management API is not running*. It needs the playground to be
 on.
 
-**Stop** offers two ways, in a dialog that first lists what else it stops:
+**Stop** offers three choices, in a dialog that first lists what else it stops:
 
 - **Keep what it created**: the apps stop, and so do the add-ons only it uses. What it created in Gravitee stays.
 - **Delete what it created**: the seed first deletes what it recorded, through Gravitee's APIs, which must run. If that
   fails, nothing else changes. It is offered once the seed has recorded something.
+- **Save state and delete what it created**: exports only this playground's resources and consumer access, then runs the same
+  seeder cleanup as Delete. A failed save never starts deletion. Unsupported resource kinds and Cloud deployments
+  refuse saving.
+
+**Saved states** appear on the playground's page, with Restore and Delete actions. Multiple states may be kept.
+Restore confirms replacing only the selected playground's resources and ownership record, and shows any app switch
+separately. Shared databases and other playgrounds' resources stay as they are. Read
+[Saved playground states](saved-playground-states.md) for supported resources, linked folders and recovery.
 
 **Turn off** replaces Stop while nothing of the playground runs.
 
-The **Start** of another playground stops the one that runs, and its dialog says so first, with the same two ways for what
-that one created: *Keep what it created* (the first) or *Delete what it created*, which runs its seed's delete before
-anything stops, as its own Stop would, and refuses in the same cases. A row of a list never says what its Start would
-stop: the dialog does, once.
+The **Start** of another playground stops the one that runs, and its dialog says so first, with the same choices for what
+that one created: *Keep what it created* (the first), *Delete what it created*, or *Save state and delete what it
+created*. Saving and cleanup run before the switch, as its own Stop would, and refuse in the same cases. A row of a list
+never says what its Start would stop: the dialog does, once.
 
 **Reset**, on the Containers page, deletes every container and volume, so what the seed created goes with them. It
 turns the playground off and empties what the seed recorded, so the next Start sets it up again, seed included. A

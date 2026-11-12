@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from ..docker import compose, images
-from . import layers, model, plugins, project as projects, tested
+from . import layers, model, plugins, project as projects, saved_states, tested
 from ..gravitee import license, places, platforms
 from .. import paths
 from ..catalogs import trust
@@ -644,7 +644,7 @@ def _follow_seed(project, playground):
     return follow
 
 
-def start(project, pid, accept, place=None, remove=False, switching=False):
+def start(project, pid, accept, place=None, remove=False, switching=False, save_state=False):
     """Starts a playground. While it is off, or on and never seeded, or its seed failed (layers.fresh), the start sets
     it up: its add-ons, the plugins it needs, its apps and services with what of the platform they need, the whole
     platform while none of it runs ("Platform, apps and services" when the platform starts too), then its seed. On and
@@ -657,13 +657,19 @@ def start(project, pid, accept, place=None, remove=False, switching=False):
     plan, what it deletes, a job that runs, an on file written since the plan read it), and put back when its job cannot
     start after all, or ends at its first gate, having done nothing (layers.unchanged): what runs on them is made again
     with the start (the plan's restarts)."""
+    if save_state and not remove:
+        raise ValueError("Saving state requires deleting what the playground created")
+    if save_state and _remote(place):
+        raise ValueError("Saved states are only supported on This machine")
     if _remote(place):
         return _deploy(project, pid, accept, place, False, remove)
     playground = layers.lookup(project, "playground", pid)
     state, now = layers.current(project), _now(project)
     fresh = _fresh(project, state, playground, now)
     plan = _plan(project, state, now, pid, "start", accept, fresh, switching=switching)
-    delete = _leaving(project, state, plan, remove)
+    if save_state and plan.get("switch"):
+        raise RuntimeError("Save the current playground's state before switching platform versions")
+    delete = _leaving(project, state, plan, remove, save_state)
     if not plan.get("switch"):
         return _started(project, plan, delete)
     if JOBS.current and not JOBS.current.done:   # the versions are not changed under a job that runs
@@ -676,6 +682,22 @@ def start(project, pid, accept, place=None, remove=False, switching=False):
     except BaseException:
         undo()
         raise
+
+
+def saved_state_plan(project, pid, sid):
+    """A restore starts the playground's apps without running its seed or changing versions."""
+    saved_states._verified(pid, sid)
+    now = _now(project)
+    plan = layers.plan(project, layers.current(project), now[0], "playground", pid, "start", behind=now[1])
+    if plan.get("switch"):
+        raise ValueError("Apply compatible platform versions before restoring this playground")
+    return plan
+
+
+def restore_state(project, pid, sid, confirmed=False, accept=()):
+    plan = saved_state_plan(project, pid, sid)
+    layers.check(project, plan, accept)
+    return saved_states.restore(project, pid, sid, confirmed=confirmed, before=layers.steps(project, plan))
 
 
 def _saved(project, values):
@@ -703,7 +725,13 @@ def _started(project, plan, delete, undo=None):
     playground = project["playgrounds"][pid]
     title = f"{plan['label']} {playground['name']}"
     if not plan["fresh"]:
-        return layers.apply(project, plan, title, undo)
+        if not delete:
+            return layers.apply(project, plan, title, undo)
+        # An already-seeded destination takes the normal layers plan, but the
+        # departing playground still needs its checkpoint and delete first.
+        commands = layers.steps(project, plan, undo=undo)
+        return _job(title, [commands[0], delete, *commands[1:]], pid, "start", None,
+                    layers.waits(project, plan), layers.changes(project, plan))
     phase = WITH_PLATFORM if any(_of_platform(project, row) for row in plan["starts"]) else APPS
     installs, changes, loads, stopped = [], layers.changes(project, plan), {}, []
     for product, names in (playground["requires"].get("plugins") or {}).items():
@@ -826,17 +854,30 @@ def _delete_created(project, playground, elsewhere):
     return delete
 
 
-def _leaving(project, state, plan, remove):
+def _save_before_delete(project, leaving, delete):
+    """Capture managed persistent state before the *existing* seed cleanup."""
+
+    def save_then_delete(job):
+        saved_states.capture(job, project, leaving["id"])
+        delete(job)
+    save_then_delete.saves_state = True
+    return save_then_delete
+
+
+def _leaving(project, state, plan, remove, save_state=False):
     """What a start that stops another playground does with what that one created, when asked to delete it (`remove`): the
     step that deletes it, first in the job, as a stop would; else None, which keeps it. Refused as a stop is: while what
     its seed needs does not run, or when a place that holds a record cannot be reached."""
     row = next((row for row in plan["stops"] + plan["turns_off"] if row["kind"] == "playground"), None)
     leaving = project["playgrounds"].get(row["id"]) if row else None
+    if save_state and (not leaving or not leaving["seed"]):
+        raise RuntimeError("No departing playground can be saved")
     if not (remove and leaving and leaving["seed"]):
         return None
     if created(leaving["id"]):
         _seed_waits(project, state, model.up(project, compose.ps()), leaving)
-    return _delete_created(project, leaving, _reachable(project, leaving, state))
+    delete = _delete_created(project, leaving, _reachable(project, leaving, state))
+    return _save_before_delete(project, leaving, delete) if save_state else delete
 
 
 def _before(plan, step, steps, phases, waits, undo=None):
@@ -844,11 +885,11 @@ def _before(plan, step, steps, phases, waits, undo=None):
     file changed since the plan (layers.unchanged, which calls `undo` then), before anything changes; then the step that
     deletes what a playground created, when there is one (`step`): it says nothing of how far it is."""
     first = [lambda job: layers.unchanged(plan, undo), *([step] if step else [])]
-    return [*first, *steps], (["Delete what it created"] + phases if step else phases), \
-        ([None] + waits if step else waits)
+    before = (["Save state"] if getattr(step, "saves_state", False) else []) + (["Delete what it created"] if step else [])
+    return [*first, *steps], before + phases, [None] * len(before) + waits
 
 
-def stop(project, pid, remove, accept):
+def stop(project, pid, remove, accept, save_state=False):
     """Stops a playground: its apps, and the add-ons only it uses, removed by name, then the on file written without
     them; the core services it changed restart (layers.steps). A stop that fails before the on file is written leaves it
     on, to be stopped again; off after one that failed later, it stops again what of it still runs. `remove` first
@@ -857,6 +898,8 @@ def stop(project, pid, remove, accept):
     fails the job ends there and nothing else changes. Its job is named as its button: "Stop …", "Turn off …". A stop is
     the same for every place."""
     playground = layers.lookup(project, "playground", pid)
+    if save_state and not remove:
+        raise ValueError("Saving state requires deleting what the playground created")
     state, now = layers.current(project), _now(project)
     plan = _plan(project, state, now, pid, "stop", accept)
     if remove and playground["seed"] and created(pid):
@@ -864,6 +907,10 @@ def stop(project, pid, remove, accept):
     elsewhere = _reachable(project, playground, state) if remove and playground["seed"] else []
 
     delete = _delete_created(project, playground, elsewhere) if remove and playground["seed"] else None
+    if save_state:
+        if not delete:
+            raise RuntimeError("This playground has no seeder cleanup")
+        delete = _save_before_delete(project, playground, delete)
 
     def stop_apps(job):
         job.step("Stop the apps")

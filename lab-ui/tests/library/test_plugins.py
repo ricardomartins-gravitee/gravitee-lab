@@ -87,6 +87,7 @@ class Installed(Case):
         # The image each service's files are read from, by its id (compose.image_key)
         self.image = self.patch(compose, "image_key", return_value="sha256:running")
         self.patch(compose, "loaded", return_value=None)   # Compose cannot say which services it reads: all of them count
+        self.patch(compose, "image_ids", return_value={})   # the image inventory is a fixture, never this machine's Docker
 
     def test_zips_by_plugin_name(self):
         found = plugins._zips([("gravitee-policy-x-2.1.0.zip", 1700), ("notes.txt", 1), ("a-b-1.0.0-alpha.1.zip", 1800)])

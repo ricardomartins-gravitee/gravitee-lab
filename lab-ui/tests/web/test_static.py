@@ -29,7 +29,7 @@ EXPORT = re.compile(r"^export\s+(?:async\s+)?(?:const|let|function|class)\s+([\w
 API_PATH = re.compile(r"""[`"'](/api/[^`"'?\s]*)""")   # up to its query string
 PLACEHOLDER = re.compile(r"\$\{[^}]*\}")
 # What a ${...} of a path may stand for: an id, a job id, an action, a kind of item
-SAMPLES = ("abc", "0a1b2c3d", "start", "restart", "addon")
+SAMPLES = ("abc", "0a1b2c3d", "a" * 32, "start", "restart", "addon")
 SYMBOL = re.compile(r'<symbol id="i-([\w-]+)"')
 ICON_CALL = re.compile(r"\bicon\(([^()]*)\)")
 ICON_USE = re.compile(r'href="#i-([\w-]+)"')

@@ -6,7 +6,7 @@
 import { $, $$, esc, icon, setHTML, loading, api, store, router, recall, remember, hrefOf, ID_PATTERN, splitKey, credHtml, catalogRows } from "../core.js";
 import { effectsDialog, paintLinks, platformLinks, progressBar, dockerDown, stateDot, toast, openMenu, originLink, catalogNeed,
   actionButton, paintActions, planRows, accepted, itemLink, openButton, noteHtml, licenseForm, starButton, toggleStar, pluginWords,
-  GAP, applyBadge, TURNS, fileButtons } from "../components/ui.js";
+  GAP, applyBadge, TURNS, fileButtons, paintBusy } from "../components/ui.js";
 import { runJob, busy, showOutput, cancelJob, jobTitle } from "../activity/jobs.js";
 import { openFile, openSettings } from "../dialogs/editor.js";
 import { share, home } from "../dialogs/create.js";
@@ -31,6 +31,8 @@ let checks = null;   // what starting it takes; null while it is read
 // What its Start says before it runs, as the checks read it (their `dialog`, null when it does no more than the
 // playground): what installing its plugins restarts too. Undefined while they are read.
 let said;
+let savedStates = [], savedFor = null, savedProblem = "";
+let savedAsked = 0;   // only the newest read of the checkpoint list may replace it
 let settled;         // the finished job the checks were read after; undefined until they are read
 let asked = 0;       // the last read of the checks: only its answer is kept
 let timer = null;    // ticks the seconds of the running job while the page is on screen
@@ -53,6 +55,68 @@ function turn(href) {
 const requiredPlugins = (item) => Object.values(item.requires.plugins || {}).flat();
 // What its seed created in Gravitee, as a person counts it: "3 APIs", "1 Application"
 export const seeded = (item) => item.created.map((c) => `${c.count} ${c.count === 1 ? c.what.replace(/ies$/, "y").replace(/s$/, "") : c.what}`);
+
+// --- Saved states -----------------------------------------------------------------------
+
+// Reads again after a job or a visit. An older answer must not replace a newer list for the same playground.
+async function loadSavedStates() {
+  const pid = shown, request = ++savedAsked;
+  if (!pid) return;
+  try {
+    const result = await api(`/api/playgrounds/${pid}/saved-states`);
+    if (pid !== shown || request !== savedAsked) return;
+    savedStates = result.states || [];
+    savedProblem = "";
+  } catch (error) {
+    if (pid !== shown || request !== savedAsked) return;
+    savedProblem = error.message;
+  }
+  savedFor = pid;
+  const section = $("#pg-saved-states", root);
+  if (section) {
+    setHTML(section, savedStatesHtml());
+    paintBusy(section);
+  }
+}
+function savedStatesHtml() {
+  if (savedFor !== shown) return `<h3>Saved states</h3><div class="empty">${loading("Loading")}</div>`;
+  if (savedProblem) return `<h3>Saved states</h3><div class="empty" role="alert">${esc(savedProblem)}
+    <button class="btn" data-reload-states>Try again</button></div>`;
+  if (!savedStates.length) return '<h3>Saved states</h3><div class="empty">No saved states</div>';
+  const why = store.wait() || (store.state.job && !store.state.job.done ? "Wait for the running job" : "");
+  const off = lock({ enabled: !why, reason: why });
+  return `<h3>Saved states</h3><ul class="pg-list">${savedStates.map((s) => `<li class="pg-place">
+    <span class="pg-place-name" data-tip="${esc(s.name)}" data-tip-cut>${esc(s.name)}</span>
+    <span class="sub">${esc(new Date(s.created).toLocaleString())}, ${Math.round(s.size / 1048576)} MB</span>
+    <span class="row-icons"><button class="btn" ${off} data-busy data-restore-state="${esc(s.id)}" aria-label="${esc(`Restore ${s.name}`)}">Restore</button>
+    <button class="icon-btn" ${off} data-busy data-delete-state="${esc(s.id)}" aria-label="${esc(`Delete saved state ${s.name}`)}" data-tip="Delete saved state">${icon("trash")}</button></span>
+  </li>`).join("")}</ul>`;
+}
+async function restoreSavedState(item, id) {
+  const state = savedStates.find((s) => s.id === id);
+  if (!state) return;
+  const plan = await api(`/api/playgrounds/${item.id}/saved-states/${id}/plan`);
+  const chosen = await effectsDialog({ title: `Restore ${state.name}`, steps: planRows(plan),
+    options: [{ value: true, rows: [
+      { label: "Replaces", items: ["Only this playground's resources, consumer access and seed ownership record"], tone: "danger" }] }],
+    action: () => "Restore state", danger: () => true });
+  if (!chosen) return;
+  runJob(() => api(`/api/playgrounds/${item.id}/saved-states/${id}/restore`, { confirm: true, accept: accepted(plan) }),
+    { key: keyOf(item), verb: "restore" });
+}
+async function deleteSavedState(item, id) {
+  const state = savedStates.find((s) => s.id === id);
+  if (!state) return;
+  const chosen = await effectsDialog({ title: `Delete ${state.name}`,
+    options: [{ value: true, rows: [{ label: "Deletes", items: ["Only this saved checkpoint"], tone: "danger" }] }],
+    action: () => "Delete saved state", danger: () => true });
+  if (!chosen) return;
+  try {
+    const result = await api(`/api/playgrounds/${item.id}/saved-states/${id}/delete`, {});
+    await loadSavedStates();
+    if (result.image_cleanup_pending) toast("State deleted; Docker image cleanup is pending", true);
+  } catch (error) { toast(error.message, true); }
+}
 
 // --- Items of this machine and of catalogs ----------------------------------------------
 
@@ -578,7 +642,7 @@ function about(item) {
           <div><dt>Add-ons</dt><dd>${linked(item.addons, "addon") || "None"}</dd></div>
           ${originLink(item) ? `<div><dt>Catalog</dt><dd>${originLink(item)}</dd></div>` : ""}
           ${plugins ? `<div><dt>Plugins</dt><dd>${plugins}</dd></div>` : ""}
-        </dl>${deployed(item)}
+        </dl>${deployed(item)}<section id="pg-saved-states">${savedStatesHtml()}</section>
         <div class="pg-meta">
           ${item.duration ? `<span>About ${esc(item.duration)}</span>` : ""}
           ${item.source ? `<a class="text-link" href="${esc(item.source)}" target="_blank" rel="noopener">Source</a>` : ""}
@@ -655,6 +719,7 @@ function side(item) {
     <section id="pg-open"><h3>Open</h3><div class="links" id="pg-links"></div></section>
     ${accountsHtml(item)}
     <section id="pg-attention" hidden></section>
+    <section id="pg-saved-states">${savedStatesHtml()}</section>
     <section class="pg-side-services"><h3>Services</h3><ul class="pg-list" id="pg-services"></ul></section>`;
 }
 
@@ -769,6 +834,7 @@ function render(state) {
   if (settled === undefined || (ended && ended !== settled)) {
     settled = ended;
     loadChecks();
+    loadSavedStates();
   } else if (read !== chosenId(item)) {
     checks = null;
     loadChecks();
@@ -803,7 +869,10 @@ function keepOrDelete(item, shown) {
   const rows = (word, tone) => (remote ? found.map((r) => ({ label: word, items: [at(r)], tone })) : [{ label: word, items: found[0].what, tone }]);
   return { steps: planRows({ ...shown, keeps: (shown.keeps || []).filter((row) => row.kind !== "data") }),
     options: [{ value: false, label: "Keep what it created", rows: remote ? rows("Stays") : [] },
-      { value: true, label: "Delete what it created", disabled: !!why, reason: why, rows: rows("Deletes", "danger") }] };
+      { value: true, label: "Delete what it created", disabled: !!why, reason: why, rows: rows("Deletes", "danger") },
+      { value: "save", label: "Save state and delete what it created",
+        disabled: !!why || remote, reason: why || (remote ? "Only supported on This machine" : ""),
+        rows: [{ label: "Saves", items: ["Only this playground's resources and consumer access"] }, ...rows("Deletes", "danger")] }] };
 }
 
 export async function stopPlayground(item) {
@@ -811,11 +880,11 @@ export async function stopPlayground(item) {
   const choice = keepOrDelete(item, plan);
   const deletes = await effectsDialog({
     title: `${label} ${item.name}`, steps: choice?.steps || [], options: choice?.options || [{ value: false, label, rows: planRows(plan) }],
-    action: (chosen) => (chosen ? `${label} and delete` : label),
-    danger: (chosen) => chosen,
+    action: (chosen) => (chosen === "save" ? `${label} and save state` : chosen ? `${label} and delete` : label),
+    danger: (chosen) => chosen !== false,
   });
   if (deletes === null) return;
-  runJob(() => api(`/api/playgrounds/${item.id}/stop`, { remove: deletes, accept: accepted(plan) }),
+  runJob(() => api(`/api/playgrounds/${item.id}/stop`, { remove: deletes !== false, ...(deletes === "save" ? { save: true } : {}), accept: accepted(plan) }),
     { key: keyOf(item), verb: "stop" });
 }
 
@@ -838,8 +907,8 @@ export async function confirmStart(item, label, dialog, { offer } = {}) {
   const choice = gone && keepOrDelete(gone, shown);
   if (!choice) return offer ? { accept: accepted(shown || {}), remove: false, ...more } : undefined;
   const deletes = await effectsDialog({ title: `${label} ${item.name}`, steps: choice.steps, options: choice.options,
-    action: (chosen) => (chosen ? `${label} and delete` : label), danger: (chosen) => chosen });
-  return deletes === null ? null : { accept: accepted(shown), remove: deletes, ...more };
+    action: (chosen) => (chosen === "save" ? `${label} and save state` : chosen ? `${label} and delete` : label), danger: (chosen) => chosen !== false });
+  return deletes === null ? null : { accept: accepted(shown), remove: deletes !== false, ...(deletes === "save" ? { save: true } : {}), ...more };
 }
 
 // Re-seed, or Deploy: the same job on a remote place, which holds nothing yet for a Deploy
@@ -933,6 +1002,11 @@ export const playgroundPage = {
       if (where) return choosePlace(item, where);
       const fix = on("[data-fix]");
       if (fix) return answer(item, fix.dataset.fix);
+      if (on("[data-reload-states]")) return loadSavedStates();
+      const restoreState = on("[data-restore-state]");
+      if (restoreState) return restoreSavedState(item, restoreState.dataset.restoreState);
+      const deleteState = on("[data-delete-state]");
+      if (deleteState) return deleteSavedState(item, deleteState.dataset.deleteState);
       const drop = on("[data-delete-place]");
       if (drop && !drop.disabled) return deletePlace(item, drop.dataset.deletePlace);
       // Its own settings, or those of an add-on that a line of the checks names
@@ -953,7 +1027,7 @@ export const playgroundPage = {
   },
 
   show([id, page]) {
-    if (id !== shown) checks = null;
+    if (id !== shown) { checks = null; savedFor = null; savedStates = []; savedProblem = ""; }
     // Read again, what the checks say may have changed since the last visit; not for another page of the guide
     if (!(stepping && id === shown)) settled = undefined;
     stepping = false;

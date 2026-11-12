@@ -138,6 +138,6 @@ async function startHere(item, dialog) {
   if (chosen === undefined) return runAction(item, { ...item.action, dialog });
   if (chosen === null) return;
   runJob(() => api(`/api/playgrounds/${item.id}/start`, { accept: chosen.accept, ...(chosen.remove ? { remove: true } : {}),
-    ...(chosen.switch ? { switch: true } : {}) }),
+    ...(chosen.switch ? { switch: true } : {}), ...(chosen.save ? { save: true } : {}) }),
     { key: `playground:${item.id}`, verb: "start" });
 }

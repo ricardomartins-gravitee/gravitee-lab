@@ -66,3 +66,17 @@ listed, with their defaults, in [the seed's settings](../docs/playgrounds.md#set
 
 The module contract, what the Lab UI reads from a run, the behavior to keep and how to run the tests are in
 [AGENTS.md](AGENTS.md).
+
+## Playground saved states
+
+The Lab UI runs `python -m lab_seeder.checkpoints save|check|restore /checkpoint/resources.json` in the playground's
+seed service, with the current seeder source mounted read-only. The adapter uses that service's endpoints and
+credentials, its own `/state/created.json`, and a private transaction folder. It never runs the seed or reads a shared
+database volume. `check` validates ownership and conflicts without changing resources; restore keeps only this
+playground's previous resources for rollback. See [Saved playground states](../docs/saved-playground-states.md) for
+supported resources and recovery files. `consumer_states.py` follows subscriptions to the recorded APIs, including
+consumer apps made in the Developer Portal. It restores private application settings and memberships, subscription
+status, configuration and metadata, and saved key values and access. Shared applications stay read-only; keys that
+also grant access outside the playground refuse restoration. The adapter keeps APIs stopped until consumer access
+is reconciled. Recreated subscriptions use the normal Portal API to stay editable in the Console, and their new ids
+are tracked in `.state/saved-state-subscriptions.json`. The adapter never adds manual consumer apps to the seed’s permanent ownership record.
