@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from .. import paths, products
 from ..docker import compose, images
 from ..docker.jobs import JOBS, JobFailed
-from ..library import layers, model, plugins, runtime_settings
+from ..library import layers, model, plugins, runtime_settings, tested
 from . import standalone
 
 FOLDER = ".lab/runtimes"
@@ -298,6 +298,16 @@ def prepare(pid, rebuild=False):
                               for key, service in config["services"].items()},
                  "plugins": {product: {**copy.deepcopy(gathered["found"]["products"][product]), "names": names}
                              for product, names in (gathered["unit"].get("requires", {}).get("plugins") or {}).items()}}
+        versions, judged = {}, {}
+        for variable in tested.variables(gathered["unit"]):
+            saved = layers.saved_setting(gathered["found"], variable)
+            if saved:
+                versions[variable] = saved[0]
+                if not variable.endswith("_REGISTRY"):
+                    service_name = layers.service_of(gathered["found"], variable)[0]
+                    if service_name in value["services"]:
+                        judged[variable] = service_name
+        value["tested"] = {"versions": versions, "services": judged}
         # Compose config already escapes literal dollars for a second read.
         _write(root / "compose.json", config)
         _write(root / "runtime.json", value)
@@ -382,10 +392,18 @@ def start(pid, rebuild=False):
             job.exec(command(pid, "up", "-d", "--no-deps",
                              *(["--build", "--force-recreate"] if rebuild else ["--no-recreate"]), *lasting))
         _wait(pid, job)
+        _tested(pid, value)
         value["initialized"] = True
         _write(folder(pid) / "runtime.json", value)
     return JOBS.start("Start independent playground", [run], key=f"playground:{pid}", verb="start",
                       changes={"start": [["playground", pid]]})
+
+
+def _tested(pid, value):
+    proof = value["tested"]
+    identities = {variable: compose.image_key({"image": value["services"][key]["image"],
+                  "container": f"{value['project']}-{key}-1"}) for variable, key in proof["services"].items()}
+    tested.remember(pid, proof["versions"], identities)
 
 
 def stop(pid, remove=False):
@@ -410,7 +428,8 @@ def reseed(pid):
     value = read(pid)
     if not value or not value["seed"] or not describe(pid)["running"]:
         raise ValueError("Start this independent playground before re-seeding")
-    return JOBS.start("Re-seed independent playground", [command(pid, "run", "--rm", "--no-deps", value["seed"])],
+    return JOBS.start("Re-seed independent playground", [command(pid, "run", "--rm", "--no-deps", value["seed"]),
+                      lambda job: _tested(pid, value)],
                       key=f"playground:{pid}", verb="reseed")
 
 
