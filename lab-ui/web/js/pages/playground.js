@@ -8,7 +8,8 @@ import { effectsDialog, paintLinks, platformLinks, progressBar, dockerDown, stat
   actionButton, paintActions, planRows, accepted, itemLink, openButton, noteHtml, licenseForm, starButton, toggleStar, pluginWords,
   GAP, applyBadge, TURNS, fileButtons } from "../components/ui.js";
 import { runJob, busy, showOutput, cancelJob, jobTitle } from "../activity/jobs.js";
-import { runtimeEntry, rebuildRuntimeEntry, independentAction } from "../dialogs/runtimes.js";
+import { createRuntimeEntry, rebuildRuntimeEntry, independentAction } from "../dialogs/runtimes.js";
+import { runtimePanel } from "../components/runtimes.js";
 import { openFile, openSettings } from "../dialogs/editor.js";
 import { share, home } from "../dialogs/create.js";
 import { addCatalog, tryAgain } from "../dialogs/catalog.js";
@@ -194,7 +195,7 @@ const copyToPersonal = (x) => planned(x, "copy", `/api/${x.kind}s/${x.id}/copy`,
 
 // The menu of a playground's head: Export when it can be, Export for Docker Compose, Move to Personal for an imported one, Copy to Personal for one of a catalog,
 // Share and Delete for one of this machine
-const menuOf = (x) => [runtimeEntry(x), x.runtime?.mode === "independent" && rebuildRuntimeEntry(x), exportable(x) && exportEntry(x), x.kind === "playground" && standaloneEntry(x), movable(x) && moveEntry(x), copyable(x) && copyEntry(x), x.personal && shareEntry(x),
+const menuOf = (x) => x.runtime?.parent ? [rebuildRuntimeEntry(x)] : [createRuntimeEntry(x), x.runtime?.mode === "independent" && rebuildRuntimeEntry(x), exportable(x) && exportEntry(x), x.kind === "playground" && standaloneEntry(x), movable(x) && moveEntry(x), copyable(x) && copyEntry(x), x.personal && shareEntry(x),
   ...(x.personal ? [{ separator: true }, deleteEntry(x)] : [])].filter(Boolean);
 
 // A file the server made, as base64, saved where the browser saves downloads
@@ -311,7 +312,7 @@ function seedButton(item) {
 // platforms, each with what it lacks. A place that lacks something can be chosen, its Before you start offers the way out; one
 // the playground cannot go to, and a platform that cannot be used, are options that cannot be chosen, each with its reason.
 function picker(item) {
-  if (!registered()) return "";
+  if (!registered() || item.runtime?.parent) return "";
   const held = holding(item), text = `Deploy to ${chosenPlace(item)?.name || THIS_MACHINE.name}`;
   return `<button class="combo-btn" data-place data-busy ${held ? 'aria-disabled="true" data-why="Loading"' : `data-tip="${esc(text)}"`} aria-haspopup="dialog"
     ><span class="value">${held ? loading("Loading") : esc(text)}</span>${icon("chevron")}</button>`;
@@ -761,9 +762,20 @@ function missing(state) {
   setHTML($("#pg-view", root), `<div class="empty">${loading("Loading")}</div>`);
 }
 
+let runtimeList = null, runtimeParent = null;
 function render(state) {
   const item = store.item("playground", shown);
   if (!item) return missing(state);
+  const parent = item.runtime?.parent || item.id;
+  if (runtimeParent !== parent) {
+    runtimeList?.hide();
+    runtimeParent = parent;
+    const holder = $("#pg-runtimes", root);
+    holder.innerHTML = "<div></div>";   // A route owns its listeners; leaving it retires the old panel.
+    runtimeList = runtimePanel(holder.firstElementChild, parent);
+    runtimeList.show();
+  }
+  runtimeList.render(state);
   // The checks are read when the page opens, then after each job: it may have changed what they say. And for the place
   // the picker is on, whichever place that turns out to be once the places are read.
   const ended = state.job?.done ? state.job.id : null;
@@ -776,9 +788,11 @@ function render(state) {
   }
   const job = shownJob(item, state), live = living(item, state);
   setHTML($("#pg-title", root), esc(item.name));
-  setHTML($("#pg-star", root), starButton(item));
+  setHTML($("#pg-star", root), item.runtime?.parent
+    ? `<a class="text-link" href="#/playgrounds/${esc(item.runtime.parent)}">${esc(item.runtime.parent_name || "Source playground")}</a> <span class="pill">Independent</span>`
+    : `${item.runtime?.mode === "shared" ? '<span class="pill">Shared</span> ' : ""}${starButton(item)}`);
   // Its file is within reach in every state, as on its row in the list
-  setHTML($("#pg-actions", root), `${live ? actions(item, job) : picker(item)}<span class="row-icons">${fileButtons(item, false)}${
+  setHTML($("#pg-actions", root), `${live ? actions(item, job) : picker(item)}<span class="row-icons">${item.runtime?.parent ? "" : fileButtons(item, false)}${
     menuOf(item).length ? `<button class="icon-btn" data-more data-tip="More" aria-label="${esc(`More for ${item.name}`)}" aria-haspopup="true">${icon("more")}</button>` : ""}</span>`);
   if (live) session(item, job, state);
   else details(item);
@@ -899,7 +913,8 @@ export const playgroundPage = {
         <div class="page-title pg-heading"><nav class="crumbs" aria-label="Breadcrumb"><a class="crumb" href="#/playgrounds">Playgrounds</a><span class="crumb-sep" aria-hidden="true">/</span></nav><h1 id="pg-title"></h1><span id="pg-star"></span></div>
         <div class="page-actions" id="pg-actions"></div>
       </div>
-      <div id="pg-view"><div class="empty">${loading("Loading")}</div></div>`;
+      <div id="pg-view"><div class="empty">${loading("Loading")}</div></div>
+      <div id="pg-runtimes"></div>`;
     root.addEventListener("click", (e) => {
       const on = (selector) => e.target.closest(selector), item = store.item("playground", shown);
       // The license, from its note or its line of the checks: the form that takes a new one
@@ -968,6 +983,8 @@ export const playgroundPage = {
 
   // Another page of the guide hides then shows the page at once; any other address leaves it
   hide() {
+    runtimeList?.hide();
+    runtimeParent = null;
     clearInterval(timer);
     clearInterval(refresher);
     refresher = null;
