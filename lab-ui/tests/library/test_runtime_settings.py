@@ -14,9 +14,14 @@ class RuntimeSettings(Case):
     def test_existing_playgrounds_stay_shared_and_new_ones_take_the_default_once(self):
         self.assertEqual(runtime_settings.mode("local/old"), "shared")
         runtime_settings.initialize(["local/old"])
-        self.assertEqual(runtime_settings.read()["default"], "independent")
+        self.assertEqual(runtime_settings.read()["default"], "shared")
         self.assertEqual(runtime_settings.mode("local/old"), "shared")
+        self.assertEqual(runtime_settings.assign("local/new-shared"), "shared")
+        runtime_settings.save(default="independent")
         self.assertEqual(runtime_settings.assign("local/new"), "independent")
+        runtime_settings.initialize(["local/old", "local/new"])
+        self.assertEqual(runtime_settings.read()["default"], "independent")
+        self.assertEqual(runtime_settings.mode("local/new-shared"), "shared")
         runtime_settings.save(default="shared")
         self.assertEqual(runtime_settings.mode("local/new"), "independent")
         self.assertEqual(runtime_settings.assign("local/another"), "shared")
@@ -25,6 +30,7 @@ class RuntimeSettings(Case):
 
     def test_overrides_are_local_and_applying_the_default_is_an_explicit_choice(self):
         runtime_settings.initialize(["local/old"])
+        runtime_settings.save(default="independent")
         runtime_settings.save(pid="local/old", selected="default")
         self.assertEqual(runtime_settings.mode("local/old"), "independent")
         runtime_settings.save(pid="local/old", selected="shared")

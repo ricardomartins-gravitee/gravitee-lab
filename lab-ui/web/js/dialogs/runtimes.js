@@ -6,7 +6,8 @@ import { runJob } from "../activity/jobs.js";
 export async function runtimeSettings(item = null) {
   try {
     const settings = await api("/api/playground-runtimes");
-    const current = item?.runtime?.mode || settings.default;
+    const current = item ? settings.playgrounds.find((playground) => playground.id === item.id)?.mode : settings.default;
+    if (!["shared", "independent"].includes(current)) throw new Error("Runtime choice could not be read; refresh and try again");
     const modes = [current, ...["independent", "shared"].filter((mode) => mode !== current)];
     const selected = await effectsDialog({ title: item ? `Runtime for ${item.name}` : "Default playground runtime",
       steps: [{ label: "Keeps", items: ["Existing data and catalog links"], note: true }],
