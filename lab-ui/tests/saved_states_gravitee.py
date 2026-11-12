@@ -128,6 +128,9 @@ class GraviteeStates(unittest.TestCase):
         definition["api"]["listeners"][0]["paths"][0]["path"] = "/state-" + letter + "/"
         definition["api"]["endpointGroups"][0]["sharedConfiguration"] = {}
         definition["api"]["endpointGroups"][0]["endpoints"][0]["configuration"]["target"] = "${STATE_BACKEND_URL}"
+        if self._testMethodName == "test_consumer_states_restore_only_this_playgrounds_access":
+            definition["api"]["visibility"] = "PUBLIC"
+            definition["plans"][0].update(name="API key", security={"type": "API_KEY"}, validation="MANUAL")
         (folder / "seed/apim/apis/api.json").write_text(json.dumps(definition))
         if letter == "a":
             portal = folder / "seed/apim/portal"
@@ -194,12 +197,14 @@ class GraviteeStates(unittest.TestCase):
             subprocess.run(["docker", "image", "rm", self.seed_image], cwd=self.root, env=self.env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
 
-    def request(self, url, method="GET", body=None, auth=False):
+    def request(self, url, method="GET", body=None, auth=False, extra_headers=None):
         headers = {"Content-Type": "application/json"}
         if url.startswith(getattr(self, "lab", "http://invalid")):
             headers["X-Gravitee-Lab-UI"] = "1"
+        headers.update(extra_headers or {})
         if auth:
-            headers["Authorization"] = "Basic " + base64.b64encode(b"admin:admin").decode()
+            credentials = b"user:password" if auth == "developer" else b"admin:admin"
+            headers["Authorization"] = "Basic " + base64.b64encode(credentials).decode()
         request = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None,
                                          headers=headers, method=method)
         try:
@@ -379,6 +384,181 @@ class GraviteeStates(unittest.TestCase):
         self.assertEqual([state["id"] for state in self.states()], [first])
         self.assert_serves("a", "edited")
         print("Verified real Gravitee API save/switch/restore/stop/resave and checkpoint deletion", flush=True)
+
+
+    def consumer(self, path, method="GET", body=None, developer=False):
+        base = "/portal/environments/DEFAULT" if developer else "/management/organizations/DEFAULT/environments/DEFAULT"
+        return self.json(self.endpoint("apim-management-api", 8083) + base + path, method, body,
+                         auth="developer" if developer else True)
+
+    def consumer_app(self, name):
+        return self.consumer("/applications", "POST", {"name": name, "description": "Saved consumer settings",
+                             "settings": {"app": {"type": "SIMPLE"}}}, developer=True)
+
+    def consumer_sub(self, letter, app, approve=True):
+        api = self.api(letter)["id"]
+        plan = self.management("/apis/" + api + "/plans")["data"][0]["id"]
+        sub = self.consumer("/subscriptions", "POST", {"application": app["id"], "plan": plan,
+                            "request": "Consumer requests access"}, developer=True)
+        row = {"api": api, "id": sub["id"]}
+        if approve:
+            self.sub_action(row, "_accept")
+        return row
+
+    def sub_path(self, row):
+        return "/apis/" + row["api"] + "/subscriptions/" + row["id"]
+
+    def sub_action(self, row, action, body=None):
+        return self.management(self.sub_path(row) + "/" + action, "POST", body or {})
+
+    def consumer_keys(self, row):
+        result, page = [], 1
+        while True:
+            rows = self.management(self.sub_path(row) + "/api-keys?perPage=100&page=" + str(page))["data"]
+            result.extend(rows)
+            if len(rows) < 100:
+                return result
+            page += 1
+
+    def assert_key_access(self, letter, value, allowed):
+        def correct():
+            status, text = self.request(self.endpoint("apim-gateway", 8082) + "/state-" + letter + "/",
+                                        extra_headers={"X-Gravitee-Api-Key": value})
+            return (status == 200 and text == letter + ":seed") if allowed else status in (401, 403)
+        self.until(correct, "restored consumer access" if allowed else "revoked consumer access", timeout=120)
+
+    def restore_consumers(self, sid):
+        plan = self.json(self.lab + "/api/playgrounds/@linked/a/saved-states/" + sid + "/plan")
+        accept = [row["kind"] + ":" + row["id"] for part in ("stops", "turns_off") for row in plan.get(part, [])]
+        self.job("/api/playgrounds/@linked/a/saved-states/" + sid + "/restore", {"confirm": True, "accept": accept})
+        self.assertTrue((self.root / ".lab/catalogs/linked").is_symlink())
+        self.assertTrue((self.linked / "playgrounds/a").is_symlink())
+        self.assertEqual((self.linked / "playgrounds/a/.state/created.json").read_bytes(), self.consumer_ownership[sid])
+
+    def save_consumers(self):
+        before = {state["id"] for state in self.states()}
+        ownership = (self.linked / "playgrounds/a/.state/created.json").read_bytes()
+        self.job("/api/playgrounds/@linked/a/stop", {"remove": True, "save": True})
+        state = next(state for state in self.states() if state["id"] not in before)
+        if not hasattr(self, "consumer_ownership"):
+            self.consumer_ownership = {}
+        self.consumer_ownership[state["id"]] = ownership
+        return state["id"]
+
+    def assert_saved_keys(self, row, saved):
+        actual = {value["key"]: value for value in self.consumer_keys(row)}
+        for value in saved:
+            self.assertIn(value["key"], actual, "A saved credential was lost")
+            for field in ("revoked", "expireAt"):
+                self.assertTrue(actual[value["key"]].get(field) == value.get(field), "Credential " + field + " changed")
+        wanted = {value["key"] for value in saved}
+        self.assertTrue(all(value.get("revoked") or value.get("expired") for key, value in actual.items() if key not in wanted),
+                        "A credential issued after the checkpoint is still active")
+
+    def test_consumer_states_restore_only_this_playgrounds_access(self):
+        print("Testing the actual Developer Portal application and approval workflow", flush=True)
+        self.job("/api/playgrounds/@linked/a/start", {})
+        self.ownership = (self.linked / "playgrounds/a/.state/created.json").read_bytes()
+        app = self.consumer_app("Consumer App A")
+        self.consumer("/applications/" + app["id"] + "/metadata", "POST",
+                      {"key": "team", "name": "Team", "value": "Saved team", "format": "STRING"})
+        saved_metadata = self.consumer("/applications/" + app["id"] + "/metadata")
+        sub = self.consumer_sub("a", app, approve=False)
+        self.assertEqual(self.management(self.sub_path(sub))["status"], "PENDING")
+        pending = self.save_consumers()
+        self.restore_consumers(pending)
+        self.assertEqual(self.management(self.sub_path(sub))["status"], "PENDING")
+        self.assertTrue(all(value["revoked"] or value.get("expired") for value in self.consumer_keys(sub)), "Pending access received an active key")
+        self.sub_action(sub, "_accept")
+        active = next(value for value in self.consumer_keys(sub) if not value["revoked"])
+        self.management(self.sub_path(sub) + "/api-keys/" + active["id"], "PUT", {"expireAt": "2036-01-01T00:00:00Z"})
+        self.assert_key_access("a", active["key"], True)
+        shared = self.consumer_app("Shared consumer")
+        shared_a = self.consumer_sub("a", shared)
+        shared_key = next(value for value in self.consumer_keys(shared_a) if not value["revoked"])
+        self.job("/api/playgrounds/@linked/b/start", {"accept": ["playground:@linked/a"]})
+        other_app = self.consumer_app("Consumer App B")
+        other_sub = self.consumer_sub("b", other_app)
+        shared_b = self.consumer_sub("b", shared)
+        self.job("/api/playgrounds/@linked/a/start", {"accept": ["playground:@linked/b"]})
+        saved_keys = self.consumer_keys(sub)
+        accepted = self.save_consumers()
+        self.job("/api/playgrounds/@linked/b/start", {})
+        # These edits are newer than A's checkpoint and must remain exactly as they are.
+        for application in (other_app, shared):
+            self.consumer("/applications/" + application["id"], "PUT",
+                          {"name": application["name"], "description": "Keep B's newer settings",
+                           "settings": application["settings"]})
+        other_key = next(value for value in self.consumer_keys(other_sub) if not value["revoked"])
+        self.sub_action(other_sub, "api-keys/" + other_key["id"] + "/_revoke")
+        other_before = {application["id"]: self.consumer("/applications/" + application["id"])
+                        for application in (other_app, shared)}
+        subscriptions_before = {row["id"]: (self.management(self.sub_path(row)), self.consumer_keys(row))
+                                for row in (other_sub, shared_b)}
+        original_owner = self.consumer("/applications/" + app["id"])["owner"]["id"]
+        admin = self.json(self.endpoint("apim-management-api", 8083) + "/management/organizations/DEFAULT/user", auth=True)["id"]
+        self.consumer("/applications/" + app["id"] + "/members", "POST", {"id": admin, "role": "OWNER"})
+        self.consumer("/applications/" + app["id"] + "/members/transfer_ownership", "POST", {"id": admin, "poRole": "OWNER"})
+        self.consumer("/applications/" + app["id"] + "/metadata/team", "PUT",
+                      {"key": "team", "name": "Team", "value": "Later team", "format": "STRING"})
+        self.consumer("/applications/" + app["id"], "DELETE")
+        core = {service: self.command([*compose.COMPOSE, "ps", "-q", service])
+                for service in ("mongodb", "elasticsearch", "redis", "apim-management-api", "apim-gateway")}
+        print("Restoring deleted API, archived app, ownership, subscriptions and original credentials", flush=True)
+        self.restore_consumers(accepted)
+        self.assertEqual(self.consumer("/applications/" + app["id"])["owner"]["id"], original_owner)
+        self.assertEqual(self.consumer("/applications/" + app["id"])["description"], app["description"])
+        self.assertEqual(self.consumer("/applications/" + app["id"] + "/metadata"), saved_metadata)
+        self.assert_saved_keys(sub, saved_keys)
+        self.assert_key_access("a", active["key"], True)
+        self.assert_key_access("a", shared_key["key"], True)
+        for application in (other_app, shared):
+            self.assertEqual(self.consumer("/applications/" + application["id"]), other_before[application["id"]])
+        for row in (other_sub, shared_b):
+            actual = (self.management(self.sub_path(row)), self.consumer_keys(row))
+            self.assertTrue(actual == subscriptions_before[row["id"]], "Playground B's subscription or keys changed")
+        self.assertEqual(core, {service: self.command([*compose.COMPOSE, "ps", "-q", service]) for service in core})
+        # A restore must revoke credentials issued since the checkpoint, including normal renewal.
+        self.sub_action(sub, "api-keys/_renew")
+        newer = next(value for value in self.consumer_keys(sub) if value["key"] != active["key"] and not value["revoked"])
+        self.assert_key_access("a", newer["key"], True)
+        self.restore_consumers(accepted)
+        self.assert_saved_keys(sub, saved_keys)
+        self.assert_key_access("a", active["key"], True)
+        self.assert_key_access("a", newer["key"], False)
+        current = next(value for value in self.consumer_keys(sub) if value["key"] == active["key"])
+        self.sub_action(sub, "api-keys/" + current["id"] + "/_revoke")
+        revoked_keys = self.consumer_keys(sub)
+        revoked = self.save_consumers()
+        self.restore_consumers(revoked)
+        self.assert_saved_keys(sub, revoked_keys)
+        self.assert_key_access("a", active["key"], False)
+        self.restore_consumers(accepted)
+        self.assert_key_access("a", active["key"], True)
+        current = next(value for value in self.consumer_keys(sub) if value["key"] == active["key"])
+        self.management(self.sub_path(sub) + "/api-keys/" + current["id"], "PUT", {"expireAt": "2000-01-01T00:00:00Z"})
+        expired_keys = self.consumer_keys(sub)
+        expired = self.save_consumers()
+        self.restore_consumers(expired)
+        self.assert_saved_keys(sub, expired_keys)
+        self.assert_key_access("a", active["key"], False)
+        self.restore_consumers(accepted)
+        self.assert_key_access("a", active["key"], True)
+        # Other subscription states must survive real cleanup too, not just an in-place update.
+        for status, action in (("PAUSED", "_pause"), ("CLOSED", "_close"), ("REJECTED", "_reject")):
+            if status == "REJECTED":
+                self.consumer("/subscriptions/" + sub["id"], "PUT", {"configuration": None, "metadata": {}}, developer=True)
+            self.sub_action(sub, action, {"reason": "Saved subscription state"})
+            checkpoint = self.save_consumers()
+            self.restore_consumers(checkpoint)
+            self.assertEqual(self.management(self.sub_path(sub))["status"], status)
+            self.assert_key_access("a", active["key"], False)
+            self.restore_consumers(accepted)
+            self.assert_key_access("a", active["key"], True)
+        self.restore_consumers(pending)
+        self.assertEqual(self.management(self.sub_path(sub))["status"], "PENDING")
+        self.assert_key_access("a", active["key"], False)
+        print("Verified pending/accepted/paused/closed/rejected subscriptions, revocation, renewal, expiry and shared-app isolation", flush=True)
 
 
 if __name__ == "__main__":

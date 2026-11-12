@@ -54,6 +54,12 @@ class Checkpoints(Seed):
             self.entities[api["id"]] = api
             return 200, api
 
+        def lifecycle(call):
+            ident, operation = call.path.split("/apis/", 1)[1].split("/")
+            if operation in ("_start", "_stop"):
+                self.entities[ident]["state"] = "STARTED" if operation == "_start" else "STOPPED"
+            return 204
+
         self.answer({
             ("GET", V2 + "/apis"): lambda call: (200, {"data": copy.deepcopy(list(self.entities.values()))}),
             ("GET", re.compile(V2 + r"/apis/[^/]+")): entity,
@@ -65,7 +71,7 @@ class Checkpoints(Seed):
             ("GET", re.compile(V2 + r"/apis/[^/]+/subscriptions")): lambda call: (200, {"data": self.subscriptions}),
             ("POST", V2 + "/apis/_import/definition"): imported,
             ("PUT", re.compile(V2 + r"/apis/[^/]+/_import/definition")): imported,
-            ("POST", re.compile(V2 + r"/apis/[^/]+/(deployments|_start|_stop)")): 204,
+            ("POST", re.compile(V2 + r"/apis/[^/]+/(deployments|_start|_stop)")): lifecycle,
         }, created=[ROW])
 
     def save(self):
@@ -85,8 +91,8 @@ class Checkpoints(Seed):
         self.assertEqual(common.created(), [ROW])
         self.assertFalse((self.path.parent / "previous.json").exists())
         self.assertTrue(all("/apis/mine" in path for method, path in self.platform.changes()))
-        # Already started: no second start and no replacement, which would lose children.
-        self.assertFalse(self.platform.sent("POST", V2 + "/apis/mine/_start"))
+        # Restore stays offline until credentials are reconciled; no replacement loses children.
+        self.assertTrue(self.platform.sent("POST", V2 + "/apis/mine/_start"))
         self.assertFalse(self.platform.sent("DELETE", V1 + "/apis/mine"))
 
     def test_missing_owned_api_can_be_recreated_after_cleanup_without_modifying_others(self):
@@ -98,9 +104,9 @@ class Checkpoints(Seed):
         self.assertEqual(self.entities["other"], self.other)
         self.assertEqual(common.created(), [ROW])
 
-    def test_subscriptions_unsupported_products_shared_dependencies_and_pending_edits_refuse_before_writes(self):
+    def test_unsupported_products_shared_dependencies_and_pending_edits_refuse_before_writes(self):
         for change, pattern in (({"product": "am", "kind": "domain"}, "am:domain"),
-                                ({"kind": "application"}, "apim:application")):
+                                ({"kind": "group"}, "apim:group")):
             common.save_created([{**ROW, **change}])
             with self.subTest(change=change), self.assertRaisesRegex(SeedError, pattern):
                 checkpoints.run("save", self.path)
@@ -112,9 +118,6 @@ class Checkpoints(Seed):
             with self.subTest(value=value), self.assertRaisesRegex(SeedError, pattern):
                 checkpoints.run("save", self.path)
         self.entities["mine"] = copy.deepcopy(ENTITY)
-        self.subscriptions = [{"id": "someone-elses-subscription"}]
-        with self.assertRaisesRegex(SeedError, "subscriptions"):
-            checkpoints.run("save", self.path)
         self.assertEqual(self.platform.changes(), [])
         self.assertFalse(self.path.exists())
 
@@ -198,3 +201,52 @@ class Checkpoints(Seed):
         self.assertEqual(chown.call_args.args[1:], (1001, 1002))
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(json.loads(self.path.read_text()), {"ok": True})
+
+    def test_failed_consumer_write_restores_current_app_and_subscription_without_adopting_them(self):
+        application = {"id": "app", "name": "Consumer", "description": "Saved app", "status": "ACTIVE",
+                       "settings": {"app": {"type": "SIMPLE"}}}
+        subscription = {"id": "sub", "api": {"id": "mine"}, "plan": {"id": "plan-mine"},
+                        "application": {"id": "app"}, "status": "PENDING"}
+        self.subscriptions = [subscription]
+        fail = [False]
+
+        def update(call):
+            application.update(copy.deepcopy(call.json))
+            if fail[0]:
+                fail[0] = False
+                return 400, {"technicalCode": "injected.partial.write"}
+            return 200, copy.deepcopy(application)
+
+        self.platform.routes.update({
+            ("GET", V1 + "/applications/app"): lambda call: (200, copy.deepcopy(application)),
+            ("PUT", V1 + "/applications/app"): update,
+            ("GET", V1 + "/applications/app/subscriptions"): (200, {"data": [{"id": "sub", "api": "mine"}]}),
+            ("GET", V1 + "/applications/app/members"): (200, []),
+            ("GET", V1 + "/applications/app/metadata"): (200, []),
+            ("GET", V1 + "/applications/app/apikeys"): (200, []),
+            ("GET", V2 + "/apis/mine/subscriptions/sub"): lambda call: (200, copy.deepcopy(subscription)),
+            ("GET", V2 + "/apis/mine/subscriptions/sub/api-keys"): (200, {"data": []}),
+            ("PUT", V2 + "/apis/mine/subscriptions/spec/_import"): (200, {}),
+            ("PUT", V2 + "/apis/mine/subscriptions/sub"): (200, {}),
+            ("PUT", "/portal/environments/DEFAULT/subscriptions/sub"): (200, {}),
+        })
+        self.save()
+        application["description"] = "Newer app settings before restore"
+        fail[0] = True
+        with self.assertRaises(common.HttpError):
+            checkpoints.run("restore", self.path)
+        self.assertEqual(application["description"], "Newer app settings before restore")
+        self.assertEqual(subscription["status"], "PENDING")
+        self.assertEqual(self.entities["other"], self.other)
+        self.assertEqual(common.created(), [ROW])
+        self.assertFalse((self.path.parent / "previous.json").exists())
+
+        # Old resource-only states have no consumer snapshot; they must preserve today's consumers.
+        legacy = json.loads(self.path.read_text())
+        legacy["schema"] = 1
+        legacy.pop("consumers")
+        legacy.pop("ownership")
+        self.path.write_text(json.dumps(legacy))
+        checkpoints.run("restore", self.path)
+        self.assertEqual(application["description"], "Newer app settings before restore")
+        self.assertEqual(common.created(), [ROW])

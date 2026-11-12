@@ -74,4 +74,8 @@ seed service, with the current seeder source mounted read-only. The adapter uses
 credentials, its own `/state/created.json`, and a private transaction folder. It never runs the seed or reads a shared
 database volume. `check` validates ownership and conflicts without changing resources; restore keeps only this
 playground's previous resources for rollback. See [Saved playground states](../docs/saved-playground-states.md) for
-supported resources and recovery files.
+supported resources and recovery files. `consumer_states.py` follows subscriptions to the recorded APIs, including
+consumer apps made in the Developer Portal. It restores private application settings and memberships, subscription
+status, configuration and metadata, and saved key values and access. Shared applications stay read-only; keys that
+also grant access outside the playground refuse restoration. The adapter keeps APIs stopped until consumer access
+is reconciled, and never adds manual consumer apps to the seed’s permanent ownership record.

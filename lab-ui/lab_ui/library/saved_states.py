@@ -251,7 +251,7 @@ def _verified(pid, sid):
 def restore(project, pid, sid, confirmed=False, before=()):
     _playground(project, pid)
     if not confirmed:
-        raise ValueError("Confirm replacing this playground's recorded resources before restoring")
+        raise ValueError("Confirm replacing this playground's resources and consumer access before restoring")
     folder, data = _verified(pid, sid)
 
     def check(job):

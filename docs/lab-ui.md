@@ -521,7 +521,7 @@ on.
 - **Keep what it created**: the apps stop, and so do the add-ons only it uses. What it created in Gravitee stays.
 - **Delete what it created**: the seed first deletes what it recorded, through Gravitee's APIs, which must run. If that
   fails, nothing else changes. It is offered once the seed has recorded something.
-- **Save state and delete what it created**: exports only this playground's recorded resources, then runs the same
+- **Save state and delete what it created**: exports only this playground's resources and consumer access, then runs the same
   seeder cleanup as Delete. A failed save never starts deletion. Unsupported resource kinds and Cloud deployments
   refuse saving.
 

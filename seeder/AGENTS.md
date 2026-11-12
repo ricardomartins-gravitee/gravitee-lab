@@ -86,7 +86,9 @@ one-shot service writes it. [The folder's layout](../docs/playgrounds.md#environ
 ## Saved states
 
 `checkpoints.py` owns the playground-only management API adapters; `portal_states.py` handles owned portal objects and
-navigation. They use the same endpoints, HTTP client and locked ownership records as the seed. A save never changes
+navigation, and `consumer_states.py` handles applications, subscriptions and keys. Consumer scope follows every
+subscription link, including closed ones: shared apps are read-only references, and keys shared outside the playground
+refuse restoration. Manually created consumers are not adopted into permanent seed ownership. They use the same endpoints, HTTP client and locked ownership records as the seed. A save never changes
 platform resources. Restore validates every supported resource and conflict before the first write and keeps only
 the selected playground's resources for rollback. Unsupported kinds refuse before cleanup. There is no shared
 database or environment-settings fallback; shared theme activation stays as it is.

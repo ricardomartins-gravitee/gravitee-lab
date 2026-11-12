@@ -98,7 +98,7 @@ async function restoreSavedState(item, id) {
   const plan = await api(`/api/playgrounds/${item.id}/saved-states/${id}/plan`);
   const chosen = await effectsDialog({ title: `Restore ${state.name}`, steps: planRows(plan),
     options: [{ value: true, rows: [
-      { label: "Replaces", items: ["Only this playground's recorded resources and seed ownership record"], tone: "danger" }] }],
+      { label: "Replaces", items: ["Only this playground's resources, consumer access and seed ownership record"], tone: "danger" }] }],
     action: () => "Restore state", danger: () => true });
   if (!chosen) return;
   runJob(() => api(`/api/playgrounds/${item.id}/saved-states/${id}/restore`, { confirm: true, accept: accepted(plan) }),
@@ -872,7 +872,7 @@ function keepOrDelete(item, shown) {
       { value: true, label: "Delete what it created", disabled: !!why, reason: why, rows: rows("Deletes", "danger") },
       { value: "save", label: "Save state and delete what it created",
         disabled: !!why || remote, reason: why || (remote ? "Only supported on This machine" : ""),
-        rows: [{ label: "Saves", items: ["Only this playground's recorded resources"] }, ...rows("Deletes", "danger")] }] };
+        rows: [{ label: "Saves", items: ["Only this playground's resources and consumer access"] }, ...rows("Deletes", "danger")] }] };
 }
 
 export async function stopPlayground(item) {

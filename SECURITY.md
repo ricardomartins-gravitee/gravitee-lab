@@ -34,7 +34,7 @@ Only the latest version, the current `main` branch, is supported, and fixes land
 
 ## Saved playground states
 
-Saved states under `.lab/saved-states/` contain the selected playground's exported resources and ownership records.
+Saved states under `.lab/saved-states/` contain the selected playground's exported resources, consumer API keys and ownership records.
 API definitions can contain credentials. Directories are private, but files are not encrypted: protect copies as you
 would live credentials, and never attach them to an issue, pull request or log. Deleting a saved state does not revoke
 credentials copied into it. Restore validates ownership and collisions, then changes only the selected playground's
