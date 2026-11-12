@@ -88,6 +88,9 @@ class LabUI(Case):
     """The handler listening on a free port."""
 
     def setUp(self):
+        # These cases exercise the shared handler. Private runtimes have their own fixtures.
+        self.patch(api.runtimes.runtime_settings, "read", return_value={"schema": 1, "default": "shared", "playgrounds": {}})
+        self.patch(api.runtimes.independent, "read", return_value=None)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), api.Handler)
         self.server.daemon_threads = True
         threading.Thread(target=self.server.serve_forever, args=(0.01,), daemon=True).start()   # stops at once
@@ -1961,6 +1964,7 @@ class Startup(Case):
 
     def setUp(self):
         self.folder(paths)
+        self.patch(api.runtimes.runtime_settings, "initialize")
         self.events = []
         events = self.events
 

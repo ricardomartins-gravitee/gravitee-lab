@@ -33,6 +33,9 @@ Run `make help` to list them. A target that needs a tool the machine lacks stops
 
 Notes:
 
+- These commands manage the shared Compose project. Use the playground pages to manage
+  [independent runtimes](lab-ui.md#independent-playgrounds), whose containers and data they leave untouched.
+
 - `make ui` and `make all` run `make init` first. Run it again whenever you like: it creates only what is missing.
 - `make stop` and `make down` go by the project name, so they also reach the containers of add-ons you turned off that
   still run. What `make stop` stops stays stopped when Docker restarts.

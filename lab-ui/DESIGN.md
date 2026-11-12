@@ -661,6 +661,25 @@ and "Unreachable", after the server's own note. They are drawn by the page from 
 choice lives in this browser, and each leads to the form or the row that fixes it. Nothing is said for This machine, a
 place gone with its platform, or a place not read yet.
 
+### Independent runtimes
+
+Runtime settings belong to the machine, not the catalog. Existing playgrounds are pinned Shared on first upgrade;
+new assignments take the default, initially Independent. A playground must be off before changing its runtime.
+
+`server/runtimes.py` overlays private runtime state and stable, scoped service keys on the shared state. Its actions
+resolve those keys back to a validated runtime before invoking Compose. The compiler in `catalogs/independent.py`
+reuses the standalone dependency selector; every command supplies both a private Compose file and project name.
+Configuration, ports and copied inputs are pinned until Rebuild. Writable binds, volume and network names, built image
+tags, persona cookies and management API relays are private. Read-only text inputs and console URLs use the assigned
+loopback ports. Existing catalog and worktree links are read, never replaced.
+
+Start initializes once, then resumes without replaying one-shots. Stop retains storage. Rebuild refreshes configuration
+and immutable inputs while retaining writable storage and port assignments; Re-seed is the explicit seed replay.
+Active runtime metadata holds dependent catalogs against replacement or removal, including after a partial start.
+Platform controls remain scoped to the shared project. The private runtime group exposes its own services in Containers;
+resource use includes active private projects. An unreadable private record is a problem of that playground and holds
+its actions, rather than hiding the whole Lab.
+
 ### Playgrounds
 
 - A playground's first Start sets it up, in phases: Plugins, Apps and services ("Platform, apps and services" when the
