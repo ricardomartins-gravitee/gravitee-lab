@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from lab_ui import paths
+from lab_ui.library import runtime_settings
 from lab_ui.catalogs import independent, standalone
 from lab_ui.docker import compose
 from tests import Case
@@ -88,6 +89,22 @@ class Independent(Case):
             self.assertEqual((source / "data/value.txt").read_text(), "initial " + pid[-1])
             self.assertEqual((source / ".state/created.json").read_text(), '[{"id":"shared-original"}]')
             self.assertEqual((independent.folder(pid) / "compose.json").stat().st_mode & 0o777, 0o600)
+
+    def test_two_named_instances_of_the_same_source_keep_separate_mutable_data_and_ports(self):
+        one = runtime_settings.create("local/a", "Demo")["id"]
+        two = runtime_settings.create("local/a", "Sandbox")["id"]
+        a, b = independent.prepare(one), independent.prepare(two)
+        self.assertNotEqual(a["project"], b["project"])
+        self.assertFalse(set(a["ports"].values()) & set(b["ports"].values()))
+        source = self.inputs["local/a"][1]["folder"]
+        left = Path(a["binds"][str(source / "data")])
+        right = Path(b["binds"][str(source / "data")])
+        (left / "value.txt").write_text("Only Demo")
+        self.assertEqual((right / "value.txt").read_text(), "initial a")
+        self.assertEqual((source / "data/value.txt").read_text(), "initial a")
+        self.assertEqual(independent.prepare(one, rebuild=True)["ports"], a["ports"])
+        self.assertEqual((left / "value.txt").read_text(), "Only Demo")
+        self.assertEqual(runtime_settings.mode("local/a"), "shared")
 
     def test_prepare_and_rebuild_preserve_runtime_storage_and_port_assignments(self):
         value = self.prepare()

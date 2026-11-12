@@ -10,11 +10,12 @@ import json
 import stat
 
 from .. import paths
+from ..library import runtime_settings
 from ..docker import compose, storage
 from ..docker.jobs import JOBS
 from . import independent
 
-OPERATIONS = ("containers", "data")
+OPERATIONS = ("containers", "data", "delete")
 RUNNING = ("running", "paused", "restarting", "removing")
 
 
@@ -22,7 +23,7 @@ def known():
     found, problems = [], []
     for file in sorted((paths.ROOT / independent.FOLDER).glob("*/runtime.json")):
         try:
-            pid = json.loads(file.read_text(encoding="utf-8")).get("id")
+            pid = runtime_settings.alias(json.loads(file.read_text(encoding="utf-8")).get("id"))
             if not paths.is_id(pid) or file.parent != independent.folder(pid):
                 raise ValueError("The runtime record does not match its directory")
             found.append((pid, independent.read(pid)))
@@ -116,6 +117,15 @@ def inventory(pid):
 def preview(pid, operation):
     if operation not in OPERATIONS:
         raise ValueError("Choose Remove containers or Delete runtime data")
+    registered = runtime_settings.instances().get(pid)
+    if operation == "delete" and not registered:
+        raise paths.NotFound("No such runtime definition")
+    if operation == "delete" and registered and not independent.read(pid):
+        if independent.folder(pid).exists() or any(storage.resources(independent.name(pid)).values()):
+            raise ValueError("An incomplete runtime has private resources; cleanup is held")
+        return {"id": pid, "operation": operation, "fingerprint": _digest({"id": pid, "instance": registered}),
+                "removes": {"containers": [], "networks": [], "volumes": [], "folders": [], "runtime": [registered["name"]]},
+                "keeps": ["Source playground", "Shared platform", "Other runtimes", "Catalog source and links"], "local_bytes": 0}
     value = inventory(pid)
     if value["error"]:
         raise ValueError(value["error"])
@@ -126,9 +136,10 @@ def preview(pid, operation):
     return {"id": pid, "operation": operation, "fingerprint": fingerprint,
             "removes": {"containers": [row["name"] for row in resources["containers"]],
                         "networks": [row["name"] for row in resources["networks"]],
-                        "volumes": [row["name"] for row in resources["volumes"]] if operation == "data" else [],
-                        "folders": [independent.folder(pid).relative_to(paths.ROOT).as_posix()] if operation == "data" else []},
-            "keeps": ["Catalog source and links", "Other runtimes", "Images and build cache"]
+                        "volumes": [row["name"] for row in resources["volumes"]] if operation != "containers" else [],
+                        "folders": [independent.folder(pid).relative_to(paths.ROOT).as_posix()] if operation != "containers" else []},
+            "keeps": ["Source playground", "Shared platform", "Catalog source and links", "Other runtimes", "Images and build cache"]
+                     + (["Runtime definition"] if operation == "data" else [])
                      + (["Volumes and runtime files"] if operation == "containers" else []),
             "local_bytes": files["bytes"]}
 
@@ -151,7 +162,13 @@ def cleanup(pid, operation, fingerprint):
     if fingerprint != plan["fingerprint"]:
         raise ValueError("The runtime changed after the preview; review cleanup again")
     def run(job):
-        if operation == "data":
+        if operation == "delete" and not independent.read(pid):
+            if preview(pid, operation)["fingerprint"] != fingerprint:
+                raise ValueError("The runtime changed after confirmation; preview cleanup again")
+            job.step("Delete the empty runtime")
+            runtime_settings.forget(pid)
+            return
+        if operation != "containers":
             job.step("Prepare file cleanup")
             rc, _, _ = compose.run(["docker", "image", "inspect", storage.FILES_IMAGE], timeout=15)
             if rc:
@@ -170,7 +187,7 @@ def cleanup(pid, operation, fingerprint):
                     raise ValueError("A network is now used outside this runtime; preview cleanup again")
             if ids:
                 job.exec(["docker", kind, "rm", *ids])
-        if operation == "data":
+        if operation != "containers":
             job.step("Delete private volumes and runtime files")
             for row in resources["volumes"]:
                 _volume_unchanged(row)
@@ -181,9 +198,11 @@ def cleanup(pid, operation, fingerprint):
             manifest = hashlib.sha256((folder / "runtime.json").read_bytes()).hexdigest()
             job.exec(storage.remove_files_command(folder, manifest))
             directory(pid).rmdir()
+            if operation == "delete":
+                runtime_settings.forget(pid)
         else:
             record = independent.read(pid)
             record["active"] = False
             independent._write(independent.folder(pid) / "runtime.json", record)
-    return JOBS.start("Delete runtime data" if operation == "data" else "Remove runtime containers", [run],
+    return JOBS.start("Remove runtime containers" if operation == "containers" else "Delete runtime" if operation == "delete" else "Delete runtime data", [run],
                       key=f"playground:{pid}", verb="stop")
