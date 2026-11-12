@@ -1,4 +1,4 @@
-import { createRuntimeEntry } from "../dialogs/runtimes.js";
+import { runtimeManagerEntry } from "../dialogs/runtime-manager.js";
 // The Playgrounds, Setups and Add-ons pages: one list, drawn from what the server says of each item. A row opens
 // on its detail: what the item is, what it runs, what comes with it and what uses it. The address of an add-on or a
 // setup (#/addons/<id>) opens its row. Where an item comes from is its chip, except for the first catalog's; and the list is filtered by
@@ -475,7 +475,7 @@ function list(kind, title, noun) {
     // While the Lab UI does not answer, nothing is asked of it: what the server allowed last waits with the rest.
     const wait = store.wait(), byName = store.wait(true), offline = store.offline ? wait : "";
     const can = (action) => ({ disabled: !!offline || !action.enabled, reason: offline || action.reason });
-    return [kind === "playground" && createRuntimeEntry(x),
+    return [kind === "playground" && runtimeManagerEntry(x),
       // The form is that of a setup: an add-on or a playground is changed in its file, and two copies of one could
       // not load together
       kind === "setup" && x.personal && { label: "Edit", onSelect: () => openCreate({ kind, mode: "edit", setup: x }) },
