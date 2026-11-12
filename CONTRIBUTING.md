@@ -139,3 +139,17 @@ Maintainers: see [docs/maintaining.md](docs/maintaining.md) to move or fork the 
 ## License of contributions
 
 Your contribution is licensed under the project's license, the GNU Affero General Public License v3.0 (see [LICENSE](LICENSE); [NOTICE](NOTICE) requires its attribution to stay). There is no contributor license agreement, and no sign-off is required.
+
+### Try independent playgrounds
+
+Run the isolated Docker workflow explicitly:
+
+```bash
+PYTHONPATH=lab-ui python3 -m tests.independent_docker
+```
+
+It builds the seeder, starts uniquely named temporary projects and checks real Gravitee APIs, applications,
+subscriptions and API keys across stop, resume and rebuild. It also checks concurrent playgrounds, private writable
+binds, volumes and ports, preserved catalog links, and a separate shared Redis sentinel. It removes only its own
+projects and volumes. Set `INDEPENDENT_E2E_ARTIFACTS` to an absolute folder to keep its diagnostics. No installed Lab
+or catalog is used. CI runs this workflow separately from the unit tests.

@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 
 from ..docker import compose, jobs
-from ..library import layers, model, project
+from ..library import layers, model, project, runtime_settings
 from .. import paths
 from . import defaults, facts, gitx, install, manifest, meta, registry, renames, resolve, trust, understood
 from . import store as bare
@@ -1219,6 +1219,7 @@ def _plan(ns, op):
     previous one. Under the catalogs lock it stages the candidate, judges it against everything installed and tells what
     changes, what that breaks, what grows in power, and what holds it back. Answers the Plan of 13.2 with a ticket, or
     {"upToDate": true}."""
+    _independent_hold(ns)
     entry, held = _git(ns)
     if not held.get("pin"):
         raise ValueError(f"{_called(ns)} has nothing installed yet")
@@ -1420,6 +1421,7 @@ def _apply(ns, ticket, confirm_history, op):
     back needs no confirmation of a history: the version it returns to is one the person ran, on the history they confirmed
     (the plan says `rewritten` and the dialog warns, but there is nothing to decide). A change that raised halfway is finished
     or marked damaged before the failure is raised (`_unstick`)."""
+    _independent_hold(ns)
     data = _held(ticket, op)
     if data.get("ns") != ns:
         raise CatalogError("ticket_expired", EXPIRED, 409)
@@ -1533,6 +1535,7 @@ def remove(ns, check=False, keep_settings=True):
     catalog that is on or up refuse it (`job_running`, `held`); a folder catalog loses its link and nothing else, but for an
     imported playground's, whose folder the Lab keeps: it goes, but for the person's settings with `keep_settings`. Answers
     {"warning": ...} (the line of `removed_partial` when Docker made files that could not be deleted)."""
+    _independent_hold(ns)
     entry = _entry(ns)
     if check:
         return _removal(ns, entry)
@@ -1675,3 +1678,8 @@ def recover():
     except CatalogError as error:
         if error.code != "busy":
             raise
+
+
+def _independent_hold(ns):
+    if ns in runtime_settings.active_catalogs():
+        raise CatalogError("held", "Stop the independent playgrounds using this catalog first.", 409)

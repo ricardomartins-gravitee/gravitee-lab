@@ -1,3 +1,4 @@
+import { runtimeSettings, runtimeEntry } from "../dialogs/runtimes.js";
 // The Playgrounds, Setups and Add-ons pages: one list, drawn from what the server says of each item. A row opens
 // on its detail: what the item is, what it runs, what comes with it and what uses it. The address of an add-on or a
 // setup (#/addons/<id>) opens its row. Where an item comes from is its chip, except for the first catalog's; and the list is filtered by
@@ -474,7 +475,7 @@ function list(kind, title, noun) {
     // While the Lab UI does not answer, nothing is asked of it: what the server allowed last waits with the rest.
     const wait = store.wait(), byName = store.wait(true), offline = store.offline ? wait : "";
     const can = (action) => ({ disabled: !!offline || !action.enabled, reason: offline || action.reason });
-    return [
+    return [kind === "playground" && runtimeEntry(x),
       // The form is that of a setup: an add-on or a playground is changed in its file, and two copies of one could
       // not load together
       kind === "setup" && x.personal && { label: "Edit", onSelect: () => openCreate({ kind, mode: "edit", setup: x }) },
@@ -517,7 +518,7 @@ function list(kind, title, noun) {
     el.innerHTML = `
       <div class="page-head">
         <h1>${title}</h1>
-        <div class="page-actions">${kind === "playground" ? `<button class="btn" data-import>${icon("upload")}Import</button>` : ""}<button class="btn" data-new>${icon("plus")}New ${noun.toLowerCase()}</button></div>
+        <div class="page-actions">${kind === "playground" ? `<button class="btn" data-runtime-settings>Runtime settings</button><button class="btn" data-import>${icon("upload")}Import</button>` : ""}<button class="btn" data-new>${icon("plus")}New ${noun.toLowerCase()}</button></div>
       </div>
       <div class="card list-card">
         <div class="list-tools">
@@ -565,6 +566,7 @@ function list(kind, title, noun) {
       if (!button || button.disabled || button.ariaDisabled === "true") return;
       const data = button.dataset, x = store.item(kind, id);
       if ("new" in data) { if (store.state) openCreate({ kind, mode: "new" }); }   // its form is drawn from the state
+      else if ("runtimeSettings" in data) runtimeSettings();
       else if ("import" in data) openImport();
       else if ("clear" in data) {
         remember(STARRED, "");

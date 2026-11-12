@@ -13,7 +13,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from ..docker import compose, images
-from ..library import project as projects
+from ..library import project as projects, runtime_settings
 from ..library.versions import judge, channel, latest, order, parse
 
 DOCKER_TTL = 60       # seconds what Docker holds is kept: a quick back and forth does not read it again
@@ -222,14 +222,15 @@ def lab_names():
     """The names of the containers of this project, which is the lab's: what Docker runs for something else is not its
     load. Kept a few seconds; None when they cannot be told, and the load is then every container's."""
     def ask():
-        rc, out, err = compose.run(["docker", "ps", "--filter", f"label=com.docker.compose.project={compose.project_name()}",
-                                    "--format", "{{.Names}}"], timeout=10)
+        names = sorted({compose.project_name(), *runtime_settings.active_projects()})
+        filters = [part for name in names for part in ("--filter", f"label=com.docker.compose.project={name}")]
+        rc, out, err = compose.run(["docker", "ps", *filters, "--format", "{{.Names}}"], timeout=10)
         if rc != 0:
             raise compose.ComposeError(err.strip())
         return set(out.split())
     try:
         return compose.CACHE.get("dashboard:names", NAMES_TTL, ask)
-    except compose.ComposeError:
+    except (compose.ComposeError, OSError, ValueError):
         return None
 
 

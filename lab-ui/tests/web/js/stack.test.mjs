@@ -244,3 +244,11 @@ test("a platform where nothing was deployed, and the other action that removes, 
   assert.deepEqual(says("Remove containers", { playgrounds: [playground("Acme Hostels", [record])], platforms: [ACCOUNT] }),
     { title: "Remove containers", text: "Data is kept", action: "Remove", word: "" });
 });
+
+
+test("shared Reset names its own scope and explicitly keeps independent runtime data", () => {
+  const independent = { ...playground("Private A"), runtime: { mode: "independent", prepared: true } };
+  const text = says("Reset", { playgrounds: [independent] }).text;
+  assert.match(text, /shared platform/);
+  assert.match(text, /Stays: Private A \(independent\)/);
+});

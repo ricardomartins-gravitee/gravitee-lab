@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, urlparse
 from ..library import check, drift, files, layers, machine, model, personal, playgrounds, plugins, project, starred, updates
 from ..docker import compose, images, terminal
 from ..gravitee import core, license, places, platforms, probe
-from . import dashboard, personas, stack
+from . import dashboard, personas, runtimes, stack
 from .. import paths
 from ..catalogs import contribute, exports, firstrun, gitx, kept, moving, service, standalone, trust
 from ..catalogs.registry import CatalogError
@@ -144,7 +144,7 @@ def snapshot():
     if unread:
         body["problems"] = [*body.get("problems", []), *unread]
     starred.mark(body)
-    return body
+    return runtimes.overlay(body, p)
 
 
 # How far the running job is, beside the state in every answer of it (a 304 too): Job.live, as JSON
@@ -169,7 +169,7 @@ def state(req):
 def frame(req, pid):
     """What one UI of a playground is for this page: {answers, frameable, reason}. The page is the one that asks, by
     the name it was opened with; the address must be one the playground declares."""
-    return probe.probe(project.load(), pid, req.query.get("url"), f"http://{req.headers.get('Host')}")
+    return probe.probe(runtimes.view(project.load(), pid) if runtimes.selected(pid) else project.load(), pid, req.query.get("url"), f"http://{req.headers.get('Host')}")
 
 
 def _terminal(pid):
@@ -184,6 +184,12 @@ def _terminal(pid):
     # N05: a catalog's playground has a terminal only in a service of its own or of what it brings, never in its seed
     if trust.line("N05") in ((playground.get("verdict") or {}).get("notes") or ()):
         raise ValueError(trust.NOT_OFFERED)
+    if runtimes.selected(pid):
+        rows = runtimes.independent.containers(pid)
+        container = rows.get(playground["terminal"], {}).get("Name")
+        if not container:
+            raise ValueError("Start this independent playground first")
+        return terminal.attach(pid, container)
     return terminal.attach(pid, found["container"])
 
 
@@ -317,6 +323,8 @@ def at(value):
 
 def start_playground(req, pid):
     """Starts a playground, on This machine or in a place. A place sends back what its dialog showed (`accept`)."""
+    if not at(req.body.get("place")) and runtimes.selected(pid):
+        return runtimes.action(project.load(), pid, "start", req.body)
     accept = accepted(req)
     more = {"remove": True} if req.body.get("remove") else {}   # delete what the playground it stops created
     found, where = project.load(), at(req.body.get("place"))
@@ -328,6 +336,8 @@ def start_playground(req, pid):
 def reseed_playground(req, pid):
     """Seeds a playground again, or seeds it for the first time in a place (Deploy): the place sends back its dialog
     (`accept`), because what it deploys by may need starting."""
+    if not at(req.body.get("place")) and runtimes.selected(pid):
+        return runtimes.action(project.load(), pid, "reseed", req.body)
     more, accept = at(req.body.get("place")), accepted(req)
     return playgrounds.reseed(project.load(), pid, **more, **({"accept": accept} if more else {}))
 
@@ -341,6 +351,8 @@ def delete(req, kind, uid):
         if not place:
             raise ValueError("Choose a place besides This machine")
         return playgrounds.delete_place(p, uid, place)
+    if kind == "playground" and runtimes.independent.read(uid) and runtimes.info(uid)["on"]:
+        raise ValueError("Stop this independent playground first")
     return personal.delete(p, kind, uid, places.deployed(uid, playgrounds.created) if kind == "playground" else ())
 
 
@@ -612,10 +624,15 @@ class Follower:
                 self.lines.put({"service": self.name, "timestamp": started})
 
 
+def runtime_service(name, operation):
+    found = runtimes.independent.resolve_service(name)
+    return runtimes.independent.service(*found, operation) if found else stack.service_action(project.load(), name, operation)
+
+
 def stream_logs(req):
     """The logs of some services, followed: batches of [service, timestamp, line], and a `restarted` event
     ({service, timestamp}) when a container runs again after a new start, followed again from there."""
-    services = project.load()["services"]
+    services = runtimes.services(project.load())
     names = [name for name in req.query.get("services", "").split(",") if name in services]
     tail = max(0, min(int(req.query.get("tail", "300")), 5000))
     lines, closed, lock, followed = queue.Queue(), threading.Event(), threading.Lock(), []
@@ -703,6 +720,9 @@ ROUTES = [(method, re.compile(pattern), handler) for method, pattern, handler in
     ("GET", "/(css|js|img)/(.+)", static),
     ("GET", "/favicon.ico", lambda r: r.answer(204)),   # the page carries its own icon
     ("GET", "/api/state", state),
+    ("GET", "/api/playground-runtimes", lambda r: runtimes.settings(project.load())),
+    ("POST", "/api/playground-runtimes", lambda r: runtimes.save(project.load(), r.body)),
+    ("POST", f"/api/playgrounds/{UNIT}/runtime/rebuild", lambda r, pid: runtimes.action(project.load(), pid, "rebuild", r.body)),
     ("GET", "/api/jobs/([a-f0-9]{8})", stream_job),
     ("GET", "/api/logs", stream_logs),
     ("GET", "/api/dashboard", lambda r: dashboard.read(project.load(), refresh=r.query.get("refresh") == "1")),
@@ -723,9 +743,11 @@ ROUTES = [(method, re.compile(pattern), handler) for method, pattern, handler in
     ("GET", "/api/machine", lambda r: machine.report(fresh=r.query.get("fresh") == "1")),
     ("POST", "/api/machine/act", lambda r: machine.act(r.body.get("id"))),
     ("GET", f"/api/playgrounds/{UNIT}/check",
-     lambda r, pid: playgrounds.check(project.load(), pid, **at(r.query.get("place")))),
+     lambda r, pid: runtimes.check(project.load(), pid, rebuild=r.query.get("rebuild") == "1") if not at(r.query.get("place")) and runtimes.selected(pid)
+     else playgrounds.check(project.load(), pid, **at(r.query.get("place")))),
     ("GET", f"/api/(addon|setup)s/{UNIT}/check", check_unit),
-    ("GET", f"/api/playgrounds/{UNIT}/guide", lambda r, pid: {"markdown": playgrounds.guide(pid)}),
+    ("GET", f"/api/playgrounds/{UNIT}/guide", lambda r, pid: {"markdown": runtimes.independent.rewrite(playgrounds.guide(pid),
+         (runtimes.independent.read(pid) or {}).get("ports", {})) if runtimes.selected(pid) else playgrounds.guide(pid)}),
     ("GET", f"/api/playgrounds/{UNIT}/frame", frame),
     ("GET", f"/api/playgrounds/{UNIT}/terminal", terminal_stream),
     ("GET", "/api/platforms", lambda r: platforms.listing()),
@@ -796,9 +818,11 @@ ROUTES = [(method, re.compile(pattern), handler) for method, pattern, handler in
     # The actions on the containers of an add-on or a playground, the Stack's and the catalog's Restart: it stays on
     # or off
     ("POST", f"/api/(addon|playground)s/{UNIT}/containers/{DO}",
-     lambda r, kind, uid, do: stack.unit_action(project.load(), kind, uid, do)),
+     lambda r, kind, uid, do: runtimes.action(project.load(), uid, do, r.body) if kind == "playground" and runtimes.selected(uid)
+     else stack.unit_action(project.load(), kind, uid, do)),
     ("POST", f"/api/playgrounds/{UNIT}/start", start_playground),
-    ("POST", f"/api/playgrounds/{UNIT}/stop", lambda r, pid: playgrounds.stop(project.load(), pid, bool(r.body.get("remove")), accepted(r))),
+    ("POST", f"/api/playgrounds/{UNIT}/stop", lambda r, pid: runtimes.action(project.load(), pid, "stop", r.body) if runtimes.selected(pid)
+     else playgrounds.stop(project.load(), pid, bool(r.body.get("remove")), accepted(r))),
     ("POST", f"/api/playgrounds/{UNIT}/terminal", terminal_input),
     ("POST", f"/api/playgrounds/{UNIT}/terminal/close", terminal_close),
     ("POST", f"/api/playgrounds/{UNIT}/reseed", reseed_playground),
@@ -810,7 +834,7 @@ ROUTES = [(method, re.compile(pattern), handler) for method, pattern, handler in
     # What an apply would recreate, of what is saved or with a change not saved yet: read only
     ("POST", "/api/effects", effects),
     ("POST", f"/api/groups/{ID}/{DO}", lambda r, gid, do: stack.group_action(project.load(), gid, do)),
-    ("POST", f"/api/services/{SERVICE}/{DO}", lambda r, name, do: stack.service_action(project.load(), name, do)),
+    ("POST", f"/api/services/{SERVICE}/{DO}", lambda r, name, do: runtime_service(name, do)),
     # Its job is the item's whose row asked (`key`), else the registry's
     ("POST", "/api/registry/login", lambda r: images.login(r.body.get("host"), r.body.get("key"))),
     ("POST", "/api/jobs/([a-f0-9]{8})/cancel", cancel),
@@ -861,7 +885,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def relay(self, method):
         if personas.handles(urlparse(self.path).path):
-            return personas.relay(self, method)
+            return personas.relay(self, method, runtimes.persona_api)
         return self.answer(405, b"")
 
     def allowed(self, method):
@@ -876,7 +900,7 @@ class Handler(BaseHTTPRequestHandler):
     def route(self, method):
         url = urlparse(self.path)
         if personas.handles(url.path):
-            return personas.relay(self, method)
+            return personas.relay(self, method, runtimes.persona_api)
         if not self.allowed(method):
             if method == "GET" and url.path == "/":   # a person opening the page: say where it is
                 address = f"http://localhost:{self.server.server_port}"
@@ -1027,7 +1051,8 @@ def start_up():
     stop left of a change of Personal is put right, the intent of the first run is written and what has no copy is marked as downloading,
     and the background threads of the Lab start. Each step is local and fast but the last ones, which return at once; a failure of one
     is said in a line and never keeps the Lab from serving, because its row says what is wrong."""
-    for what, step in (("finishing what a stop left", service.recover),
+    for what, step in (("initializing playground runtimes", lambda: runtimes.runtime_settings.initialize(project.load()["playgrounds"])),
+                       ("finishing what a stop left", service.recover),
                        ("finishing a change of Personal that a stop left", moving.recover_at_start),
                        ("preparing the first run", firstrun.reconcile),
                        ("starting the download of catalogs", firstrun.start_worker),

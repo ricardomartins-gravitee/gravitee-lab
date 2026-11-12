@@ -9,7 +9,7 @@ import posixpath
 import re
 import shutil
 
-from . import check, files, layers, moves, starred, tested
+from . import check, files, layers, moves, runtime_settings, starred, tested
 from ..docker import compose, images
 from .. import paths
 from ..catalogs import registry, renames, resolve
@@ -363,6 +363,8 @@ def _not_held(project, kind, uid, deleting=False, deployed=()):
     """Refuses while the item is on and, to delete it, while something of it runs, another item includes it, or a place
     holds a record of what it created (`deployed`, held()). Docker is asked what runs of an item that is off only for a
     delete: a move keeps its services, whose containers it still runs."""
+    if runtime_settings.holds(kind, uid):
+        raise RuntimeError("Stop the independent playground using this item first")
     on = layers.current(project)
     turned_on = _turned_on(on, kind, uid)
     running = (deleting or turned_on) and _running(project, kind, uid, turned_on)

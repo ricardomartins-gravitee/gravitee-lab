@@ -153,3 +153,11 @@ class Relay(unittest.TestCase):
         self.addCleanup(server.shutdown)
         with mock.patch.object(personas, "API", ("127.0.0.1", server.server_address[1])):
             self.assertEqual(self.ask("GET", "/persona/anouk/x")[0], 502)
+
+    def test_private_persona_uses_its_selected_upstream_and_unknown_private_persona_is_refused(self):
+        with mock.patch.object(api.runtimes, "persona_api", return_value=personas.API):
+            status, _, body = self.ask("GET", "/persona/runtime-test--user/management")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["host"], f"{personas.API[0]}:{personas.API[1]}")
+        with mock.patch.object(api.runtimes, "persona_api", return_value=None):
+            self.assertEqual(self.ask("GET", "/persona/runtime-missing--user/management")[0], 404)
