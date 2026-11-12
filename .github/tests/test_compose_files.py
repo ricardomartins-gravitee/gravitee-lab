@@ -1,4 +1,4 @@
-"""Conventions of the core's Compose file that need no running stack: what the gateway mounts and what the health checks run.
+"""Conventions of the core's Compose file that need no running stack: persistent data, gateway mounts and health checks.
 The file is read as text. The conventions of the items are tested by the catalog that brings them."""
 
 import re
@@ -27,6 +27,16 @@ class GatewayMountsTest(unittest.TestCase):
         self.assertEqual(["/opt/graviteeio-gateway/mtls/server.p12", "/opt/graviteeio-gateway/mtls/ca.pem"], paths)
         for path in paths:
             self.assertIn(f":{path}:ro", self.gateway)
+
+
+class MongoVolumesTest(unittest.TestCase):
+    def test_both_mongodb_data_paths_keep_their_named_storage_across_recreation(self):
+        text = (ROOT / "docker-compose.yml").read_text()
+        mounts = dict(re.findall(r"^\s+- ([\w-]+):(/data/\w+)", service_block(text, "mongodb"), re.M))
+        self.assertEqual(mounts, {"data-mongo": "/data/db", "data-mongo-config": "/data/configdb"})
+        volumes = text.split("\nvolumes:\n", 1)[1].split("\nnetworks:", 1)[0]
+        for name in mounts:
+            self.assertRegex(volumes, rf"(?m)^  {name}:$")
 
 
 class HealthChecksTest(unittest.TestCase):
