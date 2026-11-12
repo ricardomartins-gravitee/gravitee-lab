@@ -41,7 +41,9 @@ and subscriptions to other APIs stay as they are. An application that becomes sh
 with subscriptions outside this playground, refuses restoration before resources change. A recorded application
 that is shared also refuses Save and delete, because the seed’s cleanup would archive it for everyone.
 
-Restore preserves subscription ids and issued key values. Keys issued after the saved state are disabled before the
+Restore preserves application ids and issued key values. Recreated subscriptions receive new ids from the normal
+Portal API so they remain editable in the Console. The playground’s local identity record reconnects older saved
+states and seed ownership to those ids. Consumer requests are preserved. Keys issued after the saved state are disabled before the
 API starts again. Gravitee may retain those disabled keys in its history, and recreating resources produces new
 management audit entries and timestamps. Restore does not rewind analytics or the platform’s audit history.
 

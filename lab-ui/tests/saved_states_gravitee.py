@@ -406,7 +406,17 @@ class GraviteeStates(unittest.TestCase):
         return row
 
     def sub_path(self, row):
-        return "/apis/" + row["api"] + "/subscriptions/" + row["id"]
+        actual = row["id"]
+        path = self.linked / "playgrounds/a/.state/saved-state-subscriptions.json"
+        aliases = json.loads(path.read_text()) if path.exists() else []
+        seen = set()
+        while actual not in seen:
+            seen.add(actual)
+            found = next((entry for entry in aliases if entry["api"] == row["api"] and entry["id"] == actual), None)
+            if not found:
+                break
+            actual = found["actual"]
+        return "/apis/" + row["api"] + "/subscriptions/" + actual
 
     def sub_action(self, row, action, body=None):
         return self.management(self.sub_path(row) + "/" + action, "POST", body or {})
@@ -434,6 +444,8 @@ class GraviteeStates(unittest.TestCase):
         self.assertTrue((self.root / ".lab/catalogs/linked").is_symlink())
         self.assertTrue((self.linked / "playgrounds/a").is_symlink())
         self.assertEqual((self.linked / "playgrounds/a/.state/created.json").read_bytes(), self.consumer_ownership[sid])
+        rows = self.management("/apis/" + self.api("a")["id"] + "/subscriptions?statuses=PENDING,ACCEPTED,PAUSED,CLOSED,REJECTED")["data"]
+        self.assertTrue(all(row["origin"] == "MANAGEMENT" for row in rows), "Restore locked subscriptions in the Console")
 
     def save_consumers(self):
         before = {state["id"] for state in self.states()}
@@ -468,6 +480,8 @@ class GraviteeStates(unittest.TestCase):
         pending = self.save_consumers()
         self.restore_consumers(pending)
         self.assertEqual(self.management(self.sub_path(sub))["status"], "PENDING")
+        self.assertEqual(self.management(self.sub_path(sub))["origin"], "MANAGEMENT")
+        self.assertEqual(self.management(self.sub_path(sub))["consumerMessage"], "Consumer requests access")
         self.assertTrue(all(value["revoked"] or value.get("expired") for value in self.consumer_keys(sub)), "Pending access received an active key")
         self.sub_action(sub, "_accept")
         active = next(value for value in self.consumer_keys(sub) if not value["revoked"])
@@ -547,7 +561,7 @@ class GraviteeStates(unittest.TestCase):
         # Other subscription states must survive real cleanup too, not just an in-place update.
         for status, action in (("PAUSED", "_pause"), ("CLOSED", "_close"), ("REJECTED", "_reject")):
             if status == "REJECTED":
-                self.consumer("/subscriptions/" + sub["id"], "PUT", {"configuration": None, "metadata": {}}, developer=True)
+                self.consumer("/subscriptions/" + self.sub_path(sub).rsplit("/", 1)[-1], "PUT", {"configuration": None, "metadata": {}}, developer=True)
             self.sub_action(sub, action, {"reason": "Saved subscription state"})
             checkpoint = self.save_consumers()
             self.restore_consumers(checkpoint)

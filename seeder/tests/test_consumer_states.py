@@ -153,3 +153,45 @@ class ConsumerStates(Seed):
         self.answer({("POST", V2 + "/apis/mine/subscriptions/sub/api-keys/new-key/_revoke"): 204})
         self.consumers.restore_keys(saved)
         self.assertEqual(self.platform.changes(), [("POST", V2 + "/apis/mine/subscriptions/sub/api-keys/new-key/_revoke")])
+
+    def test_recreated_subscriptions_use_portal_origin_and_keep_private_identity_aliases(self):
+        saved = self.capture()["subscriptions"][0]
+        saved["entity"].update(status="PENDING", origin="MANAGEMENT", consumerMessage="Original request")
+        saved["keys"] = []
+        self.subscriptions = []
+
+        def create(call):
+            self.assertEqual(call.json["request"], "Original request")
+            self.subscriptions = [{**copy.deepcopy(SUB), "id": "replacement", "status": "PENDING", "origin": "MANAGEMENT"}]
+            return 201, {"id": "replacement"}
+
+        self.platform.routes.update({
+            ("POST", "/portal/environments/DEFAULT/subscriptions"): create,
+            ("PUT", "/portal/environments/DEFAULT/subscriptions/replacement"): (200, {}),
+            ("PUT", V2 + "/apis/mine/subscriptions/spec/_import"): (200, {}),
+            ("PUT", V2 + "/apis/mine/subscriptions/replacement"): (200, {}),
+            ("GET", V2 + "/apis/mine/subscriptions/replacement/api-keys"): (200, {"data": []}),
+        })
+        self.consumers.import_subscription(saved)
+        live = self.consumers.subscription(saved["record"])
+        self.assertEqual((live["id"], live["origin"]), ("replacement", "MANAGEMENT"))
+        reloaded = consumer_states.Consumers(apim.ApiManagement())
+        self.assertEqual(reloaded.resolve(saved["record"])["id"], "replacement")
+        self.assertEqual(reloaded.alias_file.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(reloaded.owned({"resources": [], "ownership": [saved["record"]]})[0]["id"], "replacement")
+        self.assertTrue(all(call.json["id"] == "replacement" for call in
+                            self.platform.sent("PUT", V2 + "/apis/mine/subscriptions/spec/_import")))
+        # A later recreation follows the whole chain without changing another API's id.
+        reloaded.link({**saved["record"], "id": "replacement"}, "latest")
+        self.assertEqual(reloaded.resolve(saved["record"])["id"], "latest")
+        self.assertEqual(reloaded.resolve({**saved["record"], "api": "other"})["id"], "sub")
+
+    def test_aliases_cannot_bypass_foreign_ownership_or_create_a_cycle(self):
+        saved = self.capture()
+        self.consumers.link(saved["subscriptions"][0]["record"], "replacement")
+        foreign = [{"product": "apim", "kind": "subscription", "id": "replacement"}]
+        with self.assertRaisesRegex(SeedError, "exclusively"):
+            self.validate(saved, foreign=foreign)
+        self.consumers.link({**saved["subscriptions"][0]["record"], "id": "replacement"}, "sub")
+        with self.assertRaisesRegex(SeedError, "cycle"):
+            self.consumers.resolve(saved["subscriptions"][0]["record"])

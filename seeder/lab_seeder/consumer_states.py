@@ -8,9 +8,11 @@ Seed ownership stays separate from consumer apps created manually in the Portal.
 
 import copy
 import json
+import os
+import uuid
 from urllib.parse import quote
 
-from . import apim
+from . import apim, common
 from .common import HttpError, SeedError, making, record, setting
 
 STATUSES = ("PENDING", "ACCEPTED", "PAUSED", "CLOSED", "REJECTED")
@@ -60,6 +62,49 @@ def noted(kind, value, environment, **extra):
 class Consumers:
     def __init__(self, management):
         self.management = management
+        self.alias_file = common.STATE_FILE.with_name("saved-state-subscriptions.json")
+        self.aliases = json.loads(self.alias_file.read_text()) if self.alias_file.exists() else []
+        if not isinstance(self.aliases, list) or not all(isinstance(row, dict) and
+                all(isinstance(row.get(name), str) and row[name] and quote(row[name], safe="") == row[name]
+                    for name in ("env", "api", "id", "actual")) for row in self.aliases):
+            raise SeedError("Saved subscription identity records are damaged")
+
+    def resolve(self, row):
+        if row.get("kind") != "subscription" and "api" not in row:
+            return row
+        actual, seen = row["id"], set()
+        aliases = {(entry["env"], entry["api"], entry["id"]): entry["actual"] for entry in self.aliases}
+        while (env(row), row["api"], actual) in aliases:
+            if actual in seen:
+                raise SeedError("Saved subscription identity records contain a cycle")
+            seen.add(actual)
+            actual = aliases[(env(row), row["api"], actual)]
+        return {**row, "id": actual}
+
+    def link(self, row, actual):
+        if row["id"] == actual:
+            return
+        # The normal Portal create keeps subscriptions editable; its new id is local bookkeeping.
+        self.aliases = [entry for entry in self.aliases if (entry["env"], entry["api"], entry["id"]) !=
+                        (env(row), row["api"], row["id"])]
+        self.aliases.append({"env": env(row), "api": row["api"], "id": row["id"], "actual": actual})
+        partial = self.alias_file.with_name(self.alias_file.name + "." + uuid.uuid4().hex + ".part")
+        try:
+            with partial.open("x", encoding="utf-8") as stream:
+                os.chmod(partial, 0o600)
+                if os.geteuid() == 0:
+                    owner = self.alias_file.parent.stat()
+                    os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
+                json.dump(self.aliases, stream, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+            partial.replace(self.alias_file)
+        finally:
+            partial.unlink(missing_ok=True)
+
+    def owned(self, saved):
+        return [self.resolve(row) if (row["product"], row["kind"]) == (apim.SECTION, "subscription") else row
+                for row in ownership(saved)]
 
     def at(self, row):
         return self.management if env(row) == self.management.env else self.management.at(quote(env(row), safe=""))
@@ -83,12 +128,14 @@ class Consumers:
         answer = target.api.get(f"{target.v1}/applications/{row['id']}", expect=(200, 404))
         return answer.json() if answer.status_code == 200 else None
 
-    def subscription(self, row):
+    def subscription(self, row, resolve=True):
+        row = self.resolve(row) if resolve else row
         target = self.at(row)
         answer = target.api.get(f"{target.v2}/apis/{row['api']}/subscriptions/{row['id']}", expect=(200, 404))
         return answer.json() if answer.status_code == 200 else None
 
-    def keys(self, row):
+    def keys(self, row, resolve=True):
+        row = self.resolve(row) if resolve else row
         target = self.at(row)
         return self.listed(target, f"{target.v2}/apis/{row['api']}/subscriptions/{row['id']}/api-keys")
 
@@ -123,7 +170,7 @@ class Consumers:
                 subrow = seed_subs.get((environment, value["id"])) or noted("subscription", value, environment, api=api_id)
                 if key(subrow) in foreign_subs:
                     raise SeedError("Another playground records a subscription to this API; its data must be kept")
-                entity = self.subscription(subrow)
+                entity = self.subscription(subrow, resolve=False)
                 if entity is None:
                     raise SeedError("A subscription changed during capture; retry saving this playground")
                 if entity.get("status") not in STATUSES:
@@ -132,7 +179,7 @@ class Consumers:
                 if not isinstance(app_id, str) or not app_id:
                     raise SeedError("A subscription does not identify its consumer application")
                 apps.setdefault((environment, app_id), noted("application", {"id": app_id}, environment))
-                subscriptions.append({"record": copy.deepcopy(subrow), "entity": entity, "keys": self.keys(subrow)})
+                subscriptions.append({"record": copy.deepcopy(subrow), "entity": entity, "keys": self.keys(subrow, resolve=False)})
         mine = {key(item["record"]) for item in subscriptions}
         if set(seed_subs) - mine:
             raise SeedError("A recorded subscription is missing or points outside this playground's APIs")
@@ -203,7 +250,7 @@ class Consumers:
                     raise SeedError("A shared consumer application is missing or archived; it cannot be changed by this playground")
         for subkey, item in subscriptions.items():
             row, entity = item["record"], item["entity"]
-            if subkey in foreign_subs or (env(row), row["api"]) not in apis:
+            if subkey in foreign_subs or key(self.resolve(row)) in foreign_subs or (env(row), row["api"]) not in apis:
                 raise SeedError("A saved subscription does not belong exclusively to this playground")
             if entity.get("id") != row["id"] or self.api_of(entity) != row["api"] or entity.get("status") not in STATUSES:
                 raise SeedError("A saved subscription does not match its API or ownership")
@@ -218,7 +265,9 @@ class Consumers:
                     raise SeedError("A saved API key is incomplete")
                 if any((env(row), ident(link)) not in subscriptions for link in credential.get("subscriptions", [])):
                     raise SeedError("A saved API key is shared outside this playground")
-            self.validate_keys(item, subscriptions)
+            allowed = set(subscriptions) | {key(self.resolve(value["record"])) for value in saved["subscriptions"]}
+            allowed |= {key(value["record"]) for value in current["subscriptions"]}
+            self.validate_keys(item, allowed)
 
     def validate_keys(self, item, subscriptions):
         row = item["record"]
@@ -240,15 +289,16 @@ class Consumers:
                     raise SeedError("A saved API key is now used by another consumer; nothing was changed")
 
     def close(self, row):
+        row = self.resolve(row)
         live = self.subscription(row)
         if live and live["status"] not in ("CLOSED", "REJECTED"):
             target = self.at(row)
             target.api.post(f"{target.v2}/apis/{row['api']}/subscriptions/{row['id']}/_close", json={}, idempotent=True)
 
     def prepare(self, saved, current):
-        wanted = {key(item["record"]) for item in saved["subscriptions"]}
+        wanted = {key(self.resolve(item["record"])) for item in saved["subscriptions"]}
         for item in current["subscriptions"]:
-            if key(item["record"]) not in wanted:
+            if key(self.resolve(item["record"])) not in wanted:
                 self.close(item["record"])
 
     @staticmethod
@@ -302,23 +352,29 @@ class Consumers:
                 target.api.post(base, json={"id": member["id"], "role": member["role"]})
 
     def import_subscription(self, item):
-        row, entity = item["record"], item["entity"]
+        original, entity = item["record"], item["entity"]
+        row = self.resolve(original)
         target = self.at(row)
         base = f"{target.v2}/apis/{row['api']}/subscriptions"
-        spec = {"id": row["id"], "applicationId": ident(entity["application"]), "referenceId": row["api"], "referenceType": "API",
-                "planId": ident(entity["plan"]), "endingAt": None, "metadata": entity.get("metadata") or {},
-                "consumerConfiguration": entity.get("consumerConfiguration")}
         live = self.subscription(row)
         if live is None:
             with making(apim.SECTION, "subscription", row["label"], row["name"], missing=True, api=row["api"], env=env(row)):
-                target.api.put(base + "/spec/_import", json={**spec, "apiKeys": []})
-                remember(row)
+                result = target.api.post(target.portal + "/subscriptions", json={
+                    "application": ident(entity["application"]), "plan": ident(entity["plan"]),
+                    "request": entity.get("consumerMessage") or "", "metadata": entity.get("metadata") or {},
+                    "configuration": entity.get("consumerConfiguration")}).json()
+                remember({**row, "id": result["id"]})
+                self.link(row, result["id"])
+            row = self.resolve(original)
             live = self.subscription(row)
-        elif live["status"] == "CLOSED":
+        spec = {"id": row["id"], "applicationId": ident(entity["application"]), "referenceId": row["api"], "referenceType": "API",
+                "planId": ident(entity["plan"]), "endingAt": None, "metadata": entity.get("metadata") or {},
+                "consumerConfiguration": entity.get("consumerConfiguration")}
+        if live["status"] == "CLOSED":
+            # Reopening an existing row retains its MANAGEMENT origin; CRD creation would lock the Console.
             try:
                 target.api.put(base + "/spec/_import", json={**spec, "apiKeys": []})
             except HttpError as error:
-                # Some builds restore the row before refusing its update. Continue only on that exact transition.
                 after = self.subscription(row)
                 try:
                     code = json.loads(error.body).get("technicalCode")
@@ -352,16 +408,20 @@ class Consumers:
             target.api.post(base + "/" + row["id"] + "/_pause", json={}, idempotent=True)
         elif status == "CLOSED" and live["status"] != "CLOSED":
             self.close(row)
-        if self.subscription(row)["status"] != status:
+        final = self.subscription(row)
+        if final["status"] != status:
             raise SeedError("The platform did not restore the saved subscription status")
+        if entity.get("origin") in (None, "MANAGEMENT") and final.get("origin", "MANAGEMENT") != "MANAGEMENT":
+            raise SeedError("The restored subscription cannot be managed in the Console")
 
     def pending(self, row, entity):
+        row = self.resolve(row)
         target = self.at(row)
         target.api.put(f"{target.portal}/subscriptions/{row['id']}",
                        json={"configuration": entity.get("consumerConfiguration"), "metadata": entity.get("metadata") or {}})
 
     def restore_keys(self, item):
-        row = item["record"]
+        row = self.resolve(item["record"])
         target = self.at(row)
         base = f"{target.v2}/apis/{row['api']}/subscriptions/{row['id']}/api-keys"
         wanted = {credential["key"]: credential for credential in item["keys"]}

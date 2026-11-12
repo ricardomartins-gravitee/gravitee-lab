@@ -181,11 +181,12 @@ class Resources:
 
     def apply(self, saved, previous=None):
         _records(common._read())  # An unresolved create must keep its note and recovery data.
-        wanted = consumer_states.ownership(saved)
+        wanted = self.consumers.owned(saved)
         previous = previous or self.capture(created(), anchors=saved)
         consumers = saved.get("consumers", previous.get("consumers", {"applications": [], "subscriptions": []}))
         prior_consumers = previous.get("consumers", {"applications": [], "subscriptions": []})
-        desired = {_key(row) for row in [*wanted, *consumer_states.consumer_records({"consumers": consumers})]}
+        consumer_rows = [self.consumers.resolve(row) for row in consumer_states.consumer_records({"consumers": consumers})]
+        desired = {_key(row) for row in [*wanted, *consumer_rows]}
         # Keep credentials offline until their saved state and memberships are in place.
         offline = {}
         for item in [*previous["resources"], *saved["resources"]]:
@@ -253,7 +254,7 @@ class Resources:
             if target.entity(row["id"], row["name"]).get("state") != item["entity"].get("state"):
                 operation = "_start" if item["entity"].get("state") == "STARTED" else "_stop"
                 target.api.post(f"{target.v2}/apis/{row['id']}/{operation}", expect=(200, 202, 204), idempotent=True)
-        save_created(copy.deepcopy(wanted))
+        save_created(copy.deepcopy(self.consumers.owned(saved)))
 
 
 def run(operation, file):

@@ -78,4 +78,5 @@ supported resources and recovery files. `consumer_states.py` follows subscriptio
 consumer apps made in the Developer Portal. It restores private application settings and memberships, subscription
 status, configuration and metadata, and saved key values and access. Shared applications stay read-only; keys that
 also grant access outside the playground refuse restoration. The adapter keeps APIs stopped until consumer access
-is reconciled, and never adds manual consumer apps to the seed’s permanent ownership record.
+is reconciled. Recreated subscriptions use the normal Portal API to stay editable in the Console, and their new ids
+are tracked in `.state/saved-state-subscriptions.json`. The adapter never adds manual consumer apps to the seed’s permanent ownership record.
