@@ -338,6 +338,7 @@ class IndependentDocker(unittest.TestCase):
         self.current = "a"
         print("Start private A and create real consumer access", flush=True)
         self.job("/api/playgrounds/@linked/a/start", {})
+        self.assertIn("@linked/a", json.loads((self.root / ".lab/tested.json").read_text()))
         app = self.consumer_app("Independent consumer A")
         sub = self.consumer_sub("a", app)
         key = next(row for row in self.consumer_keys(sub) if not row["revoked"])
