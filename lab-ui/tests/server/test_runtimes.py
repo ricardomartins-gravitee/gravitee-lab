@@ -61,7 +61,47 @@ class RuntimeState(Case):
         result = runtimes.overlay(copy.deepcopy(self.body), self.project)
         self.assertNotIn("do-not-return", repr(result))
         self.assertTrue(result["playgrounds"][0]["up"])
+        value["initialized"] = True
+        rows.pop("seed")
+        resumed = runtimes.overlay(copy.deepcopy(self.body), self.project)
+        self.assertTrue(resumed["playgrounds"][0]["up"], "Removed completed one-shots must not leave the runtime partly running")
         jobs = self.patch(runtimes, "JOBS")
         runtimes.action(self.project, "local/a", "restart")
         _, commands, _ = self.started(jobs)
         self.assertEqual(commands[0][-2:], ["restart", "db"])
+
+    def test_central_inventory_keeps_stopped_and_missing_source_runtimes_and_counts_exclusive_storage(self):
+        records = [("local/a", {"active": False, "label": "A", "tested": {"versions": {"VERSION": "1"}}, "services": {}}),
+                   ("local/orphan", {"active": False, "label": "Orphan", "services": {}})]
+        self.patch(runtimes.runtime_storage, "known", return_value=(records, []))
+        self.patch(runtimes.storage, "usage", return_value={"volumes": {"own-volume": 200}, "shared": [{"kind": "Images", "bytes": 9000}]})
+        self.patch(runtimes.storage, "resources", return_value={"containers": [], "volumes": [], "networks": []})
+        private = {"resources": {"containers": [], "volumes": [{"name": "own-volume"}], "networks": []},
+                   "local": {"bytes": 100}, "error": None, "running": False}
+        self.patch(runtimes.runtime_storage, "inventory", return_value=private)
+        self.patch(runtimes.storage, "load", return_value={})
+        result = runtimes.listing(self.project)
+        rows = {row["id"]: row for row in result["runtimes"]}
+        self.assertEqual(rows["local/a"]["volume_bytes"], 200)
+        self.assertEqual(rows["local/a"]["local_bytes"], 100)
+        self.assertTrue(rows["local/orphan"]["cleanup"]["data"]["enabled"])
+        self.assertFalse(rows["local/orphan"]["source"])
+        self.assertEqual(rows["local/orphan"]["name"], "Orphan")
+        self.assertEqual(result["shared_storage"][0]["bytes"], 9000)
+
+    def test_missing_source_runtime_can_be_stopped_without_rewriting_catalogs_or_choices(self):
+        self.patch(independent, "read", return_value={"id": "local/orphan"})
+        stop = self.patch(independent, "stop", return_value="job")
+        self.assertEqual(runtimes.managed_action(self.project, "local/orphan", "stop"), "job")
+        stop.assert_called_once_with("local/orphan")
+
+    def test_unreadable_record_is_not_presented_as_an_empty_fresh_runtime(self):
+        self.patch(runtimes.runtime_storage, "known", return_value=([], [{
+            "file": (independent.folder("local/a") / "runtime.json").relative_to(self.root).as_posix(), "message": "Damaged record"}]))
+        self.patch(runtimes.storage, "usage", return_value={"volumes": {}, "shared": []})
+        self.patch(runtimes.storage, "resources", return_value={"containers": [], "volumes": [], "networks": []})
+        self.patch(runtimes.storage, "load", return_value={})
+        row = next(row for row in runtimes.listing(self.project)["runtimes"] if row["id"] == "local/a")
+        self.assertEqual(row["problem"], "Damaged record")
+        self.assertIsNone(row["volume_bytes"])
+        self.assertFalse(row["cleanup"]["data"]["enabled"])

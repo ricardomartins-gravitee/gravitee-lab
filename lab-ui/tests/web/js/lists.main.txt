@@ -500,6 +500,8 @@
       <h1>
         "Containers"
     <div class="page-actions">
+      <span class="sub">
+        "Shared platform"
       <button class="btn pbtn" data-act-for="platform" data-act-verb="stop" data-busy="name" data-stack="stop" hidden="">
         <span class="pbtn-wrap">
           <span class="pbtn-face">
@@ -589,6 +591,39 @@
                   <span class="pbtn-mark">
                   <span>
                     "Removing…"
+  <div data-runtime-panel="">
+    <div class="card runtime-overview">
+      <div class="card-head">
+        <h2>
+          "Runtimes"
+        <div class="page-actions">
+          <button class="btn" data-runtime-default="">
+            "Runtime settings"
+          <button class="btn" data-runtime-refresh="">
+            "Refresh storage"
+      <div class="runtime-summary">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>
+                "Runtime"
+              <th>
+                "State"
+              <th>
+                "CPU"
+              <th>
+                "Memory"
+              <th>
+                "Storage"
+              <th>
+                "Actions"
+          <tbody>
+            <tr>
+              <td colspan="6" class="empty">
+                <span class="loading">
+                  <span class="spinner">
+                  "Reading runtimes"
   <div class="stack-layout">
     <div class="card">
       <div class="cols stack-head" aria-hidden="true">

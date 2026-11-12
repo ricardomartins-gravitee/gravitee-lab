@@ -8,8 +8,8 @@ import copy
 import hashlib
 
 from .. import paths
-from ..catalogs import independent
-from ..docker import compose
+from ..catalogs import independent, runtime_storage
+from ..docker import compose, storage
 from ..docker.jobs import JOBS
 from ..gravitee import frames
 from ..library import layers, model, playgrounds, project as library_project, runtime_settings
@@ -53,7 +53,9 @@ def _overlay(body, project):
         states = _states(rows, value, body.get("job")) if value else {}
         changing = body.get("job") or {}
         verb = changing.get("verb") if changing.get("key") == f"playground:{pid}" and not changing.get("done") else None
-        state = model.fold(list(states.values()), active, verb)
+        folded = [state for key, state in states.items() if not (value and value.get("initialized")
+                  and key in value["oneshots"] and state["key"] == "absent")]
+        state = model.fold(folded, active, verb)
         blocked = project["playgrounds"][pid].get("blocked")
         reason = body.get("wait") or ("The playground is blocked" if blocked else None)
         item.update(on=active, up=state["key"] == "running", state=state,
@@ -239,3 +241,80 @@ def overlay(body, project):
             item["action"] = {"do": "start", "label": "Start", "enabled": False, "reason": str(error), "dialog": None}
             item["reseed"] = None
     return body
+
+
+def listing(project, fresh=False):
+    """The Containers page's central inventory, including stopped and unavailable-source runtimes."""
+    records, problems = runtime_storage.known()
+    prepared = dict(records)
+    ids = set(prepared) | {pid for pid in project["playgrounds"] if selected(pid)}
+    try:
+        usage = storage.usage(fresh=fresh)
+    except (OSError, ValueError, compose.ComposeError) as error:
+        usage = {"volumes": {}, "shared": []}
+        problems.append({"file": "Docker storage", "message": str(error)})
+    shared = storage.resources(compose.project_name())
+    rows = [{"id": None, "name": "Shared platform", "mode": "shared", "prepared": True,
+             "containers": shared["containers"], "volumes": shared["volumes"], "ports": [],
+             "local_bytes": None, "source": True, "problem": None}]
+    for pid in sorted(ids):
+        unit = project["playgrounds"].get(pid)
+        record = prepared.get(pid)
+        value = {"resources": {"containers": [], "volumes": [], "networks": []}, "local": None, "error": None, "running": False}
+        try:
+            if record:
+                value = runtime_storage.inventory(pid)
+        except (OSError, ValueError, compose.ComposeError) as error:
+            value["error"] = str(error)
+        damaged = next((problem["message"] for problem in problems if problem["file"] ==
+                        (independent.folder(pid) / "runtime.json").relative_to(paths.ROOT).as_posix()), None)
+        if damaged:
+            value["error"] = damaged
+        resources = value["resources"]
+        row = {"id": pid, "name": (unit or {}).get("name") or (record or {}).get("label") or pid,
+               "mode": "independent", "selected": selected(pid), "prepared": bool(record), "source": unit is not None,
+               "containers": resources["containers"], "volumes": resources["volumes"],
+               "local_bytes": value["local"]["bytes"] if value["local"] else None,
+               "folder": independent.folder(pid).relative_to(paths.ROOT).as_posix() if record else None,
+               "problem": value["error"], "versions": ((record or {}).get("tested") or {}).get("versions", {}),
+               "ports": sorted({str(port) for spec in (record or {}).get("services", {}).values() for port in spec.get("ports", [])}),
+               "prepared_at": (record or {}).get("prepared_at"),
+               "active": bool((record or {}).get("active"))}
+        reason = value["error"] or ("Stop this runtime before cleanup" if value["running"] else None)
+        row["cleanup"] = {"containers": {"enabled": bool(record and not reason and (resources["containers"] or resources["networks"])),
+                                        "reason": reason or (None if resources["containers"] or resources["networks"] else "Containers already removed")},
+                          "data": {"enabled": bool(record and not reason), "reason": reason or (None if record else "Not started yet")}}
+        rows.append(row)
+    running = [c["name"] for row in rows for c in row["containers"] if c["state"] == "running"]
+    try:
+        samples = storage.load(running)
+    except (OSError, ValueError, compose.ComposeError) as error:
+        samples = {}
+        problems.append({"file": "Docker stats", "message": str(error)})
+    for row in rows:
+        if row["id"] is None:
+            row["ports"] = sorted({port for c in row["containers"] for port in c["ports"]})
+        row["running"] = sum(c["state"] in runtime_storage.RUNNING for c in row["containers"])
+        row["state"] = "Running" if row["running"] else "Stopped" if row["prepared"] else "Not started"
+        row["volume_bytes"] = sum(usage["volumes"][v["name"]] for v in row["volumes"]) if not row["problem"] and all(
+            usage["volumes"].get(v["name"]) is not None for v in row["volumes"]) else None
+        each = [samples.get(c["name"]) for c in row["containers"] if c["state"] == "running"]
+        row["cpu_percent"] = round(sum(s["cpu_percent"] for s in each), 1) if all(s is not None for s in each) else None
+        row["memory_bytes"] = sum(s["memory_bytes"] for s in each) if all(s is not None for s in each) else None
+        row["volumes"] = [{"name": v["name"], "bytes": usage["volumes"].get(v["name"])} for v in row["volumes"]]
+        row["containers"] = [{key: c[key] for key in ("name", "service", "state", "ports")} for c in row["containers"]]
+    return {"default": runtime_settings.read()["default"], "runtimes": rows, "shared_storage": usage["shared"], "problems": problems}
+
+
+def cleanup(pid, body):
+    operation = body.get("operation")
+    if body.get("check") is True:
+        return runtime_storage.preview(pid, operation)
+    return runtime_storage.cleanup(pid, operation, body.get("fingerprint"))
+
+
+def managed_action(project, pid, operation):
+    # Source can disappear after an update or an external edit. Its private runtime must still be stoppable.
+    if operation == "stop" and independent.read(pid):
+        return independent.stop(pid)
+    return action(project, pid, operation)
