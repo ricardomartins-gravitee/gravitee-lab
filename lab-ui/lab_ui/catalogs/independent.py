@@ -1,4 +1,4 @@
-"""One private Compose project per playground, assembled with the standalone dependency selector.
+"""One private Compose project per named instance, assembled from its playground's dependency closure.
 
 Catalog source stays in place. Writable binds, Compose volumes, networks, built image
 names and published ports belong to the runtime. Its generated configuration is private
@@ -31,12 +31,12 @@ LOCAL_URL = re.compile(r"(?P<host>https?://(?:localhost|127\.0\.0\.1)):(?P<port>
 
 def folder(pid):
     if not paths.is_id(pid):
-        raise paths.NotFound("No such playground")
-    return paths.ROOT / FOLDER / hashlib.sha256(pid.encode()).hexdigest()[:24]
+        raise paths.NotFound("No such runtime")
+    return paths.ROOT / FOLDER / hashlib.sha256(runtime_settings.key(pid).encode()).hexdigest()[:24]
 
 
 def name(pid):
-    digest = hashlib.sha256((str(paths.ROOT.resolve()) + "\0" + pid).encode()).hexdigest()[:20]
+    digest = hashlib.sha256((str(paths.ROOT.resolve()) + "\0" + runtime_settings.key(pid)).encode()).hexdigest()[:20]
     return "gravitee-pg-" + digest
 
 
@@ -48,8 +48,8 @@ def read(pid):
         value = json.loads(file.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise ValueError("The independent runtime record cannot be read") from error
-    if not isinstance(value, dict) or type(value.get("schema")) is not int or value.get("schema") != 1 or value.get("id") != pid or value.get("project") != name(pid):
-        raise ValueError("The independent runtime record does not match this playground")
+    if not isinstance(value, dict) or type(value.get("schema")) is not int or value.get("schema") != 1 or value.get("id") != runtime_settings.key(pid) or value.get("project") != name(pid):
+        raise ValueError("The independent runtime record does not match this runtime")
     return value
 
 
@@ -276,7 +276,7 @@ def prepare(pid, rebuild=False):
         previous = read(pid)
         if previous and not rebuild:
             return previous
-        gathered = standalone._gather(pid)
+        gathered = standalone._gather(runtime_settings.source(pid))
         catalog_service.preflight(gathered["found"], gathered["nodes"])
         if gathered["unit"].get("blocked") or gathered["unit"].get("needs_catalogs"):
             raise ValueError("; ".join((gathered["unit"].get("blocked") or {}).get("reasons", []))
@@ -285,10 +285,11 @@ def prepare(pid, rebuild=False):
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         config, ports, binds = _config(pid, gathered, previous)
         seed = gathered["unit"].get("seed")
-        value = {"schema": 1, "id": pid, "project": name(pid), "ports": ports, "binds": binds,
+        value = {"schema": 1, "id": runtime_settings.key(pid), "playground": runtime_settings.source(pid),
+                 "project": name(pid), "ports": ports, "binds": binds,
                  "seed": seed, "initialized": bool(previous and previous.get("initialized")),
                  "active": bool(previous and previous.get("active")),
-                 "label": gathered["unit"]["name"],
+                 "label": runtime_settings.instances().get(pid, {}).get("name", gathered["unit"]["name"]),
                  "prepared_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                  "catalogs": sorted({paths.origin(uid) for _, uid in gathered["nodes"]}),
                  "units": [list(node) for node in gathered["nodes"]],
@@ -368,8 +369,11 @@ def _wait(pid, job):
     raise JobFailed("The independent runtime did not become ready within ten minutes")
 
 
+def _label(pid):
+    return runtime_settings.instances().get(pid, {}).get("name", "independent playground")
+
+
 def start(pid, rebuild=False):
-    runtime_settings.assign(pid)
     def run(job):
         job.step("Prepare independent runtime")
         value = prepare(pid, rebuild=rebuild)
@@ -400,7 +404,7 @@ def start(pid, rebuild=False):
         _tested(pid, value)
         value["initialized"] = True
         _write(folder(pid) / "runtime.json", value)
-    return JOBS.start("Start independent playground", [run], key=f"playground:{pid}", verb="start",
+    return JOBS.start("Start " + _label(pid), [run], key=f"playground:{pid}", verb="start",
                       changes={"start": [["playground", pid]]})
 
 
@@ -425,7 +429,7 @@ def stop(pid, remove=False):
         job.exec(command(pid, "stop"))
         value["active"] = False
         _write(folder(pid) / "runtime.json", value)
-    return JOBS.start("Stop independent playground", [run], key=f"playground:{pid}", verb="stop",
+    return JOBS.start("Stop " + _label(pid), [run], key=f"playground:{pid}", verb="stop",
                       changes={"stop": [["playground", pid]]})
 
 
@@ -433,7 +437,7 @@ def reseed(pid):
     value = read(pid)
     if not value or not value["seed"] or not describe(pid)["running"]:
         raise ValueError("Start this independent playground before re-seeding")
-    return JOBS.start("Re-seed independent playground", [command(pid, "run", "--rm", "--no-deps", value["seed"]),
+    return JOBS.start("Re-seed " + _label(pid), [command(pid, "run", "--rm", "--no-deps", value["seed"]),
                       lambda job: _tested(pid, value)],
                       key=f"playground:{pid}", verb="reseed")
 
@@ -442,7 +446,7 @@ def created(pid):
     value = read(pid)
     if not value:
         return []
-    source = (paths.ROOT / paths.unit_folder("playground", pid) / ".state").resolve()
+    source = (paths.ROOT / paths.unit_folder("playground", runtime_settings.source(pid)) / ".state").resolve()
     target = value["binds"].get(str(source))
     if not target:
         return []
@@ -464,7 +468,7 @@ def created(pid):
 
 
 def plan(pid, rebuild=False):
-    gathered = standalone._gather(pid)
+    gathered = standalone._gather(runtime_settings.source(pid))
     catalog_service.preflight(gathered["found"], gathered["nodes"])
     if gathered["unit"].get("blocked") or gathered["unit"].get("needs_catalogs"):
         raise ValueError("; ".join((gathered["unit"].get("blocked") or {}).get("reasons", []))
@@ -503,7 +507,7 @@ def resolve_service(key):
         return None
     for file in (paths.ROOT / FOLDER).glob("*/runtime.json"):
         value = json.loads(file.read_text(encoding="utf-8"))
-        pid = value.get("id")
+        pid = runtime_settings.alias(value.get("id"))
         if not paths.is_id(pid) or read(pid) != value:
             raise ValueError("An independent runtime record is damaged")
         for service_name in value["services"]:

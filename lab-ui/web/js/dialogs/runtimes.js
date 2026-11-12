@@ -1,31 +1,23 @@
-// Runtime defaults and per-playground choices are machine-local; switching never migrates or deletes data.
-import { api, store } from "../core.js";
+// Named independent runtimes are created inside a playground. Normal playgrounds always use the shared platform.
+import { $, api, store, router } from "../core.js";
 import { effectsDialog, planRows, toast } from "../components/ui.js";
 import { runJob } from "../activity/jobs.js";
+import { field, formDialog } from "./form.js";
 
-export async function runtimeSettings(item = null) {
-  try {
-    const settings = await api("/api/playground-runtimes");
-    const current = item ? settings.playgrounds.find((playground) => playground.id === item.id)?.mode : settings.default;
-    if (!["shared", "independent"].includes(current)) throw new Error("Runtime choice could not be read; refresh and try again");
-    const modes = [current, ...["independent", "shared"].filter((mode) => mode !== current)];
-    const selected = await effectsDialog({ title: item ? `Runtime for ${item.name}` : "Default playground runtime",
-      steps: [{ label: "Keeps", items: ["Existing data and catalog links"], note: true }],
-      options: modes.map((mode) => ({ value: mode, label: mode === "independent" ? "Independent" : "Shared",
-        rows: [{ label: mode === "independent" ? "Owns" : "Uses", items: [mode === "independent"
-          ? "Its own platform, storage and ports" : "The Lab's shared platform"] }],
-        sub: !item ? "Applies to newly assigned playgrounds" : mode !== current ? "Existing data stays in its current runtime" : "Current choice" })),
-      action: () => "Save" });
-    if (selected === null) return;
-    await api("/api/playground-runtimes", item ? { id: item.id, mode: selected } : { default: selected });
-    await store.refresh();
-  } catch (error) { toast(error.message, true); }
+let creating = null;
+const openCreate = formDialog("runtime-create", field("runtime-create-name", "Name",
+  '<input id="runtime-create-name" maxlength="60" required>'),
+  { key: "new:runtime", verb: "create", label: "Create runtime" },
+  () => api(`/api/playgrounds/${creating.id}/runtimes`, { name: $("#runtime-create-name").value.trim() }),
+  async (created) => { await store.refresh(); router.go(`#/playgrounds/${created.id}`); });
+
+export function createRuntime(item) {
+  creating = item;
+  openCreate(`Create runtime for ${item.name}`, () => { $("#runtime-create-name").value = ""; });
 }
 
-export const runtimeEntry = (item) => {
-  const reason = store.offline ? store.wait() : item.on ? "Stop this playground before changing its runtime" : "";
-  return { label: "Runtime", disabled: !!reason, reason, onSelect: () => runtimeSettings(item) };
-};
+export const createRuntimeEntry = (item) => ({ label: "Create runtime", disabled: !!store.wait(true),
+  reason: store.wait(true) || "", onSelect: () => createRuntime(item) });
 
 export async function independentAction(item, verb) {
   try {

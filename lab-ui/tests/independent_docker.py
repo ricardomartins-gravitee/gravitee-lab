@@ -300,12 +300,12 @@ class IndependentDocker(unittest.TestCase):
 
     def metadata(self, letter):
         return next(json.loads(file.read_text()) for file in self.root.glob(".lab/runtimes/*/runtime.json")
-                    if json.loads(file.read_text())["id"] == "@linked/" + letter)
+                    if json.loads(file.read_text())["id"] == self.instances[letter])
 
     def runtime_command(self, letter):
         value = self.metadata(letter)
         folder = next(file.parent for file in self.root.glob(".lab/runtimes/*/runtime.json")
-                      if json.loads(file.read_text())["id"] == "@linked/" + letter)
+                      if json.loads(file.read_text())["id"] == self.instances[letter])
         return [*compose.COMPOSE, "--project-directory", str(folder), "-f", str(folder / "compose.json"), "-p", value["project"]]
 
     def cleanup_lab(self):
@@ -330,23 +330,36 @@ class IndependentDocker(unittest.TestCase):
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
 
     def test_private_data_consumers_links_and_shared_platform_survive_stop_resume_and_rebuild(self):
-        for letter in ("a", "b"):
-            self.json(self.lab + "/api/playground-runtimes", "POST", {"id": "@linked/" + letter, "mode": "independent"})
+        self.instances = {}
+        for letter, name in (("a", "Demo"), ("b", "Sandbox")):
+            created = self.json(self.lab + "/api/playgrounds/@linked/a/runtimes", "POST", {"name": name})
+            self.instances[letter] = created["id"]
+        self.assertNotEqual(self.instances["a"], self.instances["b"])
+        unused = self.json(self.lab + "/api/playgrounds/@linked/a/runtimes", "POST", {"name": "Unused"})["id"]
+        unused_path = f"/api/runtimes/{unused}/cleanup"
+        preview = self.json(self.lab + unused_path, "POST", {"operation": "delete", "check": True})
+        self.assertEqual(preview["removes"]["volumes"], [])
+        self.job(unused_path, {"operation": "delete", "fingerprint": preview["fingerprint"]})
+        self.assertFalse(any(p["id"] == unused for p in self.json(self.lab + "/api/state")["playgrounds"]))
+        self.json(self.lab + "/api/playgrounds/@linked/a/runtimes", "POST", {"name": "demo"}, expected=(400,))
+        self.concurrent = self.json(self.lab + "/api/playgrounds/local/concurrent/runtimes", "POST", {"name": "Concurrent"})["id"]
         source_a = self.linked / "playgrounds/a"
         original = (source_a / "compose.yml").read_bytes()
-        self.json(self.lab + "/api/playground-runtimes", "POST", {"id": "local/concurrent", "mode": "independent"})
+        parent = next(p for p in self.json(self.lab + "/api/state")["playgrounds"] if p["id"] == "@linked/a")
+        self.assertEqual(parent["runtime"]["mode"], "shared")
+        self.assertFalse(parent["on"])
         self.current = "a"
         print("Start private A and create real consumer access", flush=True)
-        self.job("/api/playgrounds/@linked/a/start", {})
-        self.assertIn("@linked/a", json.loads((self.root / ".lab/tested.json").read_text()))
+        self.job(f"/api/playgrounds/{self.instances['a']}/start", {})
+        self.assertIn(self.instances["a"], json.loads((self.root / ".lab/tested.json").read_text()))
         app = self.consumer_app("Independent consumer A")
         sub = self.consumer_sub("a", app)
         key = next(row for row in self.consumer_keys(sub) if not row["revoked"])
         self.assert_key_access("a", key["key"], True)
-        self.job("/api/playgrounds/local/concurrent/start", {})
+        self.job(f"/api/playgrounds/{self.concurrent}/start", {})
         self.assert_key_access("a", key["key"], True)
-        self.assertTrue(next(item for item in self.json(self.lab + "/api/state")["playgrounds"] if item["id"] == "@linked/a")["on"])
-        self.job("/api/playgrounds/local/concurrent/stop", {})
+        self.assertTrue(next(item for item in self.json(self.lab + "/api/state")["playgrounds"] if item["id"] == self.instances["a"])["on"])
+        self.job(f"/api/playgrounds/{self.concurrent}/stop", {})
         api_id = self.api("a")["id"]
         own = self.metadata("a")
         state_file = Path(own["binds"][str((source_a / ".state").resolve())]) / "created.json"
@@ -354,17 +367,19 @@ class IndependentDocker(unittest.TestCase):
         data = Path(own["binds"][str((source_a / ".state/app").resolve())])
         (data / "sentinel").write_text("private user data")
         self.command([*self.runtime_command("a"), "exec", "-T", "redis", "redis-cli", "SET", "private-sentinel", "only-a"])
-        self.job("/api/playgrounds/@linked/a/stop", {})
+        self.job(f"/api/playgrounds/{self.instances['a']}/stop", {})
         self.current = "b"
         print("Start private B; prove A and shared Redis are separate", flush=True)
-        self.job("/api/playgrounds/@linked/b/start", {})
+        self.job(f"/api/playgrounds/{self.instances['b']}/start", {})
         self.assertFalse(any(row["id"] == api_id for row in self.management("/apis?perPage=100")["data"]))
         self.assertEqual(self.command([*self.runtime_command("b"), "exec", "-T", "redis", "redis-cli", "GET", "private-sentinel"]), "")
         self.assertFalse(set(own["ports"].values()) & set(self.metadata("b")["ports"].values()))
-        self.job("/api/playgrounds/@linked/b/stop", {})
+        self.assert_key_access("a", key["key"], False)
+        other_api = self.api("a")["id"]
+        self.assertNotEqual(other_api, api_id)
         self.current = "a"
         print("Resume A with the same API, subscription, key and user data", flush=True)
-        self.job("/api/playgrounds/@linked/a/start", {})
+        self.job(f"/api/playgrounds/{self.instances['a']}/start", {})
         self.assertEqual(self.api("a")["id"], api_id)
         self.assertEqual(self.consumer("/applications/" + app["id"])["id"], app["id"])
         self.assertEqual(self.management(self.sub_path(sub))["status"], "ACCEPTED")
@@ -373,29 +388,32 @@ class IndependentDocker(unittest.TestCase):
         self.assertEqual(state_file.read_bytes(), ownership, "Resume reran its seed")
         self.assertEqual((data / "sentinel").read_text(), "private user data")
         self.assertEqual(self.command([*self.runtime_command("a"), "exec", "-T", "redis", "redis-cli", "GET", "private-sentinel"]), "only-a")
-        self.job("/api/playgrounds/@linked/a/stop", {})
+        self.job(f"/api/playgrounds/{self.instances['a']}/stop", {})
         print("Rebuild refreshes inputs and keeps mutable data and ports", flush=True)
-        self.job("/api/playgrounds/@linked/a/runtime/rebuild", {})
+        self.job(f"/api/playgrounds/{self.instances['a']}/runtime/rebuild", {})
         self.assertEqual(self.metadata("a")["ports"], own["ports"])
         self.assertEqual((data / "sentinel").read_text(), "private user data")
         self.assert_key_access("a", key["key"], True)
-        self.job("/api/playgrounds/@linked/a/stop", {})
+        self.job(f"/api/playgrounds/{self.instances['a']}/stop", {})
         self.cleanup_workflow(api_id, app, sub, key, own, state_file, ownership, data, source_a)
         self.assertEqual(self.command([*compose.COMPOSE, "exec", "-T", "redis", "redis-cli", "GET", "shared-sentinel"]), "keep-original")
         self.assertTrue((self.root / ".lab/catalogs/linked").is_symlink())
         self.assertTrue(source_a.is_symlink())
         self.assertEqual((source_a / "compose.yml").read_bytes(), original)
         self.assertFalse((source_a / ".state/created.json").exists())
-        print("Independent runtime end-to-end checks passed", flush=True)
+        self.current = "b"
+        self.assertEqual(self.api("a")["id"], other_api)
+        self.job(f"/api/playgrounds/{self.instances['b']}/stop", {})
+        print("Named runtime end-to-end checks passed", flush=True)
 
 
     def cleanup_workflow(self, api_id, app, sub, key, own, state_file, ownership, data, source):
         print("Remove A's containers while C stays running; resume the same data", flush=True)
-        self.job("/api/runtimes/local/concurrent/start", {})
-        path = "/api/runtimes/@linked/a/cleanup"
+        self.job(f"/api/runtimes/{self.concurrent}/start", {})
+        path = f"/api/runtimes/{self.instances['a']}/cleanup"
         listing = self.json(self.lab + "/api/runtimes")
-        a = next(row for row in listing["runtimes"] if row["id"] == "@linked/a")
-        b = next(row for row in listing["runtimes"] if row["id"] == "@linked/b")
+        a = next(row for row in listing["runtimes"] if row["id"] == self.instances["a"])
+        b = next(row for row in listing["runtimes"] if row["id"] == self.instances["b"])
         self.assertFalse(a["running"])
         self.assertTrue(a["cleanup"]["containers"]["enabled"])
         self.assertGreater(a["local_bytes"], 0)
@@ -412,19 +430,19 @@ class IndependentDocker(unittest.TestCase):
         self.job(path, {"operation": "containers", "fingerprint": plan["fingerprint"]})
         self.command(["docker", "volume", "inspect", *volumes])
         self.assertEqual(state_file.read_bytes(), ownership)
-        self.job("/api/runtimes/@linked/a/start", {})
+        self.job(f"/api/runtimes/{self.instances['a']}/start", {})
         self.assertEqual(self.api("a")["id"], api_id)
         self.assertEqual(self.consumer("/applications/" + app["id"])["id"], app["id"])
         self.assertIn(key["key"], [row["key"] for row in self.consumer_keys(sub)])
         self.assert_key_access("a", key["key"], True)
         self.assertEqual((data / "sentinel").read_text(), "private user data")
         self.assertEqual(state_file.read_bytes(), ownership, "Recreating containers replayed the seed")
-        self.assertTrue(next(p for p in self.json(self.lab + "/api/state")["playgrounds"] if p["id"] == "@linked/a")["up"])
+        self.assertTrue(next(p for p in self.json(self.lab + "/api/state")["playgrounds"] if p["id"] == self.instances["a"])["up"])
         self.json(self.lab + path, "POST", {"operation": "data", "check": True}, expected=(400,))
         self.command([*self.runtime_command("a"), "exec", "-T", "a-backend", "sh", "-c",
                       "mkdir -p /data/root-owned; echo private > /data/root-owned/file"])
         (data / "catalog-link").symlink_to(source.resolve(), target_is_directory=True)
-        self.job("/api/runtimes/@linked/a/stop", {})
+        self.job(f"/api/runtimes/{self.instances['a']}/stop", {})
         print("Reject a stale deletion, then remove only A's data and start it fresh", flush=True)
         plan = self.json(self.lab + path, "POST", {"operation": "data", "check": True})
         self.assertEqual(set(plan["removes"]["volumes"]), set(volumes))
@@ -440,14 +458,17 @@ class IndependentDocker(unittest.TestCase):
         self.assertNotEqual(removed.returncode, 0)
         self.command(["docker", "volume", "inspect", *other_volumes])
         listing = self.json(self.lab + "/api/runtimes")
-        self.assertFalse(next(row for row in listing["runtimes"] if row["id"] == "@linked/a")["prepared"])
-        self.assertTrue(next(row for row in listing["runtimes"] if row["id"] == "local/concurrent")["running"])
+        self.assertFalse(next(row for row in listing["runtimes"] if row["id"] == self.instances["a"])["prepared"])
+        self.assertTrue(next(row for row in listing["runtimes"] if row["id"] == self.concurrent)["running"])
         self.assertTrue(source.is_symlink())
-        self.job("/api/runtimes/@linked/a/start", {})
+        self.job(f"/api/runtimes/{self.instances['a']}/start", {})
         self.assertNotEqual(self.api("a")["id"], api_id)
         self.assert_key_access("a", key["key"], False)
-        self.job("/api/runtimes/@linked/a/stop", {})
-        self.job("/api/runtimes/local/concurrent/stop", {})
+        self.job(f"/api/runtimes/{self.instances['a']}/stop", {})
+        delete = self.json(self.lab + path, "POST", {"operation": "delete", "check": True})
+        self.job(path, {"operation": "delete", "fingerprint": delete["fingerprint"]})
+        self.assertFalse(any(p["id"] == self.instances["a"] for p in self.json(self.lab + "/api/state")["playgrounds"]))
+        self.job(f"/api/runtimes/{self.concurrent}/stop", {})
 
 
 if __name__ == "__main__":
