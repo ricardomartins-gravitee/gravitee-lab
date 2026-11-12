@@ -26,6 +26,7 @@ const page = installDom({
     const call = { method: options.method || "GET", path, body: options.body ? JSON.parse(options.body) : undefined };
     if (route !== "/api/state") server.calls.push(call);
     if (route === "/api/state") return reply(store.state);
+    if (route === "/api/playground-runtimes" && call.method !== "POST") return reply({ default: "independent" });
     if (route === "/api/places") return server.down ? reply({ error: "Broken" }, 500) : reply(server.places);
     if (route.endsWith("/guide")) return reply({ markdown: "# Guide\n\n## 1. One\n\nClick it.\n" });
     if (route.endsWith("/check")) return reply({ checks: server.checks(query), dialog: server.dialog(query) });
@@ -1095,7 +1096,7 @@ test("its file button reads View and shows no path of this machine; the file of 
   const file = section.querySelector("#pg-actions [data-file]");
   assert.deepEqual([file.getAttribute("data-tip"), file.getAttribute("aria-label")], ["View compose.yml", "View compose.yml"]);
   section.querySelector("#pg-actions [data-more]").click();
-  assert.deepEqual(entries(), [["Export", ""], ["Export for Docker Compose", ""], ["Copy to Personal", ""]],
+  assert.deepEqual(entries(), [["Runtime", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Copy to Personal", ""]],
     "a playground of a catalog has a More with Export, Export for Docker Compose and Copy to Personal");
   page.doc.dispatchEvent(Object.assign(new Ev("click"), { target: page.doc.body }));
   await leave();
@@ -1110,9 +1111,9 @@ test("a playground of this machine has a More, last of the page's actions, with 
   assert.deepEqual([button.getAttribute("aria-label"), button.getAttribute("data-tip"), button.getAttribute("aria-haspopup")], ["More for Acme Hostels", "More", "true"]);
   assert.ok(section.querySelector("#pg-actions .row-icons").lastElementChild === button, "at the end, after its files");
   button.click();
-  assert.deepEqual(entries(), [["Export", ""], ["Export for Docker Compose", ""], ["Share", ""], ["Delete", ""]]);
+  assert.deepEqual(entries(), [["Runtime", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Share", ""], ["Delete", ""]]);
   assert.equal(menu.querySelectorAll(".menu-sep").length, 1);
-  assert.ok(menu.querySelectorAll(".menu-item")[3].classList.contains("danger"));
+  assert.ok(menu.querySelectorAll(".menu-item")[4].classList.contains("danger"));
   page.doc.dispatchEvent(Object.assign(new Ev("click"), { target: page.doc.body }));
   await leave();
 });
@@ -1120,11 +1121,11 @@ test("a playground of this machine has a More, last of the page's actions, with 
 test("Delete of the page is held for the reason the list gives, and the Lab UI not answering holds Share and Delete", async () => {
   await visit({ ...off, personal: true, id: "local/hotels", held: { delete: "Stop Acme Hostels first" } }, { platforms: [], places: [], id: "local/hotels" });
   section.querySelector("#pg-actions [data-more]").click();
-  assert.deepEqual(entries(), [["Export", ""], ["Export for Docker Compose", ""], ["Share", ""], ["Delete", "Stop Acme Hostels first"]]);
+  assert.deepEqual(entries(), [["Runtime", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Share", ""], ["Delete", "Stop Acme Hostels first"]]);
   page.doc.dispatchEvent(Object.assign(new Ev("click"), { target: page.doc.body }));
   store.offline = true;
   section.querySelector("#pg-actions [data-more]").click();
-  assert.deepEqual(entries().map(([, why]) => why), ["Lab UI offline", "Lab UI offline", "Lab UI offline", "Lab UI offline"]);
+  assert.deepEqual(entries().map(([, why]) => why), ["Lab UI offline", "Lab UI offline", "Lab UI offline", "Lab UI offline", "Lab UI offline"]);
   store.offline = false;
   page.doc.dispatchEvent(Object.assign(new Ev("click"), { target: page.doc.body }));
   await leave();
@@ -1416,5 +1417,31 @@ test("a catalog's name and the author's words are text, never markup, in the hea
   assert.equal(text(named), HOSTILE, "as text, whole");
   assert.ok(prepared().some((line) => line.name === `Needs the catalog ${HOSTILE}`));
   assert.ok(prepared().some((line) => line.action === HOSTILE));
+  await leave();
+});
+
+
+test("private Start and Rebuild confirm only their runtime, while Stop explicitly keeps every runtime's data", async () => {
+  const { independentAction, runtimeSettings } = await import("../../../web/js/dialogs/runtimes.js");
+  await visit({ ...off, runtime: { mode: "independent", prepared: true } }, { platforms: [], places: [] });
+  const item = store.state.playgrounds.find((p) => p.id === "hotels");
+  for (const verb of ["start", "rebuild", "stop"]) {
+    server.calls = [];
+    const asked = independentAction(item, verb);
+    await flush();
+    assert.ok(effects().notes.some(([label, values]) => label === "Keeps" && values.includes("All its data")), verb);
+    assert.equal(posts(verb).length, 0, "waits for confirmation");
+    await answer(true);
+    await asked;
+    const path = `/api/playgrounds/hotels/${verb === "rebuild" ? "runtime/rebuild" : verb}`;
+    assert.equal(server.calls.filter((c) => c.method === "POST" && c.path === path).length, 1, verb);
+  }
+  server.calls = [];
+  const asked = runtimeSettings(item);
+  await flush();
+  assert.equal(choices()[0][0], "Independent");
+  await answer(true);
+  await asked;
+  assert.deepEqual(posts("/api/playground-runtimes").map((c) => c.body), [{ id: "hotels", mode: "independent" }]);
   await leave();
 });

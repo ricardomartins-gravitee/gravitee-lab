@@ -134,7 +134,7 @@ function containerHtml(name, state) {
   return `
     <li class="container cols" data-service="${esc(name)}">
       <span></span>
-      <span class="s-name"><span class="c-name" data-tip="${esc([`${service.label} (${name})`, service.description].filter(Boolean).join(": "))}">${esc(service.label)}</span><span class="c-id">${esc(name)}</span>${service.note_apply ? "" : noteBadge(service)}</span>
+      <span class="s-name"><span class="c-name" data-tip="${esc([`${service.label} (${service.runtime?.service || name})`, service.description].filter(Boolean).join(": "))}">${esc(service.label)}</span><span class="c-id">${esc(service.runtime?.service || name)}</span>${service.note_apply ? "" : noteBadge(service)}</span>
       ${stateCell(st, key)}
       ${serviceCells(service)}
       <span class="s-uptime"></span>
@@ -315,8 +315,10 @@ const stays = (state) => state.playgrounds.flatMap((p) => (p.deployed || []).map
 // What Reset says: that it turns off the playground that is on (`reset_turns_off`), what its seed created being gone
 // with the volumes, and what stays in a platform
 function resetConfirm(state) {
-  const off = state.platform.reset_turns_off, left = stays(state);
-  const text = [CONFIRM.reset.text + (off ? `, and turns off ${off}` : ""), left.length && `Stays: ${left.join(", ")}`];
+  const off = state.platform.reset_turns_off, privateOnes = state.playgrounds.filter((p) => p.runtime?.prepared);
+  const left = [...stays(state), ...privateOnes.map((p) => p.name + " (independent)")];
+  const scope = privateOnes.length ? "Deletes the shared platform’s containers and volumes" : CONFIRM.reset.text;
+  const text = [scope + (off ? `, and turns off ${off}` : ""), left.length && `Stays: ${left.join(", ")}`];
   return { ...CONFIRM.reset, text: text.filter(Boolean).join(". ") };
 }
 
