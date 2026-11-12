@@ -154,3 +154,43 @@ test("a playground lists only its named children and offers Create runtime rathe
   assert.equal(calls[0].path, "/api/runtimes?playground=local%2Fa");
   close();
 });
+
+
+test("the More popup follows jobs only while open and reopening targets the chosen source", async () => {
+  const { runtimeManagerEntry } = await import("../../../web/js/dialogs/runtime-manager.js");
+  await show([{ ...privateRow, playground: "local/a" }]);
+  close();
+  calls.length = 0;
+  runtimeManagerEntry(store.item("playground", "local/a")).onSelect();
+  await flush();
+  const dialog = page.doc.querySelector(".runtime-dialog");
+  assert.ok(dialog.open);
+  assert.match(text(dialog.querySelector("h2")), /Private A/);
+  assert.equal(calls[0].path, "/api/runtimes?playground=local%2Fa");
+  assert.equal(posts().length, 0, "opening the inventory changes no runtime");
+  const before = calls.length;
+  store.state.job = { ...job, done: true };
+  store.notify();
+  await flush();
+  assert.ok(calls.length > before, "a completed job updates the open inventory");
+  dialog.querySelector("[data-close]").click();
+  const after = calls.length;
+  store.state.job = { ...job, id: "another", done: true };
+  store.notify();
+  await flush();
+  assert.equal(calls.length, after, "closed popups do not refresh storage");
+  store.state.playgrounds.push({ id: "local/b", name: "Source B", runtime: { mode: "shared" } });
+  payload.runtimes = [{ ...privateRow, name: "Only B", playground: "local/b" }];
+  runtimeManagerEntry(store.item("playground", "local/b")).onSelect();
+  await flush();
+  assert.match(text(dialog), /Source B/);
+  assert.match(text(dialog), /Only B/);
+  assert.equal(calls.at(-1).path, "/api/runtimes?playground=local%2Fb");
+  dialog.querySelector("[data-runtime-menu]").click();
+  const escape = new Ev("keydown", { key: "Escape", cancelable: true });
+  page.doc.dispatchEvent(escape);
+  assert.ok(escape.defaultPrevented, "Escape does not also trigger the browser's modal cancellation");
+  assert.ok(dialog.open);
+  assert.ok(page.ids.menu.hidden);
+  dialog.close();
+});

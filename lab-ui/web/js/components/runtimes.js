@@ -5,9 +5,9 @@ import { createRuntime, independentAction } from "../dialogs/runtimes.js";
 import { openSettings } from "../dialogs/editor.js";
 import { runJob } from "../activity/jobs.js";
 
-export function runtimePanel(root, playground = null) {
+export function runtimePanel(root, playground = null, { heading = true } = {}) {
   let model = null, visible = false, reading = false, pending = false, serial = 0, signature = "";
-  root.innerHTML = `<div class="card runtime-overview"><div class="card-head"><h2>Runtimes</h2>
+  root.innerHTML = `<div class="card runtime-overview"><div class="card-head">${heading ? "<h2>Runtimes</h2>" : ""}
     <div class="page-actions">${playground ? '<button class="btn" data-runtime-create>Create runtime</button>' : ""}<button class="btn" data-runtime-refresh>Refresh storage</button></div></div>
     <div class="runtime-summary"></div><div class="table-wrap"><table class="table"><thead><tr><th>Runtime</th><th>State</th><th>CPU</th><th>Memory</th><th>Storage</th><th>Actions</th></tr></thead>
     <tbody><tr><td colspan="6" class="empty">${loading("Reading runtimes")}</td></tr></tbody></table></div></div>`;
@@ -20,7 +20,7 @@ export function runtimePanel(root, playground = null) {
     const summary = [...(playground ? [] : ["Playgrounds use the shared platform unless a named runtime is opened"]),
       ...(model.shared_storage || []).map((part) => `${part.kind}: ${size(part.bytes)} (machine-wide)`),
       ...(model.problems || []).map((p) => p.message)];
-    setHTML($(".runtime-summary", root), `<p class="sub">${summary.map(esc).join("; ")}</p>`);
+    setHTML($(".runtime-summary", root), summary.length ? `<p class="sub">${summary.map(esc).join("; ")}</p>` : "");
     setHTML($("tbody", root), (model.runtimes || []).map((row, index) => {
       if (playground && row.playground !== playground) return "";
       const total = row.volume_bytes === null ? null : row.volume_bytes + (row.local_bytes || 0);

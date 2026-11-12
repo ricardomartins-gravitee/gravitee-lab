@@ -666,7 +666,7 @@ place gone with its platform, or a place not read yet.
 Ordinary playgrounds always use Shared. Explicitly created, named children own independent Compose projects; several
 children of the same source can run concurrently. Each child has a stable identity and its own page and actions, so
 opening a different runtime never redirects an in-flight action or stops another instance. The catalog list contains
-source playgrounds; children appear inside their source and in Containers. No default/mode settings are exposed.
+source playgrounds; children appear in their source's More > Runtimes dialog and in Containers. No default/mode settings are exposed.
 
 The machine registry maps each child identity to a source and a display name. Legacy private projects are registered
 with an alias to their original storage identity: migration never moves data, changes a Docker project or allocates
@@ -687,7 +687,8 @@ resource use includes active private projects. An unreadable private record is a
 its actions, rather than hiding the whole Lab.
 
 The Containers page's runtime card reads `/api/runtimes` separately from state polling: storage scans and Docker stats
-must not slow the normal state stream. Completed jobs and explicit refresh update the inventory. Creation uses the existing form dialog inside the playground; the normal source page stays Shared. Stopped and source-unavailable runtimes remain visible.
+must not slow the normal state stream. Completed jobs and explicit refresh update the inventory. The inventory opens on demand from More > Runtimes; it does not scan storage or occupy the playground view while closed.
+Creation uses the existing form dialog over that inventory; the normal source page stays Shared. Stopped and source-unavailable runtimes remain visible.
 
 `catalogs/runtime_storage.py` binds cleanup previews to explicit Docker identities and a fingerprint of the private
 filesystem tree. Both confirmation and execution recheck ownership and stopped state. Container removal keeps volumes

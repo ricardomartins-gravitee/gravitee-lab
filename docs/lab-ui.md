@@ -26,12 +26,13 @@ Keep port 9000. The platform's consoles and the playground apps let only that ad
 ## Independent playgrounds
 
 Normal playgrounds always use the shared platform. To create a separate instance, open a playground and choose
-*Create runtime* in its Runtimes section or More menu. Give it a name such as Demo or Sandbox. It opens as a stopped
+*Runtimes* in its More menu, then *Create runtime* in the popup. Give it a name such as Demo or Sandbox. It opens as a stopped
 child of that playground; Start prepares and starts its own platform. Creating it never starts, stops or reassigns
 another runtime. There are no global runtime defaults or per-playground Shared/Independent settings.
 
 Create several named runtimes from the same playground and run them concurrently. Open a named runtime to work in it;
-open its source playground to use Shared. Its links, consoles, Start and Stop target only that named instance.
+open its source playground to use Shared. Its links, consoles, Start and Stop target only that named instance. The runtime inventory is opened on demand from
+More rather than displayed on the playground page.
 
 An independent playground starts its own platform services and dependencies, in a separate Compose project with its own
 networks, storage and loopback ports. Several can run at once. Use the links and consoles on its page: their ports differ
