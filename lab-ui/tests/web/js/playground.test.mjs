@@ -26,7 +26,8 @@ const page = installDom({
     const call = { method: options.method || "GET", path, body: options.body ? JSON.parse(options.body) : undefined };
     if (route !== "/api/state") server.calls.push(call);
     if (route === "/api/state") return reply(store.state);
-    if (route === "/api/playground-runtimes" && call.method !== "POST") return reply({ default: "independent" });
+    if (route === "/api/playground-runtimes" && call.method !== "POST") return reply(server.runtimes || { default: "shared",
+      playgrounds: store.state.playgrounds.map((item) => ({ id: item.id, mode: item.runtime?.mode || "shared" })) });
     if (route === "/api/places") return server.down ? reply({ error: "Broken" }, 500) : reply(server.places);
     if (route.endsWith("/guide")) return reply({ markdown: "# Guide\n\n## 1. One\n\nClick it.\n" });
     if (route.endsWith("/check")) return reply({ checks: server.checks(query), dialog: server.dialog(query) });
@@ -294,6 +295,40 @@ test("with no platform registered the page is today's, whatever the playground d
   assert.ok(!/Deploy/.test(text(section)), "no word of a place");
   assert.deepEqual(groups().map(([name]) => name), ["API Management", "Playground"]);
   await leave();
+});
+
+test("runtime settings select the saved default or playground choice, even when the page is stale", async () => {
+  const { runtimeSettings } = await import("../../../web/js/dialogs/runtimes.js");
+  await visit({ ...off, runtime: { mode: "independent" } }, { platforms: [], places: [] });
+  const item = store.state.playgrounds.find((p) => p.id === "hotels");
+  try {
+    for (const [scope, saved, pageMode, fallback] of [
+      ["default", "shared", "independent", "shared"],
+      ["default", "independent", "shared", "independent"],
+      ["playground", "shared", "independent", "independent"],
+      ["playground", "independent", "shared", "shared"],
+      ["playground", "shared", undefined, "independent"],
+    ]) {
+      server.runtimes = { default: fallback, playgrounds: [{ id: item.id, mode: saved }] };
+      item.runtime = pageMode ? { mode: pageMode } : undefined;
+      server.calls = [];
+      const asked = runtimeSettings(scope === "default" ? null : item);
+      await flush();
+      assert.equal(choices()[0][0], saved === "shared" ? "Shared" : "Independent", `${scope}: ${saved}`);
+      assert.equal(picks.querySelector("input:checked").value, "0");
+      await answer(true);
+      await asked;
+      assert.deepEqual(posts("/api/playground-runtimes").map((call) => call.body),
+        [scope === "default" ? { default: saved } : { id: item.id, mode: saved }]);
+    }
+    server.runtimes = { default: "independent", playgrounds: [] };
+    server.calls = [];
+    await runtimeSettings(item);
+    assert.deepEqual(posts("/api/playground-runtimes"), [], "a missing playground never inherits the default silently");
+  } finally {
+    delete server.runtimes;
+    await leave();
+  }
 });
 
 test("a place kept for the playground is not known before the places are read: nothing deploys, and the picker says it waits", async () => {

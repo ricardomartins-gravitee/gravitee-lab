@@ -17,7 +17,7 @@ LOCK = threading.RLock()
 def read():
     file = paths.ROOT / FILE
     if not file.exists():
-        return {"schema": 1, "default": "independent", "playgrounds": {}}
+        return {"schema": 1, "default": "shared", "playgrounds": {}}
     try:
         value = json.loads(file.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:

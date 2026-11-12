@@ -664,7 +664,8 @@ place gone with its platform, or a place not read yet.
 ### Independent runtimes
 
 Runtime settings belong to the machine, not the catalog. Existing playgrounds are pinned Shared on first upgrade;
-new assignments take the default, initially Independent. A playground must be off before changing its runtime.
+new assignments take the default, initially Shared. A playground must be off before changing its runtime. The settings
+dialog reads the saved default or playground choice from the settings API, rather than stale page state.
 
 `server/runtimes.py` overlays private runtime state and stable, scoped service keys on the shared state. Its actions
 resolve those keys back to a validated runtime before invoking Compose. The compiler in `catalogs/independent.py`

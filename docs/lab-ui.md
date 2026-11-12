@@ -27,7 +27,7 @@ Keep port 9000. The platform's consoles and the playground apps let only that ad
 
 Choose *Runtime settings* in Containers (also available from Playgrounds) to set the default for newly assigned
 playgrounds. Choose *Runtime* in a playground's More menu to give that playground an *Independent* or *Shared* runtime.
-Stop it before changing the choice.
+Stop it before changing the choice. The initial default is Shared; Independent is an explicit choice.
 Existing playgrounds stay Shared when you upgrade; changing the default never moves their data.
 
 An independent playground starts its own platform services and dependencies, in a separate Compose project with its own
