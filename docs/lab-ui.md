@@ -23,6 +23,34 @@ Keep port 9000. The platform's consoles and the playground apps let only that ad
 9000, `make ui` says so and names `UI_PORT`:
 [Port 9000 is taken](troubleshooting.md#port-9000-is-taken-or-the-lab-ui-is-already-running).
 
+## Independent playgrounds
+
+Choose *Runtime settings* on Playgrounds to set the default for newly assigned playgrounds. Choose *Runtime* in a
+playground's More menu to give that playground an *Independent* or *Shared* runtime. Stop it before changing the choice.
+Existing playgrounds stay Shared when you upgrade; changing the default never moves their data.
+
+An independent playground starts its own platform services and dependencies, in a separate Compose project with its own
+networks, storage and loopback ports. Several can run at once. Use the links and consoles on its page: their ports differ
+from the shared platform's. Start, Stop, Restart, Re-seed, logs and the terminal act on that runtime alone.
+
+Stop keeps its data, including API edits, applications, subscriptions, API keys and the seed's ownership record. Start resumes
+it without replaying its seed. *Rebuild runtime from current settings* refreshes its configuration, images and read-only
+inputs, preserves its writable data and ports, and does not replay its seed. Choose *Re-seed* explicitly to apply seed data again.
+
+The Lab keeps private configuration and copied mounts in `.lab/runtimes/`, and runtime choices in
+`.lab/playground-runtimes.json`. Catalogs and linked worktrees stay in place. Changing runtime creates no migration: the
+shared platform's existing data stays there, and switching back to a prepared private runtime resumes that runtime's data.
+The Containers page's platform controls and `make` commands still act on the shared project. They leave independent
+runtimes untouched; stop those from their playground pages. Catalog replacement and removal wait while a private
+runtime using the catalog is on.
+
+Independence uses more memory and disk space. Normal Compose volumes and dedicated writable folders are isolated;
+external management endpoints, host networking, privileged services, devices, Docker socket mounts, external secrets and
+non-local volume drivers cannot be made independent. Start reports the incompatible setting before running containers.
+External SaaS and other remote dependencies remain external. Browser URLs in settings, guides and read-only text inputs
+that use `localhost` or `127.0.0.1` with an explicit published port are rewritten. Configure endpoints through settings;
+addresses embedded in a compiled application need to be configured by that application.
+
 ## Where API Management runs
 
 The core is the Gravitee platform under everything else: API Management, Access Management, Alert Engine, Gamma and their
