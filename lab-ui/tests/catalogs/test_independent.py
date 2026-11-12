@@ -19,6 +19,7 @@ from tests import Case
 class Independent(Case):
     def setUp(self):
         self.folder(paths)
+        self.patch(independent.catalog_service, "preflight")
         self.inputs = {}
         for letter in ("a", "b"):
             pid = "local/" + letter
@@ -192,3 +193,13 @@ class Independent(Case):
         self.assertEqual(proof["versions"], {"FIXTURE_VERSION": "8.0.0"})
         self.assertEqual(proof["images"], {"FIXTURE_VERSION": "sha256:private-image"})
         self.assertEqual(identify.call_args.args[0]["container"], value["project"] + "-db-1")
+
+    def test_catalog_gate_runs_before_a_private_compilation_or_container_start(self):
+        independent.catalog_service.preflight.side_effect = RuntimeError("Installed catalog changed")
+        jobs = self.patch(independent, "JOBS")
+        with self.assertRaisesRegex(RuntimeError, "catalog changed"):
+            independent.plan("local/a")
+        with self.assertRaisesRegex(RuntimeError, "catalog changed"):
+            self.prepare()
+        jobs.start.assert_not_called()
+        self.assertFalse(independent.folder("local/a").exists())
