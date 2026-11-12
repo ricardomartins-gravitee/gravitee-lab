@@ -8,8 +8,8 @@ import { effectsDialog, paintLinks, platformLinks, progressBar, dockerDown, stat
   actionButton, paintActions, planRows, accepted, itemLink, openButton, noteHtml, licenseForm, starButton, toggleStar, pluginWords,
   GAP, applyBadge, TURNS, fileButtons } from "../components/ui.js";
 import { runJob, busy, showOutput, cancelJob, jobTitle } from "../activity/jobs.js";
-import { createRuntimeEntry, rebuildRuntimeEntry, independentAction } from "../dialogs/runtimes.js";
-import { runtimePanel } from "../components/runtimes.js";
+import { rebuildRuntimeEntry, independentAction } from "../dialogs/runtimes.js";
+import { runtimeManagerEntry } from "../dialogs/runtime-manager.js";
 import { openFile, openSettings } from "../dialogs/editor.js";
 import { share, home } from "../dialogs/create.js";
 import { addCatalog, tryAgain } from "../dialogs/catalog.js";
@@ -195,7 +195,7 @@ const copyToPersonal = (x) => planned(x, "copy", `/api/${x.kind}s/${x.id}/copy`,
 
 // The menu of a playground's head: Export when it can be, Export for Docker Compose, Move to Personal for an imported one, Copy to Personal for one of a catalog,
 // Share and Delete for one of this machine
-const menuOf = (x) => x.runtime?.parent ? [rebuildRuntimeEntry(x)] : [createRuntimeEntry(x), x.runtime?.mode === "independent" && rebuildRuntimeEntry(x), exportable(x) && exportEntry(x), x.kind === "playground" && standaloneEntry(x), movable(x) && moveEntry(x), copyable(x) && copyEntry(x), x.personal && shareEntry(x),
+const menuOf = (x) => x.runtime?.parent ? [runtimeManagerEntry(x), rebuildRuntimeEntry(x)] : [runtimeManagerEntry(x), x.runtime?.mode === "independent" && rebuildRuntimeEntry(x), exportable(x) && exportEntry(x), x.kind === "playground" && standaloneEntry(x), movable(x) && moveEntry(x), copyable(x) && copyEntry(x), x.personal && shareEntry(x),
   ...(x.personal ? [{ separator: true }, deleteEntry(x)] : [])].filter(Boolean);
 
 // A file the server made, as base64, saved where the browser saves downloads
@@ -762,20 +762,9 @@ function missing(state) {
   setHTML($("#pg-view", root), `<div class="empty">${loading("Loading")}</div>`);
 }
 
-let runtimeList = null, runtimeParent = null;
 function render(state) {
   const item = store.item("playground", shown);
   if (!item) return missing(state);
-  const parent = item.runtime?.parent || item.id;
-  if (runtimeParent !== parent) {
-    runtimeList?.hide();
-    runtimeParent = parent;
-    const holder = $("#pg-runtimes", root);
-    holder.innerHTML = "<div></div>";   // A route owns its listeners; leaving it retires the old panel.
-    runtimeList = runtimePanel(holder.firstElementChild, parent);
-    runtimeList.show();
-  }
-  runtimeList.render(state);
   // The checks are read when the page opens, then after each job: it may have changed what they say. And for the place
   // the picker is on, whichever place that turns out to be once the places are read.
   const ended = state.job?.done ? state.job.id : null;
@@ -913,8 +902,7 @@ export const playgroundPage = {
         <div class="page-title pg-heading"><nav class="crumbs" aria-label="Breadcrumb"><a class="crumb" href="#/playgrounds">Playgrounds</a><span class="crumb-sep" aria-hidden="true">/</span></nav><h1 id="pg-title"></h1><span id="pg-star"></span></div>
         <div class="page-actions" id="pg-actions"></div>
       </div>
-      <div id="pg-view"><div class="empty">${loading("Loading")}</div></div>
-      <div id="pg-runtimes"></div>`;
+      <div id="pg-view"><div class="empty">${loading("Loading")}</div></div>`;
     root.addEventListener("click", (e) => {
       const on = (selector) => e.target.closest(selector), item = store.item("playground", shown);
       // The license, from its note or its line of the checks: the form that takes a new one
@@ -983,8 +971,6 @@ export const playgroundPage = {
 
   // Another page of the guide hides then shows the page at once; any other address leaves it
   hide() {
-    runtimeList?.hide();
-    runtimeParent = null;
     clearInterval(timer);
     clearInterval(refresher);
     refresher = null;
