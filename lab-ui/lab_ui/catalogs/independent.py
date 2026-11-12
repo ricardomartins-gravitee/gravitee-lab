@@ -22,7 +22,7 @@ from .. import paths, products
 from ..docker import compose, images
 from ..docker.jobs import JOBS, JobFailed
 from ..library import layers, model, plugins, runtime_settings, tested
-from . import standalone
+from . import service as catalog_service, standalone
 
 FOLDER = ".lab/runtimes"
 LOCK = threading.RLock()
@@ -277,6 +277,7 @@ def prepare(pid, rebuild=False):
         if previous and not rebuild:
             return previous
         gathered = standalone._gather(pid)
+        catalog_service.preflight(gathered["found"], gathered["nodes"])
         if gathered["unit"].get("blocked") or gathered["unit"].get("needs_catalogs"):
             raise ValueError("; ".join((gathered["unit"].get("blocked") or {}).get("reasons", []))
                              or "The playground needs its catalog dependencies before it can run")
@@ -287,6 +288,8 @@ def prepare(pid, rebuild=False):
         value = {"schema": 1, "id": pid, "project": name(pid), "ports": ports, "binds": binds,
                  "seed": seed, "initialized": bool(previous and previous.get("initialized")),
                  "active": bool(previous and previous.get("active")),
+                 "label": gathered["unit"]["name"],
+                 "prepared_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                  "catalogs": sorted({paths.origin(uid) for _, uid in gathered["nodes"]}),
                  "units": [list(node) for node in gathered["nodes"]],
                  "oneshots": [key for key in config["services"] if gathered["found"]["services"].get(key, {}).get("oneshot")],
@@ -350,6 +353,8 @@ def _wait(pid, job):
         for key in value["services"]:
             row = rows.get(key, {})
             if key in value["oneshots"]:
+                if value["initialized"] and not row:
+                    continue   # Container cleanup keeps the completed initialization in its volumes.
                 if row.get("State") == "exited" and row.get("ExitCode") not in (None, 0):
                     raise JobFailed(f"{value['services'][key]['label']} failed")
                 good &= row.get("State") == "exited" and row.get("ExitCode", 0) == 0
@@ -460,6 +465,7 @@ def created(pid):
 
 def plan(pid, rebuild=False):
     gathered = standalone._gather(pid)
+    catalog_service.preflight(gathered["found"], gathered["nodes"])
     if gathered["unit"].get("blocked") or gathered["unit"].get("needs_catalogs"):
         raise ValueError("; ".join((gathered["unit"].get("blocked") or {}).get("reasons", []))
                              or "The playground needs its catalog dependencies before it can run")

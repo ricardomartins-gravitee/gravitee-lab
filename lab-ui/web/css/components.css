@@ -1108,3 +1108,8 @@ dialog .pairs .snippet { flex: 1; }
   input:is([type="checkbox"], [type="radio"]) { width: 20px; height: 20px; }
   .more-options > summary { min-height: var(--h-control); }
 }
+
+/* A runtime keeps its source and captured storage visible after its containers are removed. */
+.runtime-overview { margin-bottom: var(--sp-4); }
+.runtime-overview .sub { display: block; }
+.runtime-summary { padding: 0 var(--pad) var(--sp-3); }

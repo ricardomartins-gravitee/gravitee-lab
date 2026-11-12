@@ -157,7 +157,7 @@ jobs:
           python-version: "3.15"
       - name: Install Compose
         uses: ./.github/actions/compose
-      - name: Verify private data and consumer access through Gravitee
+      - name: Verify private data, cleanup and consumer access through Gravitee
         run: PYTHONPATH=lab-ui python -m tests.independent_docker
         env:
           INDEPENDENT_E2E_ARTIFACTS: ${{ runner.temp }}/independent-playgrounds

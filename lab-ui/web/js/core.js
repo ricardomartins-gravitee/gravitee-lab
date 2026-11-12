@@ -480,3 +480,12 @@ export const router = {
   // fn() runs once a page is left, as it hides: what was open over it (a menu, the picker, the drawer) closes
   onLeave(fn) { leaving.push(fn); },
 };
+
+
+// Disk uses decimal units; memory can opt into the binary units of Docker's settings.
+export function size(bytes, binary = false) {
+  if (bytes === null || bytes === undefined) return "—";
+  const [kilo, mega, giga] = binary ? [2 ** 10, 2 ** 20, 2 ** 30] : [1e3, 1e6, 1e9];
+  if (bytes >= giga) return `${(bytes / giga).toFixed(1)} GB`;
+  return bytes >= mega ? `${Math.round(bytes / mega)} MB` : bytes >= kilo ? `${Math.round(bytes / kilo)} kB` : `${bytes} B`;
+}

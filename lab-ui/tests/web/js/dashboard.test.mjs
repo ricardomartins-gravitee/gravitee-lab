@@ -368,7 +368,7 @@ test("its Start, Apply and Stop are the Containers page's, button for button and
   assert.deepEqual(["start", "stop"].map((verb) => text(section.querySelector(`[data-stack="${verb}"] .pbtn-face`))), ["Start all", "Stop all"]);
   assert.deepEqual(["start", "stop"].map((verb) => text(containers.querySelector(`[data-stack="${verb}"] .pbtn-face`))), ["Start", "Stop"]);
   assert.ok(section.querySelectorAll(".page-actions [data-act-for]").every((button) => button.dataset.actFor === "platform"));
-  assert.equal(containers.querySelectorAll(".page-actions button").length, 6, "the Containers page keeps every action");
+  assert.equal(containers.querySelectorAll(".page-head .page-actions button").length, 6, "the Containers page keeps every action");
   assert.equal(containers.querySelector("[data-more]").getAttribute("aria-label"), "More");
   dashboardPage.hide();
 });

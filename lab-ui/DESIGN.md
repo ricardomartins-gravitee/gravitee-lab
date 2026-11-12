@@ -680,6 +680,17 @@ Platform controls remain scoped to the shared project. The private runtime group
 resource use includes active private projects. An unreadable private record is a problem of that playground and holds
 its actions, rather than hiding the whole Lab.
 
+The Containers page's runtime card reads `/api/runtimes` separately from state polling: storage scans and Docker stats
+must not slow the normal state stream. Completed jobs and explicit refresh update the inventory. Its defaults and
+per-playground choices reuse the existing settings flow. Stopped and source-unavailable runtimes remain visible.
+
+`catalogs/runtime_storage.py` binds cleanup previews to explicit Docker identities and a fingerprint of the private
+filesystem tree. Both confirmation and execution recheck ownership and stopped state. Container removal keeps volumes
+and initialized metadata; readiness tolerates removed completed one-shots on resume. Data deletion removes only the
+selected runtime's volumes and generated folder, with a fixed helper bound to that folder and its verified manifest.
+Catalog source, links, other projects, images and caches are retained. Shared image/cache usage is machine-wide and is
+never added to every runtime's total. Unreadable storage remains unknown and is reported, rather than counted as zero.
+
 ### Playgrounds
 
 - A playground's first Start sets it up, in phases: Plugins, Apps and services ("Platform, apps and services" when the
