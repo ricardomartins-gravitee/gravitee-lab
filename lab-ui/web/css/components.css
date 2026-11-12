@@ -1113,3 +1113,11 @@ dialog .pairs .snippet { flex: 1; }
 .runtime-overview { margin-bottom: var(--sp-4); }
 .runtime-overview .sub { display: block; }
 .runtime-summary { padding: 0 var(--pad) var(--sp-3); }
+
+/* The playground's inventory stays in its More dialog; Containers retains the full overview. */
+.runtime-dialog { --pad: var(--sp-4); width: min(1120px, 96vw); max-width: none; max-height: calc(100dvh - 48px); padding: 0; overflow: hidden; }
+.runtime-dialog[open] { display: flex; flex-direction: column; }
+.runtime-dialog-body { overflow: auto; min-height: 0; }
+.runtime-dialog .runtime-overview { border: 0; margin: 0; }
+.runtime-dialog .card-head { justify-content: flex-end; }
+.runtime-summary:empty { display: none; }

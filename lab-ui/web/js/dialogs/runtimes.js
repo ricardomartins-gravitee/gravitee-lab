@@ -16,9 +16,6 @@ export function createRuntime(item) {
   openCreate(`Create runtime for ${item.name}`, () => { $("#runtime-create-name").value = ""; });
 }
 
-export const createRuntimeEntry = (item) => ({ label: "Create runtime", disabled: !!store.wait(true),
-  reason: store.wait(true) || "", onSelect: () => createRuntime(item) });
-
 export async function independentAction(item, verb) {
   try {
     let rows;

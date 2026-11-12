@@ -297,6 +297,7 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (!anchor) return;
   if (e.key === "Escape") {
+    e.preventDefault();   // Close this menu without also canceling a modal that contains it.
     const button = anchor;
     closeMenu();
     button.focus();
