@@ -1,5 +1,5 @@
 // The Containers page's runtime inventory: stopped runtimes stay visible, and cleanup previews only their own resources.
-import { $, esc, icon, size, api, store, setHTML, loading } from "../core.js";
+import { $, esc, icon, size, api, store, router, setHTML, loading } from "../core.js";
 import { effectsDialog, confirmDialog, openMenu, toast, statusHtml, itemLink, paintActions, actionButton, holdOff } from "./ui.js";
 import { createRuntime, independentAction } from "../dialogs/runtimes.js";
 import { openSettings } from "../dialogs/editor.js";
@@ -108,7 +108,7 @@ export function runtimePanel(root, playground = null, { heading = true, current 
     if (button.hasAttribute("data-runtime-act")) return act(row, button.dataset.runtimeAct);
     if (button.hasAttribute("data-runtime-menu")) {
       const item = source(row), blocked = wait();
-      const choices = row.id ? [{ label: "Source playground", href: `#/playgrounds/${row.playground || row.id}`,
+      const choices = row.id ? [{ label: "Source playground", onSelect: () => router.go(`#/playgrounds/${row.playground || row.id}`),
         disabled: !item, reason: item ? "" : "Catalog source unavailable" }] : [
         { label: "Platform settings", disabled: !!blocked || !item, reason: blocked || "", onSelect: () => openSettings(item) }];
       if (row.id) choices.push(
