@@ -72,7 +72,8 @@ class RuntimeState(Case):
         self.assertEqual(commands[0][-2:], ["restart", "db"])
 
     def test_central_inventory_keeps_stopped_and_missing_source_runtimes_and_counts_exclusive_storage(self):
-        records = [(self.rid, {"active": False, "label": "A", "tested": {"versions": {"VERSION": "1"}}, "services": {}}),
+        records = [(self.rid, {"active": False, "label": "A", "tested": {"versions": {"VERSION": "1"}}, "services": {},
+                              "snapshot": {"images": {"db": "sha256:captured"}, "references": {"db": "store:1"}}}),
                    ("local/orphan", {"active": False, "label": "Orphan", "services": {}})]
         self.patch(runtimes.runtime_storage, "known", return_value=(records, []))
         self.patch(runtimes.storage, "usage", return_value={"volumes": {"own-volume": 200}, "shared": [{"kind": "Images", "bytes": 9000}]})
@@ -83,6 +84,7 @@ class RuntimeState(Case):
         self.patch(runtimes.storage, "load", return_value={})
         result = runtimes.listing(self.project)
         rows = {row["id"]: row for row in result["runtimes"]}
+        self.assertEqual(rows[self.rid]["images"], [{"service": "db", "id": "sha256:captured", "reference": "store:1"}])
         self.assertEqual(rows[self.rid]["volume_bytes"], 200)
         self.assertEqual(rows[self.rid]["local_bytes"], 100)
         self.assertTrue(rows["local/orphan"]["cleanup"]["data"]["enabled"])

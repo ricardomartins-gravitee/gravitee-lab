@@ -32,20 +32,20 @@ Normal playgrounds always use the shared platform. To create a separate instance
 - *Clone Shared* or *Clone <name>* copies the selected running instance's current data. The copy has separate storage
   and ports and stays stopped when copying finishes. Start resumes the copy without replaying its seed.
 
-Cloning a private runtime briefly pauses its application writers, flushes declared datastores, and pauses those stores
-to copy their exclusive volumes and writable files, then
-resumes those same containers. Its captured configuration and images are retained, with new ports. Cloning Shared exports
-only this playground's recorded resources and related consumer access through management APIs. It copies the playground's
-own application files and exclusive application volumes; it never copies a shared database or shared Redis data. Only the
-playground's apps pause while their files are copied. The new platform starts temporarily to import its resources, then stops.
-The source's API resources, ownership records, catalog files and links are not changed.
+Every clone copies the selected runtime's complete volumes and mounted files, along with its resolved configuration
+and exact container images. **Cloning Shared includes all data in the Shared runtime, including other playgrounds.**
+It captures all configured services that have containers there. To copy only a private instance's data, clone that named
+runtime instead. No management API export, resource filtering or database rewriting is involved: API definitions,
+applications, subscriptions, keys, Gamma and Access Management data retain their identities and credentials.
 
-Shared export supports V4 HTTP proxy APIs, their plans and documentation, portal resources, applications, subscriptions and
-API keys. Resources without an adapter, shared consumer applications or groups, and ambiguous storage are refused rather
-than omitted or copied wholesale. Private storage cloning covers other resource types without an API export. A stopped
-source must be started first. A failed or canceled clone stays stopped and cannot be started or rebuilt; use its runtime
-menu to delete the incomplete copy and try again. Copying may briefly defer cancellation while storage is copied or an API
-operation finishes so that source containers can always resume.
+The source's application writers briefly pause, declared datastores flush and pause, storage is copied into new volumes
+and private files, then the same source containers resume. The copy stays stopped throughout. Its networks and host ports
+are separate; localhost URLs in its configuration follow the new ports. URLs stored inside databases or application data
+remain as captured and may need changing in the clone's own consoles. Catalog files and links stay in place.
+
+A stopped source must be started first. External or ambiguous storage is refused. A failed or canceled clone stays stopped
+and cannot be started or rebuilt; delete the incomplete copy and try again. Cancellation may wait for a storage copy to
+finish so that source containers can always resume.
 
 Process memory is not copied. Datastores that buffer persistent writes declare `io.gravitee.snapshot.flush` as a JSON
 array of command arguments in their Compose labels; the command runs inside their own container after application writers
@@ -69,7 +69,7 @@ inputs, preserves its writable data and ports, and does not replay its seed. Cho
 
 The Lab keeps private configuration and copied mounts in `.lab/runtimes/`, and named runtime identities in
 `.lab/playground-runtimes.json`. Catalogs and linked worktrees stay in place. Shared data enters a named runtime only through
-an explicitly selected, playground-scoped clone. Existing private projects appear as named children after an upgrade,
+an explicitly selected clone of the complete Shared runtime. Existing private projects appear as named children after an upgrade,
 with their folders, volumes and ports intact.
 The Containers page's platform controls and `make` commands still act on the shared project. They leave independent
 runtimes untouched; stop those from their playground pages or the runtime inventory in Containers. Catalog replacement
@@ -79,7 +79,7 @@ and removal wait while a private runtime using the catalog is on.
 
 The *Runtimes* card on Containers lists the shared platform and independent playgrounds, including stopped runtimes and
 kept data whose catalog source is unavailable. It shows CPU, memory and storage. Choose a storage value to inspect its
-volumes, runtime files, ports and captured versions. *Refresh storage* reads disk usage again. Images and build caches
+volumes, runtime files, ports and captured versions. Clones also show their source image references and exact image IDs. *Refresh storage* reads disk usage again. Images and build caches
 are shown once as machine-wide storage; several runtimes can use the same image layers.
 
 Use a runtime's menu to open its source playground, restart or rebuild it. Source settings apply at first Start;

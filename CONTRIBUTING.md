@@ -65,6 +65,18 @@ There is one lab per machine: the Compose project is named `gravitee` and its co
 
 CI runs the same checks on every pull request.
 
+The runtime Docker workflows use disposable Labs with linked catalogs; they do not use an installed Lab:
+
+```sh
+PYTHONPATH=lab-ui python3 -m tests.runtime_clone_docker
+PYTHONPATH=lab-ui python3 -m unittest tests.gamma_am_clone_docker.AmCloneDocker
+```
+
+To include Gamma, set `RUNTIME_CLONE_TEST_LICENSE` privately to a license with Gamma enabled and run
+`PYTHONPATH=lab-ui python3 -m unittest tests.gamma_am_clone_docker.GammaAmCloneDocker`. Do not put the license in a command,
+commit or test artifact. These workflows verify complete Shared and private storage copies, working keys and credentials,
+source preservation, and linked catalogs.
+
 ## Add an add-on, a setup or a playground
 
 Items do not live in this repository: they live in catalogs. The ones the Lab shows by default are in the

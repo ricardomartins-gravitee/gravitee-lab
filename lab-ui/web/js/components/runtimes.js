@@ -91,6 +91,7 @@ export function runtimePanel(root, playground = null, { heading = true, current 
       { label: "Volumes", items: row.volumes.map((v) => `${v.name}: ${size(v.bytes)}`) },
       { label: "Runtime files", items: row.folder ? [`${row.folder}: ${size(row.local_bytes)}`] : [] },
       { label: "Captured versions", items: Object.entries(row.versions || {}).map(([key, value]) => `${key}: ${value}`) },
+      { label: "Captured images", items: (row.images || []).map((image) => `${image.service}: ${image.reference} (${image.id})`) },
       { label: "Prepared", items: row.prepared_at ? [new Date(row.prepared_at).toLocaleString()] : [] },
       { label: "Problem", items: row.problem ? [row.problem] : [] }];
     effectsDialog({ title: row.name, options: [{ value: true, rows: rows.map((row) => ({ ...row, note: true })) }], action: () => "Close" });
