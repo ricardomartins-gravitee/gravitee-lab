@@ -83,7 +83,9 @@ class RuntimeCloneDocker(independent_docker.IndependentDocker):
         sub = self.consumer_sub("a", app)
         key = next(row["key"] for row in self.consumer_keys(sub) if not row["revoked"])
         self.assert_key_access("a", key, True)
-        (source / ".state/app/sentinel").write_text("current playground files")
+        # Docker can own a Shared app's bind directory on Linux.
+        self.command([*compose.COMPOSE, "exec", "-T", "a-backend", "sh", "-c",
+                      "printf '%s' 'current playground files' > /data/sentinel"])
         ownership = (source / ".state/created.json").read_bytes()
 
         definition = self.management("/apis/" + api_id + "/_export/definition")
