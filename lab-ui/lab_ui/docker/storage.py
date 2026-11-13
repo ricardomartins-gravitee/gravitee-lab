@@ -8,6 +8,7 @@ import csv
 import io
 import json
 import re
+from pathlib import Path
 
 from . import compose
 
@@ -42,7 +43,8 @@ def resources(project):
         names = ask(kind, "ls", *( ["-a"] if kind == "container" else []), "-q", "--filter", f"label={PROJECT}={project}").split()
         rows = inspect(kind, names)
         if kind == "container":
-            found["containers"] = [{"id": row["Id"], "name": row["Name"].lstrip("/"), "state": row["State"]["Status"],
+            found["containers"] = [{"id": row["Id"], "name": row["Name"].lstrip("/"),
+                "state": "paused" if row["State"].get("Paused") else row["State"]["Status"],
                 "project": row["Config"].get("Labels", {}).get(PROJECT),
                 "directory": row["Config"].get("Labels", {}).get(PROJECT + ".working_dir"),
                 "service": row["Config"].get("Labels", {}).get("com.docker.compose.service"),
@@ -93,6 +95,40 @@ def load(names):
     return {row["Name"]: {"cpu_percent": float(row.get("CPUPerc", "0%").rstrip("%") or 0),
                           "memory_bytes": size(row.get("MemUsage", "0B").split("/")[0])}
             for row in (json.loads(line) for line in rows)}
+
+
+def copy_command(source, target, kind="volume"):
+    """Copy into new, empty storage. The source is read-only, including during failures."""
+    mounts = []
+    for value, destination, readonly in ((source, "/from", True), (target, "/to", False)):
+        mount = io.StringIO()
+        csv.writer(mount, lineterminator="").writerow([f"type={kind}", f"source={value}", f"target={destination}",
+                                                    *(["readonly"] if readonly else [])])
+        mounts += ["--mount", mount.getvalue()]
+    return ["docker", "run", "--rm", "--network", "none", "--read-only", "--security-opt", "no-new-privileges",
+            *mounts, "--entrypoint", "sh", FILES_IMAGE, "-c",
+            'test -z "$(ls -A /to)" || exit 21; cp -a /from/. /to/']
+
+
+def bind_writers(folders):
+    """Containers writing overlapping host folders, without reading their environments."""
+    found = set()
+    ids = ask("container", "ls", "-a", "-q", "--no-trunc").split()
+    template = '{"id":{{json .Id}},"mounts":{{json .Mounts}}}'
+    roots = [Path(folder).resolve() for folder in folders]
+    if not roots or not ids:
+        return found
+    for line in ask("container", "inspect", "--format", template, *ids).splitlines():
+        container = json.loads(line)
+        for mount in container.get("mounts", []):
+            if mount.get("Type") != "bind" or not mount.get("RW"):
+                continue
+            # Docker Desktop may show its host path with the VM's /host_mnt prefix.
+            source = mount["Source"]
+            path = Path(source.removeprefix("/host_mnt") if source.startswith("/host_mnt/") else source).resolve()
+            if any(path == root or path in root.parents or root in path.parents for root in roots):
+                found.add(container["id"])
+    return found
 
 
 def network_users(networks):

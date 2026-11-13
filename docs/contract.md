@@ -193,6 +193,12 @@ These are the `io.gravitee` labels the Lab UI reads from a service.
 | `io.gravitee.image.tags` | The Docker Hub repository that lists the image's tags, when its own registry lists them badly |
 | `io.gravitee.role` | `seed` marks the service of a playground that creates its data in Gravitee |
 | `io.gravitee.license` | `required` marks a service that exits without a usable license |
+| `io.gravitee.snapshot.flush` | JSON array of arguments for a command inside this container that flushes buffered persistent writes before a runtime clone |
+
+A snapshot flush command runs after application writers pause and before its datastore pauses. It must return a nonzero
+status when flushing fails. The source resumes if a flush or copy fails. Commands run inside the verified container;
+their arguments are never host shell commands. The core declares flush commands for MongoDB, Elasticsearch and Redis.
+See [independent playgrounds](lab-ui.md#independent-playgrounds) for creation, scope and storage behavior.
 
 A label whose value the Lab acts on takes the values of this table, and a published catalog that gives it another needs a newer
 Gravitee Lab:

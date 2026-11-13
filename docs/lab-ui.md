@@ -26,9 +26,34 @@ Keep port 9000. The platform's consoles and the playground apps let only that ad
 ## Independent playgrounds
 
 Normal playgrounds always use the shared platform. To create a separate instance, open a playground and choose
-*Runtimes* in its More menu, then *Create runtime* in the popup. Give it a name such as Demo or Sandbox. It opens as a stopped
-child of that playground; Start prepares and starts its own platform. Creating it never starts, stops or reassigns
-another runtime. There are no global runtime defaults or per-playground Shared/Independent settings.
+*Runtimes* in its More menu, then *Create runtime* in the popup. Give it a name such as Demo or Sandbox and choose *Start from*:
+
+- *Fresh from playground* registers a stopped child. First Start prepares its platform and runs its initial seed.
+- *Clone Shared* or *Clone <name>* copies the selected running instance's current data. The copy has separate storage
+  and ports and stays stopped when copying finishes. Start resumes the copy without replaying its seed.
+
+Cloning a private runtime briefly pauses its application writers, flushes declared datastores, and pauses those stores
+to copy their exclusive volumes and writable files, then
+resumes those same containers. Its captured configuration and images are retained, with new ports. Cloning Shared exports
+only this playground's recorded resources and related consumer access through management APIs. It copies the playground's
+own application files and exclusive application volumes; it never copies a shared database or shared Redis data. Only the
+playground's apps pause while their files are copied. The new platform starts temporarily to import its resources, then stops.
+The source's API resources, ownership records, catalog files and links are not changed.
+
+Shared export supports V4 HTTP proxy APIs, their plans and documentation, portal resources, applications, subscriptions and
+API keys. Resources without an adapter, shared consumer applications or groups, and ambiguous storage are refused rather
+than omitted or copied wholesale. Private storage cloning covers other resource types without an API export. A stopped
+source must be started first. A failed or canceled clone stays stopped and cannot be started or rebuilt; use its runtime
+menu to delete the incomplete copy and try again. Copying may briefly defer cancellation while storage is copied or an API
+operation finishes so that source containers can always resume.
+
+Process memory is not copied. Datastores that buffer persistent writes declare `io.gravitee.snapshot.flush` as a JSON
+array of command arguments in their Compose labels; the command runs inside their own container after application writers
+pause and must fail if flushing fails. The core declares this for MongoDB, Elasticsearch and Redis. Stores resume before
+their writers. Older runtime records inherit a core flush command only when its image exactly matches the running image;
+otherwise rebuild the source first. Custom stores need an appropriate flush command for their persistence model.
+
+There are no global runtime defaults or per-playground Shared/Independent settings.
 
 Create several named runtimes from the same playground and run them concurrently. Open a named runtime to work in it;
 open its source playground to use Shared. Its links, consoles, Start and Stop target only that named instance. The runtime inventory is opened on demand from
@@ -43,8 +68,9 @@ it without replaying its seed. *Rebuild runtime from current settings* refreshes
 inputs, preserves its writable data and ports, and does not replay its seed. Choose *Re-seed* explicitly to apply seed data again.
 
 The Lab keeps private configuration and copied mounts in `.lab/runtimes/`, and named runtime identities in
-`.lab/playground-runtimes.json`. Catalogs and linked worktrees stay in place. Shared data is never migrated into a named
-runtime. Existing private projects appear as named children after an upgrade, with their folders, volumes and ports intact.
+`.lab/playground-runtimes.json`. Catalogs and linked worktrees stay in place. Shared data enters a named runtime only through
+an explicitly selected, playground-scoped clone. Existing private projects appear as named children after an upgrade,
+with their folders, volumes and ports intact.
 The Containers page's platform controls and `make` commands still act on the shared project. They leave independent
 runtimes untouched; stop those from their playground pages or the runtime inventory in Containers. Catalog replacement
 and removal wait while a private runtime using the catalog is on.
