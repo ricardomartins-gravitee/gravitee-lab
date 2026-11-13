@@ -6,7 +6,7 @@ import { field, formDialog } from "./form.js";
 
 let creating = null;
 const openCreate = formDialog("runtime-create", field("runtime-create-name", "Name",
-  '<input id="runtime-create-name" maxlength="60" required>'),
+  '<div class="search"><input id="runtime-create-name" maxlength="60" required></div>'),
   { key: "new:runtime", verb: "create", label: "Create runtime" },
   () => api(`/api/playgrounds/${creating.id}/runtimes`, { name: $("#runtime-create-name").value.trim() }),
   async (created) => { await store.refresh(); router.go(`#/playgrounds/${created.id}`); });
