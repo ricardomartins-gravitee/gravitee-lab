@@ -46,6 +46,7 @@ class World:
         self.apis = {}           # api id -> the API, its plans and its deployment state
         self.studios = {}        # id -> the studio as it was created, with its authorization check
         self.gateway_calls, self.gateway_serves_after, self.tools_offered = [], 0, {"alice": 7, "tina": 8}
+        self.http_target = None
 
     def routes(self):
         return {
@@ -152,7 +153,11 @@ class World:
     def create_studio(self, call):
         studio_id = f"studio-{next(self.next_id)}"
         self.studios[studio_id] = {**call.json, "fgaEnabled": False}
-        self.apis[studio_id] = {"id": studio_id, "deploymentState": "DEPLOYED"}
+        api = {"id": studio_id, "deploymentState": "DEPLOYED", "name": call.json["name"]}
+        if self.http_target:
+            api["endpointGroups"] = [{"name": "Shared Services API", "type": "tools-http", "endpoints": [
+                {"name": "Shared Services API", "type": "tools-http", "configuration": {"target": self.http_target}}]}]
+        self.apis[studio_id] = api
         return 201, {"id": studio_id, "name": call.json["name"], "contextPath": call.json["contextPath"], "mode": "STUDIO"}
 
     def set_fga(self, call):
@@ -582,6 +587,32 @@ class Studios(WithStudio):
         studio = next(x for x in common.created() if x["kind"] == "studio")
         self.assertEqual((studio["product"], studio["label"], studio["name"]), ("aim-proxies", "MCP studios", "Acme Bakery Toolkit"))
         self.assertEqual(len(studio["digest"]), 64)
+
+    def test_an_api_tool_target_uses_the_runtime_gateway_and_keeps_the_api_path(self):
+        self.with_the_check_off()
+        self.env(GATEWAY_INTERNAL_URL="http://apim-gateway:8082")
+        self.world.http_target = "http://localhost:49826/shared-services"
+        self.seed()
+        [api] = [row for row in self.world.apis.values()
+                 if any((endpoint.get("configuration") or {}).get("target")
+                        for group in row.get("endpointGroups") or [] for endpoint in group.get("endpoints") or [])]
+        self.assertEqual(api["endpointGroups"][0]["endpoints"][0]["configuration"]["target"],
+                         "http://apim-gateway:8082/shared-services")
+        self.assertEqual(api["deploymentState"], "DEPLOYED")
+        self.platform.calls.clear()
+        self.seed()
+        self.assertEqual(self.platform.changes(), [])
+
+    def test_a_loopback_tool_target_stays_when_the_seed_has_no_internal_gateway(self):
+        self.with_the_check_off()
+        self.world.http_target = "http://127.0.0.1:8082/shared-services"
+        self.seed()
+        [api] = [row for row in self.world.apis.values()
+                 if any((endpoint.get("configuration") or {}).get("target")
+                        for group in row.get("endpointGroups") or [] for endpoint in group.get("endpoints") or [])]
+        self.assertEqual(api["endpointGroups"][0]["endpoints"][0]["configuration"]["target"],
+                         "http://127.0.0.1:8082/shared-services")
+        self.assertNotIn(("PUT", V2 + "/apis/" + api["id"]), self.platform.changes())
 
     def test_a_second_run_writes_nothing(self):
         for text in (STUDIO, STUDIO_UNCHECKED):

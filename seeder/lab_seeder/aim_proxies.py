@@ -44,6 +44,7 @@ already (accepted, pending or paused) is left as it is, but for one the seed mad
 import json
 import os
 import re
+from urllib.parse import urlsplit
 
 from . import controls
 from . import gamma
@@ -80,6 +81,19 @@ KINDS = {"mcp-proxy": "MCP proxy", "studio": "MCP studio"}
 VERSION_KEYS = ("supportedProtocolVersions", "protocolVersion")
 # What a subscription of a studio's file may say
 SUBSCRIPTION_KEYS = ("application", "plan", "apiKey")
+
+
+def gateway_target(target, internal):
+    """The tools-http address the gateway can call. Gravitee copies the portal entrypoint, which an independent runtime
+    publishes on the host port a browser uses. That port is closed inside the gateway, so a loopback target is pointed at
+    GATEWAY_INTERNAL_URL and keeps the API path."""
+    url = urlsplit(target)
+    if url.hostname not in ("localhost", "127.0.0.1"):
+        return target
+    suffix = url.path or ""
+    if url.query:
+        suffix += "?" + url.query
+    return internal.rstrip("/") + suffix
 
 
 def fill(value, slug):
@@ -495,7 +509,8 @@ class McpProxies:
         toggled = self.g.aim.get(f"/mcp-proxies/{found['id']}").json().get("fgaEnabled", False) != enabled
         if toggled:
             self.g.aim.put(f"/mcp-studios/{found['id']}/fga", json={"enabled": enabled})
-        if toggled or recomposed:
+        routed = self.route_http_backends(found["id"])
+        if toggled or recomposed or routed:
             self.g.v2.post(f"/apis/{found['id']}/deployments", json=DEPLOYMENT)
         if toggled:
             log(SECTION, f"  ✓ Authorization check {'on' if enabled else 'off'}")
@@ -536,6 +551,29 @@ class McpProxies:
         if answer.status_code in UNSUPPORTED:
             return None
         log(SECTION, f"  ✓ Tools brought back to the file: {len(wanted)} in {name}")
+        return True
+
+    def route_http_backends(self, api_id):
+        """Writes a loopback tools-http target back to this runtime's gateway. A specification update derives that target
+        again from the portal entrypoint, so this follows those writes and deploys with them."""
+        internal = os.getenv("GATEWAY_INTERNAL_URL", "").strip()
+        if not internal:
+            return False
+        api = self.g.v2.get(f"/apis/{api_id}").json()
+        changed = False
+        for group in api.get("endpointGroups") or []:
+            for endpoint in group.get("endpoints") or []:
+                configuration = endpoint.get("configuration")
+                if not isinstance(configuration, dict) or not isinstance(configuration.get("target"), str):
+                    continue
+                updated = gateway_target(configuration["target"], internal)
+                if updated != configuration["target"]:
+                    configuration["target"] = updated
+                    changed = True
+        if not changed:
+            return False
+        self.g.v2.put(f"/apis/{api_id}", json={k: v for k, v in api.items() if k not in STUDIO_API_READ_ONLY})
+        log(SECTION, "  ✓ API tools call this runtime's gateway")
         return True
 
     def subscribe(self, api_id, studio, subscriptions):
@@ -620,6 +658,7 @@ class McpProxies:
         api_id = found["id"]
         changed = self.access(api_id, access) or changed
         changed = self.checks(api_id, name, spec) or changed   # after the tools: writing them may rebuild the check's flow
+        changed = self.route_http_backends(api_id) or changed
         self.deploy(api_id, changed)
         self.subscribe(api_id, name, subscriptions)
         self.wait_served(spec)
