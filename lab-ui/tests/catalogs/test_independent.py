@@ -65,6 +65,41 @@ class Independent(Case):
     def config(self, pid="local/a"):
         return json.loads((independent.folder(pid) / "compose.json").read_text())
 
+    def test_overlapping_writable_and_read_only_mounts_share_the_same_private_files(self):
+        config = self.inputs["local/a"][0]
+        state = self.inputs["local/a"][1]["folder"] / ".state"
+        (state / "app").mkdir()
+        config["services"]["a-app"]["volumes"] = [
+            {"type": "bind", "source": str(state / "app"), "target": "/data"},
+            {"type": "bind", "source": str(state / "app"), "target": "/view", "read_only": True}]
+        value = self.prepare()
+        app = self.config()["services"]["a-app"]["volumes"]
+        self.assertEqual(app[0]["source"], app[1]["source"])
+        self.assertEqual(Path(app[0]["source"]), Path(value["binds"][str(state)]) / "app")
+        self.assertTrue(app[1]["read_only"])
+
+    def test_rebuild_keeps_legacy_overlapping_mount_locations_and_their_existing_data(self):
+        config, gathered = self.inputs["local/a"]
+        state = gathered["folder"] / ".state"
+        (state / "app").mkdir()
+        config["services"]["a-app"]["volumes"] = [{"type": "bind", "source": str(state / "app"), "target": "/data"}]
+        legacy = independent.folder("local/a") / "mounts/legacy-app"
+        legacy.mkdir(parents=True)
+        (legacy / "value").write_text("existing private data")
+        previous = {"binds": {str(state / "app"): str(legacy)}}
+        result, _, _ = independent._config("local/a", gathered, previous)
+        self.assertEqual(result["services"]["a-app"]["volumes"][0]["source"], str(legacy))
+        self.assertEqual((legacy / "value").read_text(), "existing private data")
+
+    def test_container_commands_keep_internal_ports_while_browser_urls_change(self):
+        config = {"healthcheck": {"test": ["CMD", "curl", "http://localhost:6379/health"]},
+                  "labels": {"io.gravitee.snapshot.flush": '["curl", "http://localhost:6379/flush"]',
+                             "io.gravitee.console.test.url": "http://localhost:6379"}}
+        changed = independent.rewrite(config, {"6379": 31000})
+        self.assertEqual(changed["healthcheck"], config["healthcheck"])
+        self.assertEqual(changed["labels"]["io.gravitee.snapshot.flush"], config["labels"]["io.gravitee.snapshot.flush"])
+        self.assertEqual(changed["labels"]["io.gravitee.console.test.url"], "http://localhost:31000")
+
     def test_projects_ports_volumes_networks_built_images_and_mutable_binds_are_private(self):
         a, b = self.prepare("local/a"), self.prepare("local/b")
         self.assertNotEqual(a["project"], b["project"])

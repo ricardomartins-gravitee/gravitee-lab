@@ -1,15 +1,14 @@
 """Cloning refuses ambiguous storage and always resumes its own paused writers.
 
-The real Docker scenario covers resource transfer; these cases exercise failures
+The real Docker scenario covers storage snapshots; these cases exercise failures
 between pause, copy and resume without depending on a Docker daemon.
 """
 
 import copy
-import json
 from unittest.mock import Mock, call
 
 from lab_ui import paths
-from lab_ui.catalogs import independent, runtime_clones, runtime_storage
+from lab_ui.catalogs import independent, runtime_clones, runtime_storage, standalone
 from lab_ui.library import runtime_settings
 from lab_ui.docker import compose, storage
 from lab_ui.docker.jobs import JobFailed
@@ -111,14 +110,45 @@ class Clones(Case):
         self.assertIn("--network", command)
         self.assertIn("none", command)
 
-    def test_shared_resources_without_adapters_are_refused_before_any_copy(self):
-        self.patch(runtime_clones, "_configuration", return_value={"name": "shared"})
+    def test_shared_capture_includes_other_active_services_but_requires_its_own_playground(self):
+        self.patch(standalone, "_gather", return_value={"found": {"services": {
+            "a": {"owner": {"kind": "playground", "id": "local/a", "name": "A"}}}}})
+        self.patch(standalone, "_products", return_value=set())
+        self.patch(standalone, "_keep", return_value={"a"})
+        config = {"name": "shared", "services": {"a": {}, "b": {}, "unused": {}}}
+        self.patch(compose, "config_json", return_value=config)
+        self.patch(storage, "resources", return_value={"containers": [{"service": "a"}, {"service": "b"}]})
+        self.assertEqual(set(runtime_clones._configuration("local/a")["services"]), {"a", "b"})
+        config["services"].pop("a")
+        with self.assertRaisesRegex(ValueError, "Start the source playground"):
+            runtime_clones._configuration("local/a")
+
+    def test_changed_container_configuration_is_refused_before_pinning_or_pausing(self):
+        target = runtime_settings.create("local/a", "Copy")["id"]
+        self.patch(runtime_clones, "_running", return_value={"containers": [{"id": "ours"}]})
+        self.patch(storage, "inspect", return_value=[{"Config": {"Labels": {
+            "com.docker.compose.service": "a", "com.docker.compose.config-hash": "old"}}}])
+        self.patch(compose, "config_hashes", return_value={"a": "changed"})
+        execute = self.patch(runtime_clones, "_execute")
+        with self.assertRaisesRegex(ValueError, "configuration differs"):
+            runtime_clones._snapshot(Mock(), {}, "local/a", target, {"services": {}})
+        execute.assert_not_called()
+
+    def test_shared_volumes_used_outside_the_project_are_refused(self):
+        self.patch(storage, "ask", return_value="ours\nexternal")
+        rows = {"containers": [{"id": "ours"}], "volumes": [
+            {"name": "shared_data", "key": "data", "driver": "local", "options": {}}]}
+        with self.assertRaisesRegex(ValueError, "exclusive local storage"):
+            runtime_clones._volumes({"services": {}}, [], rows)
+
+    def test_all_resource_types_use_storage_without_reading_ownership_records(self):
+        config = {"name": "shared"}
+        self.patch(runtime_clones, "_configuration", return_value=config)
         self.patch(runtime_clones, "_running")
         file = self.root / paths.unit_folder("playground", "local/source") / ".state/created.json"
         file.parent.mkdir(parents=True)
-        file.write_text(json.dumps([{"product": "aim-proxies", "kind": "studio"}]))
-        with self.assertRaisesRegex(ValueError, "Shared cloning.*Gamma"):
-            runtime_clones.check("local/source")
+        file.write_text("not a resource export")
+        self.assertEqual(runtime_clones.check("local/source"), config)
         self.assertFalse((self.root / ".lab/runtimes").exists())
 
     def test_a_failed_compiler_leaves_an_unusable_clone_that_can_be_deleted(self):
@@ -126,10 +156,11 @@ class Clones(Case):
         self.patch(runtime_clones, "check", return_value={})
         start = self.patch(runtime_clones.JOBS, "start")
         execute = self.patch(runtime_clones, "_execute")
-        self.patch(independent, "prepare", side_effect=ValueError("Input changed"))
+        self.patch(runtime_clones, "_helper")
+        self.patch(runtime_clones, "_snapshot", side_effect=ValueError("Input changed"))
         runtime_clones.create({}, "local/source", rid)
         with self.assertRaisesRegex(ValueError, "Input changed"):
-            start.call_args.args[1][0](Mock())
+            start.call_args.args[1][0](Mock(_canceled=False))
         self.assertTrue(independent.read(rid)["clone_pending"])
         execute.assert_not_called()
         self.patch(storage, "resources", return_value={"containers": [], "networks": [], "volumes": []})
@@ -137,25 +168,19 @@ class Clones(Case):
         plan = runtime_storage.preview(rid, "delete")
         self.assertEqual(plan["removes"]["folders"], [independent.folder(rid).relative_to(paths.ROOT).as_posix()])
 
-    def test_success_discards_export_credentials_and_foreign_ownership_metadata(self):
+    def test_success_marks_only_the_new_snapshot_initialized_and_stopped(self):
         rid = runtime_settings.create("local/source", "Copy")["id"]
         self.patch(runtime_clones, "check", return_value={})
         start = self.patch(runtime_clones.JOBS, "start")
         self.patch(runtime_clones, "_helper")
         record = {"schema": 1, "id": rid, "project": independent.name(rid), "services": {}}
-        self.patch(independent, "prepare", return_value=record)
-        def copy_resources(*args):
-            folder = independent.folder(rid) / "clone"
-            folder.mkdir()
-            (folder / "foreign.json").write_text("other ownership metadata")
-            return record
-        self.patch(runtime_clones, "_shared", side_effect=copy_resources)
+        self.patch(runtime_clones, "_snapshot", return_value=record)
         runtime_clones.create({}, "local/source", rid)
-        job = Mock()
-        job._canceled = False
-        start.call_args.args[1][0](job)
-        self.assertFalse((independent.folder(rid) / "clone").exists())
-        self.assertFalse(independent.read(rid)["clone_pending"])
+        start.call_args.args[1][0](Mock(_canceled=False))
+        value = independent.read(rid)
+        self.assertFalse(value["clone_pending"])
+        self.assertTrue(value["initialized"])
+        self.assertFalse(value["active"])
 
     def test_anonymous_image_volumes_are_explicit_and_private_in_the_copy(self):
         config = {"services": {"db": {}}, "volumes": {}}
