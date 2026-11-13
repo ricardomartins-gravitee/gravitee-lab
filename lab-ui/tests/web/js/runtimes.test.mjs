@@ -11,7 +11,8 @@ const page = installDom({ fetch: async (path, options = {}) => {
   if (!options.body && holdRead && path.startsWith("/api/runtimes")) await holdRead;
   const body = options.body ? JSON.parse(options.body) : null;
   calls.push({ path, body });
-  const value = path.startsWith("/api/runtimes/") && body?.check ? { fingerprint: "reviewed-resources", removes: {
+  const value = /\/api\/playgrounds\/.+\/check/.test(path) ? { checks: [], dialog: { starts: [] } }
+    : path.startsWith("/api/runtimes/") && body?.check ? { fingerprint: "reviewed-resources", removes: {
     containers: ["own-app"], networks: ["own-net"], volumes: body.operation === "data" ? ["own-volume"] : [],
     folders: body.operation === "data" ? [".lab/runtimes/own"] : [] }, keeps: ["Other runtimes", "Catalog source and links"] }
     : path === "/api/state" ? store.state : body ? job : payload;
@@ -70,11 +71,33 @@ test("stopped and missing-source runtimes stay visible, with shared images count
   close();
 });
 
+test("Source playground navigates to the parent for named and legacy runtimes", async () => {
+  for (const row of [{ ...privateRow, id: "runtime-demo", playground: "local/a" }, privateRow]) {
+    await show([row]);
+    location.hash = "#/containers";
+    await menu("Source playground");
+    assert.equal(location.hash, "#/playgrounds/local/a");
+    assert.deepEqual(posts(), [], "navigation never starts or changes a runtime");
+    close();
+  }
+});
+
 test("storage details show captured image references and exact identities", async () => {
   await show([{ ...privateRow, images: [{ service: "db", reference: "store:1", id: "sha256:captured" }] }]);
   root.querySelector("[data-runtime-details]").click();
   await flush();
   assert.match(text(page.ids["choice-list"]), /db: store:1 \(sha256:captured\)/);
+  await choice(false);
+  close();
+});
+
+test("rebuild opens its scoped confirmation before sending a change", async () => {
+  await show();
+  await menu("Rebuild from current settings");
+  assert.equal(calls.at(-1).path, "/api/playgrounds/local/a/check?rebuild=1");
+  assert.match(text(page.ids["choice-title"]), /Rebuild Private A/);
+  assert.match(text(page.ids["choice-list"]), /All its data/);
+  assert.deepEqual(posts(), []);
   await choice(false);
   close();
 });
@@ -202,4 +225,13 @@ test("the More popup follows jobs only while open and reopening targets the chos
   assert.ok(dialog.open);
   assert.ok(page.ids.menu.hidden);
   dialog.close();
+});
+
+test("Restart targets only the selected running runtime", async () => {
+  await show([{ ...privateRow, running: 1 }]);
+  await menu("Restart");
+  mock.timers.tick(600);
+  await flush();
+  assert.deepEqual(posts().map(({ path, body }) => [path, body]), [["/api/runtimes/local/a/restart", {}]]);
+  close();
 });
