@@ -224,7 +224,13 @@ test("the More popup follows jobs only while open and reopening targets the chos
   assert.ok(escape.defaultPrevented, "Escape does not also trigger the browser's modal cancellation");
   assert.ok(dialog.open);
   assert.ok(page.ids.menu.hidden);
-  dialog.close();
+  location.hash = "#/playgrounds/local/b";
+  dialog.querySelector("[data-runtime-menu]").click();
+  const source = page.ids.menu.querySelectorAll(".menu-item").find((el) => text(el) === "Source playground");
+  page.doc.dispatchEvent(new Ev("click", { target: source }));
+  await flush();
+  assert.ok(!dialog.open, "the inventory closes even when the source page is already open");
+  assert.equal(location.hash, "#/playgrounds/local/b");
 });
 
 test("Restart targets only the selected running runtime", async () => {
