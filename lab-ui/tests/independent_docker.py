@@ -19,7 +19,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from lab_ui.docker import compose
+from lab_ui.docker import compose, storage
 
 SOURCE = Path(__file__).resolve().parents[2]
 ENVIRONMENT = "/management/v2/organizations/DEFAULT/environments/DEFAULT"
@@ -326,6 +326,14 @@ class IndependentDocker(unittest.TestCase):
             self.command([*cmd, "down", "-v", "--remove-orphans"])
         if (self.root / "docker-compose.yml").exists():
             self.command([*compose.COMPOSE, "-p", self.name, "down", "-v", "--remove-orphans"])
+        # Containers and volume copies can leave root-owned bind folders on Linux.
+        # Restore only these disposable trees, without following their catalog links.
+        self.command(["docker", "run", "--rm", "--network", "none", "--read-only",
+                      "--security-opt", "no-new-privileges",
+                      "--mount", f"type=bind,source={self.root},target=/lab",
+                      "--mount", f"type=bind,source={self.linked},target=/catalog",
+                      "--entrypoint", "chown", storage.FILES_IMAGE,
+                      "-Rh", f"{os.getuid()}:{os.getgid()}", "/lab", "/catalog"])
         subprocess.run(["docker", "image", "rm", self.seed_image], cwd=self.root, env=self.env,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
 
