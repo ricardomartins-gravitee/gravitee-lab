@@ -81,6 +81,7 @@ services:
       io.gravitee.name: MongoDB
       io.gravitee.description: Stores APIs, applications and configuration
       io.gravitee.group: Databases
+      io.gravitee.snapshot.flush: '["mongosh", "--quiet", "--eval", "if (db.adminCommand({fsync: 1}).ok !== 1) quit(1)"]'
     healthcheck:
       <<: *healthcheck
       interval: 30s        # mongosh starts Node.js at each check: often while it starts, then twice a minute
@@ -114,6 +115,8 @@ services:
       io.gravitee.description: Stores analytics and logs of API traffic
       io.gravitee.group: Databases
       io.gravitee.image.tags: library/elasticsearch
+      io.gravitee.snapshot.flush: >-
+        ["sh", "-c", "curl -fsS -X POST 'http://elasticsearch:9200/_flush?wait_if_ongoing=true' | grep -q '\"failed\":0'"]
     healthcheck:
       <<: *jvm-healthcheck
       test: ["CMD-SHELL", "curl -sf 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=2s'"]
@@ -135,6 +138,7 @@ services:
       io.gravitee.name: Redis
       io.gravitee.description: Stores gateway rate limit counters
       io.gravitee.group: Databases
+      io.gravitee.snapshot.flush: '["redis-cli", "-e", "SAVE"]'
     healthcheck:
       <<: *healthcheck
       test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]

@@ -726,6 +726,7 @@ ROUTES = [(method, re.compile(pattern), handler) for method, pattern, handler in
     ("POST", f"/api/runtimes/{UNIT}/(start|stop|restart|rebuild)", lambda r, pid, op: runtimes.managed_action(project.load(), pid, op)),
     ("POST", f"/api/runtimes/{UNIT}/cleanup", lambda r, pid: runtimes.cleanup(pid, r.body)),
     ("POST", f"/api/playgrounds/{UNIT}/runtimes", lambda r, pid: runtimes.create(project.load(), pid, r.body)),
+    ("GET", f"/api/playgrounds/{UNIT}/runtimes", lambda r, pid: runtimes.creation_options(project.load(), pid)),
     ("POST", f"/api/playgrounds/{UNIT}/runtime/rebuild", lambda r, pid: runtimes.action(project.load(), pid, "rebuild", r.body)),
     ("GET", "/api/jobs/([a-f0-9]{8})", stream_job),
     ("GET", "/api/logs", stream_logs),

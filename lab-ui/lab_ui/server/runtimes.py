@@ -8,7 +8,7 @@ import copy
 import hashlib
 
 from .. import paths
-from ..catalogs import independent, runtime_storage
+from ..catalogs import independent, runtime_clones, runtime_storage
 from ..docker import compose, storage
 from ..docker.jobs import JOBS
 from ..gravitee import frames
@@ -67,7 +67,8 @@ def _overlay(body, project):
                   and key in value["oneshots"] and state["key"] == "absent")]
         state = model.fold(folded, active, verb)
         blocked = project["playgrounds"][pid].get("blocked")
-        reason = body.get("wait") or ("The playground is blocked" if blocked else None)
+        reason = body.get("wait") or ("This clone is incomplete; delete it and create a new runtime" if value and value.get("clone_pending")
+                                     else "The playground is blocked" if blocked else None)
         item.update(on=active, up=state["key"] == "running", state=state,
                     note="Independent", note_title="Its own platform, storage and ports", note_tone="",
                     note_target=None, note_file=None, note_causes=[],
@@ -149,8 +150,33 @@ def create(project, pid, body):
     layers.lookup(project, "playground", pid)
     if selected(pid):
         raise ValueError("Create runtimes inside the source playground")
+    mode = body.get("mode", "fresh")
+    if mode not in ("fresh", "clone"):
+        raise ValueError("Choose Fresh from playground or Clone runtime")
+    source = body.get("source")
+    if mode == "clone":
+        if not isinstance(source, str) or runtime_settings.source(source) != pid:
+            raise ValueError("Clone only a runtime of this playground")
+        runtime_clones.check(source)
     independent.plan(pid, rebuild=True)  # Validate the catalog closure before registering anything.
-    return runtime_settings.create(pid, body.get("name"))
+    created = runtime_settings.create(pid, body.get("name"))
+    if mode == "clone":
+        try:
+            created["job"] = runtime_clones.create(project, source, created["id"]).summary()
+        except Exception:
+            runtime_settings.forget(created["id"])
+            raise
+    return created
+
+
+def creation_options(project, pid):
+    layers.lookup(project, "playground", pid)
+    if selected(pid):
+        raise ValueError("Create runtimes inside the source playground")
+    sources = [{"id": pid, "name": "Shared"}, *[{"id": rid, "name": row["name"]}
+               for rid, row in runtime_settings.instances().items() if row["playground"] == pid]]
+    return {"sources": [{**row, "reason": runtime_clones.reason(row["id"]),
+                         "private": runtime_settings.mode(row["id"]) == "independent"} for row in sources]}
 
 
 def action(project, pid, operation, body=None):
@@ -161,6 +187,8 @@ def action(project, pid, operation, body=None):
     if body.get("place") not in (None, "machine"):
         raise ValueError("An independent runtime runs only on this machine")
     if operation in ("start", "rebuild"):
+        if (independent.read(pid) or {}).get("clone_pending"):
+            raise ValueError("This clone is incomplete; delete it and create a new runtime")
         result = check(project, pid, rebuild=operation == "rebuild")
         if any(row["state"] == "warn" for row in result["checks"]):
             raise ValueError(next(row["detail"] for row in result["checks"] if row["state"] == "warn"))
@@ -301,7 +329,8 @@ def listing(project, fresh=False, playground=None):
                "containers": resources["containers"], "volumes": resources["volumes"],
                "local_bytes": value["local"]["bytes"] if value["local"] else None,
                "folder": independent.folder(pid).relative_to(paths.ROOT).as_posix() if record else None,
-               "problem": value["error"], "versions": ((record or {}).get("tested") or {}).get("versions", {}),
+               "problem": value["error"] or ("This clone is incomplete; delete it and create a new runtime" if (record or {}).get("clone_pending") else None),
+               "versions": ((record or {}).get("tested") or {}).get("versions", {}),
                "ports": sorted({str(port) for spec in (record or {}).get("services", {}).values() for port in spec.get("ports", [])}),
                "prepared_at": (record or {}).get("prepared_at"),
                "active": bool((record or {}).get("active"))}

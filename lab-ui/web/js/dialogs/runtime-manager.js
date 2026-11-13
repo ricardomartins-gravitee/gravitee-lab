@@ -22,7 +22,7 @@ function showRuntimes(item) {
   $("#runtime-manager-title", dialog).textContent = `Runtimes for ${item.runtime?.parent_name || item.name}`;
   const body = $(".runtime-dialog-body", dialog);
   body.innerHTML = "<div></div>";   // Reopening retires the previous inventory's listeners and pending reads.
-  panel = runtimePanel(body.firstElementChild, parent, { heading: false });
+  panel = runtimePanel(body.firstElementChild, parent, { heading: false, current: item.runtime?.parent ? item.id : null });
   if (!dialog.open) dialog.showModal();
   panel.show();
 }

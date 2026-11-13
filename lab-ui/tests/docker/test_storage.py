@@ -14,13 +14,27 @@ class Storage(Case):
         self.patch(storage, "inspect", side_effect=[
             [{"Id": "container-id", "Name": "/own-db", "State": {"Status": "exited"},
               "Config": {"Env": ["PASSWORD=do-not-return"], "Labels": {storage.PROJECT: "own",
-                          storage.PROJECT + ".working_dir": "/private", "com.docker.compose.service": "db"}}}],
+                          storage.PROJECT + ".working_dir": "/private", "com.docker.compose.service": "db"}}},
+             {"Id": "paused-id", "Name": "/own-paused", "State": {"Status": "running", "Paused": True}, "Config": {}},
+             {"Id": "running-id", "Name": "/own-running", "State": {"Status": "running"}, "Config": {}}],
             [{"Id": "network-id", "Name": "own_internal", "Labels": {storage.PROJECT: "own", "com.docker.compose.network": "internal"}}],
             [{"Name": "own_data", "CreatedAt": "today", "Driver": "local", "Labels": {storage.PROJECT: "own", "com.docker.compose.volume": "data"}}]])
         result = storage.resources("own")
         self.assertEqual(result["containers"][0]["id"], "container-id")
         self.assertEqual(result["networks"][0]["key"], "internal")
         self.assertNotIn("do-not-return", json.dumps(result))
+        self.assertEqual({row["id"]: row["state"] for row in result["containers"]},
+                         {"container-id": "exited", "paused-id": "paused", "running-id": "running"})
+
+    def test_writers_of_overlapping_binds_are_found_without_reading_environments(self):
+        self.folder()
+        source = self.root / "source"
+        rows = [{"id": "own", "mounts": [{"Type": "bind", "RW": True, "Source": str(source)}]},
+                {"id": "outside", "mounts": [{"Type": "bind", "RW": True, "Source": str(self.root)}]},
+                {"id": "reader", "mounts": [{"Type": "bind", "RW": False, "Source": str(source)}]}]
+        ask = self.patch(storage, "ask", side_effect=["own outside reader", "\n".join(json.dumps(row) for row in rows)])
+        self.assertEqual(storage.bind_writers([source]), {"own", "outside"})
+        self.assertNotIn("Config.Env", repr(ask.call_args_list))
 
     def test_helper_binds_only_one_private_folder_and_verifies_its_record_before_unlinking(self):
         command = storage.remove_files_command('/tmp/Lab, "test"/runtime', "expected-digest")
