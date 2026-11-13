@@ -25,7 +25,7 @@ function showCopyNote() {
   const source = choices.find((row) => row.id === $("#runtime-create-source").value), note = $("#runtime-create-note");
   note.hidden = !source;
   note.textContent = !source ? "" : source.private ? "Briefly pauses the source containers to copy their data. The copy stays stopped."
-    : "Briefly pauses this playground’s apps to copy their files. The copy stays stopped.";
+    : "Copies all Shared data, including other playgrounds. Briefly pauses Shared containers. The copy stays stopped.";
 }
 $("#runtime-create-source").addEventListener("input", showCopyNote);
 

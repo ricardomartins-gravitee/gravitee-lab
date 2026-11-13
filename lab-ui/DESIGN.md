@@ -680,10 +680,11 @@ Every container this job pauses is resumed in a `finally` path, including after 
 Application writers pause before containers with a declared `io.gravitee.snapshot.flush` hook; each hook runs as argv
 inside its verified container, then that store pauses. Stores unpause before writers. Legacy records inherit only core
 hooks whose image matches the running image. Hook failure aborts the copy and resumes already paused writers.
-Shared cloning never copies platform volumes: the seeder's `runtime_clones`, `checkpoints`, `consumer_states` and `portal_states`
-adapters export only bounded resources, reject foreign dependencies and verify the source again before importing into
-a new management API. Referenced application members map to its configured identity providers. Incomplete targets keep
-`clone_pending`, stay stopped and refuse Start/Rebuild; their normal cleanup remains scoped to their own storage.
+Shared and private cloning use the same storage snapshot path. Shared captures the whole project's storage and existing
+services, including other playgrounds' data, as the creation form says before submission. The compiler isolates ports,
+networks and mounts without filtering or rewriting database resources. Exact image IDs are recorded and given private
+local tags; builds and pulls cannot change the clone at first Start. Incomplete targets keep `clone_pending`, stay stopped
+and refuse Start/Rebuild; their normal cleanup remains scoped to their own storage.
 
 `server/runtimes.py` overlays private runtime state and stable, scoped service keys on the shared state. Its actions
 resolve those keys back to a validated runtime before invoking Compose. The compiler in `catalogs/independent.py`
