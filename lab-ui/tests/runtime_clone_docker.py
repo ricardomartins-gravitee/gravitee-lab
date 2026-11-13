@@ -1,7 +1,7 @@
 """Real fresh/clone creation through Lab HTTP, with shared foreign data and linked sources.
 
 The existing independent Docker fixture supplies disposable projects and Gravitee;
-this scenario proves cross-platform resource transfer and private volume copying.
+this scenario proves whole-runtime storage snapshots and pinned running images.
 """
 
 import json
@@ -65,7 +65,7 @@ class RuntimeCloneDocker(independent_docker.IndependentDocker):
         self.until(done, "runtime clone " + label, timeout=900)
         return answer["id"]
 
-    def test_shared_and_private_clones_keep_current_data_without_copying_other_playgrounds(self):
+    def test_shared_and_private_clones_copy_complete_storage_and_preserve_the_source(self):
         self.instances = {}
         self.current = "shared"
         source = self.root / ".lab/catalogs/linked/playgrounds/a"
@@ -106,7 +106,7 @@ class RuntimeCloneDocker(independent_docker.IndependentDocker):
         other_record.write_text(json.dumps([{"product": "apim", "kind": "api", "label": "APIs", "name": "Independent B", "id": foreign["id"]}]))
         foreign_before = self.management("/apis/" + foreign["id"])
         source_rows = self.command([*compose.COMPOSE, "ps", "--format", "{{.ID}} {{.State}}"])
-        print("Clone Shared without copying its other API, consumer or Redis sentinel", flush=True)
+        print("Clone all Shared storage, including its other API, consumer and Redis sentinel", flush=True)
         self.instances["a"] = self.clone("@linked/a", "Copy of Shared")
         self.assertEqual(self.command([*compose.COMPOSE, "ps", "--format", "{{.ID}} {{.State}}"]), source_rows)
         self.assertEqual(self.management("/apis/" + foreign["id"]), foreign_before)
@@ -126,13 +126,16 @@ class RuntimeCloneDocker(independent_docker.IndependentDocker):
         self.assertEqual(self.api("a")["id"], api_id)
         self.assertEqual(self.command([*self.runtime_command("a"), "exec", "-T", "a-backend", "cat", "/image-version"]), "running-image")
         self.assertEqual(self.management("/apis/" + api_id)["description"], edited["description"])
-        self.assertFalse(any(row["id"] == foreign["id"] for row in self.management("/apis?perPage=100")["data"]))
+        copied_foreign = self.management("/apis/" + foreign["id"])
+        for field in ("id", "name", "description", "endpointGroups", "listeners"):
+            self.assertEqual(copied_foreign[field], foreign_before[field])
         self.assertEqual(self.consumer("/applications/" + app["id"])["name"], app["name"])
-        self.assertEqual(self.request(self.endpoint("apim-management-api", 8083) + "/management/organizations/DEFAULT/environments/DEFAULT/applications/" + foreign_app["id"], auth=True)[0], 404)
+        self.assertEqual(self.consumer("/applications/" + foreign_app["id"])["name"], foreign_app["name"])
+        self.assertEqual(self.consumer_keys(foreign_sub), foreign_keys)
         self.assert_key_access("a", key, True)
         data = Path(self.metadata("a")["binds"][str((source / ".state/app").resolve())])
         self.assertEqual((data / "sentinel").read_text(), "current playground files")
-        self.assertEqual(self.command([*self.runtime_command("a"), "exec", "-T", "redis", "redis-cli", "GET", "shared-sentinel"]), "")
+        self.assertEqual(self.command([*self.runtime_command("a"), "exec", "-T", "redis", "redis-cli", "GET", "shared-sentinel"]), "keep-original")
         self.command([*self.runtime_command("a"), "exec", "-T", "redis", "redis-cli", "SET", "private-clone", "current private data"])
         self.command([*self.runtime_command("a"), "exec", "-T", "mongodb", "sh", "-c", "printf cloned > /data/configdb/clone-marker"])
         identities = self.command([*self.runtime_command("a"), "ps", "--format", "{{.ID}} {{.State}}"])
@@ -162,7 +165,7 @@ class RuntimeCloneDocker(independent_docker.IndependentDocker):
         self.assertTrue(source.is_symlink())
         self.assertTrue((self.root / ".lab/catalogs/linked").is_symlink())
         self.assertEqual(self.command([*compose.COMPOSE, "exec", "-T", "redis", "redis-cli", "GET", "shared-sentinel"]), "keep-original")
-        print("Fresh and scoped clone workflows passed", flush=True)
+        print("Fresh and complete-storage clone workflows passed", flush=True)
 
 
 if __name__ == "__main__":

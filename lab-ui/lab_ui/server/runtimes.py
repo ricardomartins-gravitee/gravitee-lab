@@ -158,7 +158,8 @@ def create(project, pid, body):
         if not isinstance(source, str) or runtime_settings.source(source) != pid:
             raise ValueError("Clone only a runtime of this playground")
         runtime_clones.check(source)
-    independent.plan(pid, rebuild=True)  # Validate the catalog closure before registering anything.
+    if mode == "fresh":
+        independent.plan(pid, rebuild=True)  # A snapshot uses its captured configuration.
     created = runtime_settings.create(pid, body.get("name"))
     if mode == "clone":
         try:
@@ -331,6 +332,9 @@ def listing(project, fresh=False, playground=None):
                "folder": independent.folder(pid).relative_to(paths.ROOT).as_posix() if record else None,
                "problem": value["error"] or ("This clone is incomplete; delete it and create a new runtime" if (record or {}).get("clone_pending") else None),
                "versions": ((record or {}).get("tested") or {}).get("versions", {}),
+               "images": [{"service": key, "id": image,
+                           "reference": ((record["snapshot"].get("references") or {}).get(key) or "")}
+                          for key, image in sorted(((record or {}).get("snapshot") or {}).get("images", {}).items())],
                "ports": sorted({str(port) for spec in (record or {}).get("services", {}).values() for port in spec.get("ports", [])}),
                "prepared_at": (record or {}).get("prepared_at"),
                "active": bool((record or {}).get("active"))}

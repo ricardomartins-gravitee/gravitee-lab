@@ -1,21 +1,19 @@
 """Create stopped child runtimes without writing to their source or catalog.
 
-Private projects copy only their verified exclusive storage while their writers are
-briefly paused. Shared projects export owned resources through the seeder adapter;
-shared platform volumes are never copied. Incomplete targets stay stopped and marked
-unusable, with their definition retained for scoped cleanup.
+Both Shared and private projects copy their complete verified storage while their
+writers are briefly paused. The resolved configuration and exact container images
+travel with the snapshot; no Gravitee resources are exported or rewritten. Incomplete
+targets stay stopped and marked unusable, with their definition retained for cleanup.
 """
 
 import copy
 import hashlib
 import json
 import os
-import shutil
 import time
-import uuid
 from pathlib import Path
 
-from .. import paths, products
+from .. import paths
 from ..docker import compose, storage
 from ..docker.jobs import JOBS, JobFailed
 from ..library import runtime_settings
@@ -29,9 +27,21 @@ def _configuration(pid):
             raise ValueError("Start this runtime successfully before cloning it")
         return json.loads((runtime_storage.directory(pid) / "compose.json").read_text(encoding="utf-8"))
     gathered = standalone._gather(pid)
-    config = compose.config_json(compose.all_files([gathered["unit"]["file"]]), timeout=60)
-    keep = standalone._keep(config, gathered, standalone._products(gathered))
-    config["services"] = {key: value for key, value in config["services"].items() if key in keep}
+    config = compose.config_json(["-f", paths.CORE_FILE, "-f", paths.ON_FILE], timeout=60)
+    own = {key for key, service in gathered["found"]["services"].items()
+           if service.get("owner", {}).get("kind") == "playground" and service["owner"].get("id") == pid}
+    if not own <= set(config["services"]):
+        raise ValueError("Start the source playground successfully before cloning Shared")
+    rows = storage.resources(config["name"])
+    services = {row["service"] for row in rows["containers"]}
+    if services - set(config["services"]):
+        raise ValueError("The Shared runtime has containers outside its current configuration")
+    required = standalone._keep(config, gathered, standalone._products(gathered))
+    lasting = {key for key in required if config["services"][key].get("restart") != "no"
+               and config["services"][key].get("labels", {}).get("io.gravitee.role") != "seed"}
+    if not lasting <= services:
+        raise ValueError("Start the source playground successfully before cloning Shared")
+    config["services"] = {key: value for key, value in config["services"].items() if key in services}
     return config
 
 
@@ -42,28 +52,19 @@ def _running(pid, config):
     live = {row["service"] for row in rows["containers"] if row["state"] == "running"}
     if not lasting or not lasting <= live:
         raise ValueError("Start the source runtime successfully before cloning it")
+    if any(row["state"] not in ("running", "exited", "created") for row in rows["containers"]):
+        raise ValueError("Wait until the source containers are stable before cloning")
     if runtime_settings.mode(pid) == "independent":
         runtime_storage._owned(pid, rows)
+    elif any(row["project"] != config["name"] or not row["directory"]
+             or Path(row["directory"]).resolve() != paths.ROOT.resolve() for row in rows["containers"]):
+        raise ValueError("A Shared container belongs to another Lab directory")
     return rows
 
 
 def check(pid):
     config = _configuration(pid)
     _running(pid, config)
-    if runtime_settings.mode(pid) != "independent":
-        file = _state(pid) / "created.json"
-        if file.exists() or file.is_symlink():
-            if file.is_symlink() or not file.is_file() or file.stat().st_size > 2 * 1024 * 1024:
-                raise ValueError("The playground's ownership record must be a regular file")
-            rows = json.loads(file.read_text(encoding="utf-8"))
-            if not isinstance(rows, list) or not all(isinstance(row, dict) and isinstance(row.get("product"), str)
-                                                   and isinstance(row.get("kind"), str) for row in rows):
-                raise ValueError("The playground's ownership record is damaged")
-            missing = sorted({products.SEEDED.get(row["product"].split("-")[0], "other") for row in rows
-                              if row["kind"] not in products.CLONE_RECORDS.get(row["product"], ())})
-            if missing:
-                raise ValueError("Shared cloning does not yet support this playground's " + ", ".join(missing)
-                                 + " resources; use Fresh from playground")
     return config
 
 
@@ -172,7 +173,10 @@ def _files(source, destination):
     if source.is_symlink():
         raise ValueError("A runtime data folder contains a link")
     if not source.is_dir():
+        before = runtime_storage.tree(source)["fingerprint"]
         independent._copy(source, destination)
+        if runtime_storage.tree(source)["fingerprint"] != before:
+            raise ValueError("The source files changed while copying; retry with a new runtime")
         return
     before = runtime_storage.tree(source)["fingerprint"]
     # Reject links, pipes and devices before a root helper copies a writable directory.
@@ -191,6 +195,13 @@ def _volumes(config, inspected, resources):
     """Include image-declared anonymous volumes, but never adopt an external volume."""
     volumes = {row["name"]: row["key"] for row in resources["volumes"]}
     ids = {row["id"] for row in resources["containers"]}
+    if None in volumes.values() or len(set(volumes.values())) != len(volumes):
+        raise ValueError("Runtime volumes have ambiguous storage identities")
+    for row in resources["volumes"]:
+        users = set(storage.ask("container", "ls", "-a", "-q", "--no-trunc", "--filter", "volume=" + row["name"]).split())
+        if row["driver"] != "local" or row["options"] or not users <= ids:
+            raise ValueError("A runtime volume is not exclusive local storage; cloning is held")
+        config.setdefault("volumes", {}).setdefault(row["key"], {})
     for container in inspected:
         key = container["Config"]["Labels"]["com.docker.compose.service"]
         for mount in container.get("Mounts", []):
@@ -227,47 +238,74 @@ def _same_paused_resources(before, after):
     return observed == expected
 
 
-def _private(job, source, target, config):
-    original = independent.read(source)
-    root, new = runtime_storage.directory(source), independent.folder(target)
+def _snapshot(job, project, source, target, config):
+    source_config = copy.deepcopy(config)
+    private = runtime_settings.mode(source) == "independent"
+    original = independent.read(source) if private else None
+    root = runtime_storage.directory(source) if private else paths.ROOT
+    new = independent.folder(target)
     rows = _running(source, config)
     new.mkdir(parents=True, mode=0o700, exist_ok=True)
     # Freeze the running images, even when the source's mutable local tag changes later.
     inspected = storage.inspect("container", [row["id"] for row in rows["containers"]])
+    files = independent.command(source)[len(compose.COMPOSE):] if private else ["-f", paths.CORE_FILE, "-f", paths.ON_FILE]
+    hashes = compose.config_hashes(files)
+    if hashes is None or any(hashes.get(row["Config"]["Labels"]["com.docker.compose.service"])
+                             != row["Config"]["Labels"].get("com.docker.compose.config-hash") for row in inspected):
+        raise ValueError("The source configuration differs from its containers; apply its settings before cloning")
     _inherit_flushes(config, inspected)
     volumes = _volumes(config, inspected, rows)
+    flushes = _flushes(config, rows["containers"])
     writable = [mount["source"] for service in config["services"].values() for mount in service.get("volumes", [])
                 if mount["type"] == "bind" and not mount.get("read_only")]
     if storage.bind_writers(writable) - {row["id"] for row in rows["containers"]}:
         raise ValueError("A runtime file is writable by another container; its clone cannot be isolated safely")
     actual = {row["Config"]["Labels"]["com.docker.compose.service"]: row["Image"] for row in inspected}
     for key, service in config["services"].items():
-        service["image"] = _pin(target, key, service, actual.get(key))
+        if key not in actual:
+            actual[key] = storage.inspect("image", [service["image"]])[0]["Id"]
+        service["image"] = _pin(target, key, service, actual[key])
         service.pop("build", None)
         service["pull_policy"] = "never"
-    used = {int(p) for _, value in runtime_storage.known()[0] for p in value.get("ports", {}).values()}
-    translate = {str(old): independent._port(used) for old in set(original["ports"].values())}
-    ports = {key: translate[str(old)] for key, old in original["ports"].items()}
-    config = independent.rewrite(config, translate)
-    config["name"] = independent.name(target)
-    for service in config["services"].values():
-        for port in service.get("ports", []):
-            port["published"] = str(translate[str(port["published"])])
-        for mount in service.get("volumes", []):
-            if mount["type"] == "bind":
-                path = Path(mount["source"])
-                if not path.is_relative_to(root):
-                    raise ValueError("A source runtime mount escapes its private directory")
-                mount["source"] = str(new / path.relative_to(root))
-    for kind in ("secrets", "configs"):
-        for spec in config.get(kind, {}).values():
-            if spec.get("file"):
-                spec["file"] = str(new / Path(spec["file"]).relative_to(root))
+    if private:
+        used = {int(p) for _, value in runtime_storage.known()[0] for p in value.get("ports", {}).values()}
+        translate = {str(old): independent._port(used) for old in set(original["ports"].values())}
+        ports = {key: translate[str(old)] for key, old in original["ports"].items()}
+        config = independent.rewrite(config, translate)
+        config["name"] = independent.name(target)
+        for service in config["services"].values():
+            for port in service.get("ports", []):
+                port["published"] = str(translate[str(port["published"])])
+            for mount in service.get("volumes", []):
+                if mount["type"] == "bind":
+                    path = Path(mount["source"])
+                    if not path.is_relative_to(root):
+                        raise ValueError("A source runtime mount escapes its private directory")
+                    mount["source"] = str(new / path.relative_to(root))
+        for kind in ("secrets", "configs"):
+            for spec in config.get(kind, {}).values():
+                if spec.get("file"):
+                    spec["file"] = str(new / Path(spec["file"]).relative_to(root))
+    else:
+        gathered = standalone._gather(source)
+        nodes = set(gathered["nodes"])
+        for key in config["services"]:
+            owner = project["services"].get(key, {}).get("owner") or {}
+            if owner.get("kind") in gathered["units"] and owner.get("id") in gathered["units"][owner["kind"]]:
+                nodes.add((owner["kind"], owner["id"]))
+        gathered["nodes"] = sorted(nodes)
+        config, ports, binds = independent._config(target, gathered, None, dry_run=True, snapshot=config)
+        translate = ports
+        original = independent._record(target, gathered, config, ports, binds)
     value = copy.deepcopy(original)
     value.update(id=runtime_settings.key(target), project=independent.name(target), label=runtime_settings.instances()[target]["name"],
                  ports=ports, active=False, clone_pending=True, cloned_from=source,
                  prepared_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
-    value["binds"] = {key: str(new / Path(path).relative_to(root)) for key, path in value["binds"].items()}
+    if private:
+        value["binds"] = {key: str(new / Path(path).relative_to(root)) for key, path in value["binds"].items()}
+    references = (original.get("snapshot") or {}).get("references") if private else None
+    value["snapshot"] = {"scope": "runtime", "images": actual, "references": references or {
+        key: service.get("image", "") for key, service in source_config["services"].items()}}
     for key, service in value["services"].items():
         service["image"] = config["services"][key].get("image", "")
         service["ports"] = [str(port["published"]) for port in config["services"][key].get("ports", [])]
@@ -278,21 +316,35 @@ def _private(job, source, target, config):
     def transfer():
         _check_canceled(job)
         # No queued operation or changed ownership can widen the copy after the preview.
-        again = storage.resources(original["project"])
-        runtime_storage._owned(source, again)
+        again = storage.resources(source_config["name"])
+        if private:
+            runtime_storage._owned(source, again)
         if not _same_paused_resources(rows, again):
             raise ValueError("The source runtime changed while preparing its clone")
-        for name in ("inputs", "mounts"):
-            if (root / name).exists():
-                if (new / name).exists():
-                    shutil.rmtree(new / name)
-                _files(root / name, new / name)
+        if _configuration(source) != source_config:
+            raise ValueError("The source configuration changed while preparing its clone")
+        if private:
+            files = [(root / name, new / name) for name in ("inputs", "mounts") if (root / name).exists()]
+        else:
+            files = [(Path(real), Path(destination)) for real, destination in value["binds"].items()]
+            for kind in ("configs", "secrets"):
+                for key, spec in config.get(kind, {}).items():
+                    if spec.get("file"):
+                        files.append((Path(source_config[kind][key]["file"]).resolve(), Path(spec["file"])))
+        for origin, destination in files:
+            if any(parent != origin and parent in origin.parents and destination == copy / origin.relative_to(parent)
+                   for parent, copy in files):
+                continue   # Overlapping mounts must remain views of the same copied directory.
+            if origin.exists():
+                _files(origin, destination)
+            else:
+                destination.mkdir(parents=True, mode=0o700)
         for volume, key in volumes.items():
             _check_canceled(job)
             _volume(volume, target, key)
 
-    job.step("Copy private storage; briefly pause its writers")
-    _paused([row["id"] for row in rows["containers"] if row["state"] == "running"], transfer, _flushes(config, rows["containers"]))
+    job.step("Copy runtime storage; briefly pause its writers")
+    _paused([row["id"] for row in rows["containers"] if row["state"] == "running"], transfer, flushes)
     # Captured browser URLs in configuration files follow the clone's ports too.
     for file in (new / "inputs").rglob("*"):
         if file.is_file() and file.stat().st_size <= 16 * 1024 * 1024:
@@ -306,165 +358,10 @@ def _private(job, source, target, config):
     return value
 
 
-def _state(pid):
-    return (paths.ROOT / paths.unit_folder("playground", pid) / ".state").resolve()
-
-
-def _foreign(project, pid):
-    rows = []
-    for other in project["playgrounds"]:
-        if other == pid or runtime_settings.mode(other) == "independent":
-            continue
-        file = _state(other) / "created.json"
-        if file.exists():
-            value = json.loads(file.read_text(encoding="utf-8"))
-            if not isinstance(value, list) or not all(isinstance(row, dict) for row in value):
-                raise ValueError("Another playground has an unreadable ownership record")
-            rows.extend(value)
-    return rows
-
-
-def _adapter(job, config, seed, transaction, operation, private_state):
-    name = "lab-clone-" + uuid.uuid4().hex
-    service = copy.deepcopy(config["services"][seed])
-    service.pop("build", None)
-    service.pop("depends_on", None)
-    service.pop("container_name", None)
-    service.update(entrypoint=["python"], command=["-m", "lab_seeder.runtime_clones", operation, "/checkpoint/resources.json"],
-                   working_dir="/clone-code", restart="no")
-    state_dir = (service.get("environment") or {}).get("STATE_DIR", "/state")
-    service["volumes"] = [{"type": "bind", "source": str(paths.ROOT / "seeder"), "target": "/clone-code", "read_only": True},
-                          {"type": "bind", "source": str(transaction), "target": "/checkpoint"},
-                          {"type": "bind", "source": str(private_state), "target": state_dir}]
-    service["networks"] = {key: {} for key in service.get("networks", {})}
-    # Join the already-running source/target networks, without creating or changing them.
-    networks = {key: {"external": True, "name": (config.get("networks", {}).get(key) or {}).get("name")
-                     or config["name"] + "_" + key} for key in service["networks"]}
-    adapter = transaction / "adapter.json"
-    independent._write(adapter, {"services": {"clone-adapter": service}, "networks": networks})
-    (transaction / "result.json").unlink(missing_ok=True)
-    independent._write(transaction / "owner.json", {"uid": os.getuid(), "gid": os.getgid()})
-    command = [*compose.COMPOSE, "-f", str(adapter), "-p", name, "run", "-d", "--rm", "--no-deps", "--name", name, "clone-adapter"]
-    _execute(command, timeout=120)
-    deadline = time.monotonic() + 600
-    while time.monotonic() < deadline:
-        result = transaction / "result.json"
-        if result.is_file() and not result.is_symlink():
-            answer = json.loads(result.read_text(encoding="utf-8"))
-            if answer.get("ok") is not True:
-                raise JobFailed(answer.get("error") or "The playground clone adapter failed")
-            return
-        rc, out, _ = compose.run(["docker", "inspect", "--format", "{{.State.Running}}", name], timeout=10)
-        if rc or out.strip() != "true":
-            # Check once more: result and container exit can cross between the two reads.
-            if result.exists():
-                continue
-            raise JobFailed("The playground clone adapter stopped without a result")
-        time.sleep(.5)
-    raise JobFailed("The playground clone adapter is still running; its transaction was retained")
-
-
-def _shared(job, project, source, target, config):
-    unit = project["playgrounds"][source]
-    seed = unit.get("seed")
-    value = independent.prepare(target)
-    value.update(clone_pending=True, cloned_from=source)
-    independent._write(independent.folder(target) / "runtime.json", value)
-    transaction = independent.folder(target) / "clone"
-    transaction.mkdir(parents=True, mode=0o700)
-    private_state = transaction / "source-state"
-    private_state.mkdir(mode=0o700)
-    for name in ("created.json", "saved-state-subscriptions.json"):
-        file = _state(source) / name
-        if file.exists():
-            if file.is_symlink() or not file.is_file():
-                raise ValueError("The playground's ownership record must be a regular file")
-            shutil.copy2(file, private_state / name)
-    binding = hashlib.sha256((private_state / "created.json").read_bytes()).hexdigest() if (private_state / "created.json").exists() else None
-    independent._write(transaction / "foreign.json", _foreign(project, source))
-    resources = seed and (private_state / "created.json").exists() and bool(json.loads((private_state / "created.json").read_text(encoding="utf-8")))
-    if resources:
-        job.step("Export only this playground's resources and consumer access")
-        _adapter(job, config, seed, transaction, "export", private_state)
-        _check_canceled(job)
-    own = {key for key, service in project["services"].items()
-           if service.get("owner", {}).get("kind") == "playground" and service["owner"]["id"] == source}
-    rows = _running(source, config)
-    target_config = json.loads((independent.folder(target) / "compose.json").read_text(encoding="utf-8"))
-    actual = {row["Config"]["Labels"]["com.docker.compose.service"]: row["Image"]
-              for row in storage.inspect("container", [row["id"] for row in rows["containers"] if row["service"] in config["services"]])}
-    for key, service in target_config["services"].items():
-        tag = _pin(target, key, config["services"][key], actual.get(key))
-        target_config["services"][key]["image"] = tag
-        target_config["services"][key].pop("build", None)
-        target_config["services"][key]["pull_policy"] = "never"
-        value["services"][key]["image"] = tag
-    independent._write(independent.folder(target) / "compose.json", target_config)
-    members = [row for row in rows["containers"] if row["service"] in own]
-    owned_volumes = {row["name"]: row for row in rows["volumes"]}
-    app_volumes = {mount["Name"] for row in storage.inspect("container", [row["id"] for row in members])
-                   for mount in row.get("Mounts", []) if mount["Type"] == "volume"}
-    for name in app_volumes:
-        row = owned_volumes.get(name)
-        users = set(storage.ask("container", "ls", "-a", "-q", "--no-trunc", "--filter", "volume=" + name).split())
-        if not row or row["driver"] != "local" or row["options"] or not users <= {member["id"] for member in members}:
-            raise ValueError("An application volume is shared or has ambiguous ownership; cloning is held")
-
-    writable = {mount["source"] for key in own for mount in config["services"].get(key, {}).get("volumes", [])
-                if mount["type"] == "bind" and not mount.get("read_only")}
-    if storage.bind_writers(writable) - {row["id"] for row in members}:
-        raise ValueError("A playground file is writable by another container; its clone cannot be isolated safely")
-    home = (paths.ROOT / paths.unit_folder("playground", source)).resolve()
-
-    def transfer():
-        _check_canceled(job)
-        for real, destination in value["binds"].items():
-            path = Path(real)
-            # Only the playground's writable files. Dependency and platform storage stays fresh.
-            if real in {str(Path(item).resolve()) for item in writable}:
-                if path != home and home not in path.parents:
-                    raise ValueError("A shared playground writes outside its own folder; that data cannot be scoped safely")
-                if Path(destination).exists():
-                    if Path(destination).is_dir():
-                        shutil.rmtree(destination)
-                    else:
-                        Path(destination).unlink()
-                if path.exists():
-                    _files(path, Path(destination))
-                else:
-                    Path(destination).mkdir(parents=True, mode=0o700)
-        for name in app_volumes:
-            _check_canceled(job)
-            _volume(name, target, owned_volumes[name]["key"])
-
-    job.step("Copy playground application data")
-    _paused([row["id"] for row in members if row["state"] == "running"], transfer, _flushes(config, members))
-    if resources:
-        _check_canceled(job)
-        if binding != hashlib.sha256((_state(source) / "created.json").read_bytes()).hexdigest():
-            raise ValueError("The source ownership changed during cloning; retry with a new runtime")
-        _adapter(job, config, seed, transaction, "verify", private_state)
-        target_state = Path(value["binds"][str(_state(source))])
-        for file in target_state.glob("*.json"):
-            if file.name in ("created.json", "saved-state-subscriptions.json"):
-                file.unlink()
-        job.step("Start the clone's platform to import its resources")
-        lasting = [key for key in value["services"] if key not in value["oneshots"]]
-        job.exec(independent.command(target, "up", "-d", "--no-build", "--no-deps", *lasting))
-        value["initialized"] = True
-        independent._write(independent.folder(target) / "runtime.json", value)
-        independent._wait(target, job)
-        job.step("Import resources into the independent clone")
-        _adapter(job, target_config, seed, transaction, "import", target_state)
-    value["initialized"] = True
-    return value
-
-
 def create(project, source, target):
     config = check(source)
 
     def run(job):
-        value = None
         # Record the guard before copying even the first input. A failed compiler
         # must leave a deletable, unusable clone instead of an ordinary fresh child.
         independent._write(independent.folder(target) / "runtime.json", {
@@ -472,24 +369,12 @@ def create(project, source, target):
             "project": independent.name(target), "clone_pending": True, "cloned_from": source,
             "initialized": False, "active": False, "ports": {}, "binds": {}, "services": {}, "oneshots": [],
             "catalogs": [], "units": [], "plugins": {}, "tested": {"versions": {}, "services": {}}})
-        try:
-            pending = independent.prepare(target, rebuild=True)
-            pending.update(clone_pending=True, cloned_from=source)
-            independent._write(independent.folder(target) / "runtime.json", pending)
-            _helper(job)
-            if job._canceled:
-                raise JobFailed("Canceled")
-            check(source)
-            value = _private(job, source, target, config) if runtime_settings.mode(source) == "independent" else _shared(job, project, source, target, config)
-            if job._canceled:
-                raise JobFailed("Canceled")
-        finally:
-            # A failed or canceled clone never exposes partially imported data as a usable runtime.
-            if (independent.folder(target) / "compose.json").exists():
-                _execute(independent.command(target, "stop"), timeout=120)
-        transaction = independent.folder(target) / "clone"
-        if transaction.exists():
-            shutil.rmtree(transaction)
+        _helper(job)
+        _check_canceled(job)
+        check(source)
+        # The destination never starts during a snapshot, including after failures.
+        value = _snapshot(job, project, source, target, config)
+        _check_canceled(job)
         value.update(clone_pending=False, initialized=True, active=False)
         independent._write(independent.folder(target) / "runtime.json", value)
         job.lines.append("Created a stopped independent clone; its source and other playgrounds were preserved")

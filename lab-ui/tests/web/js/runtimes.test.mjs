@@ -70,6 +70,15 @@ test("stopped and missing-source runtimes stay visible, with shared images count
   close();
 });
 
+test("storage details show captured image references and exact identities", async () => {
+  await show([{ ...privateRow, images: [{ service: "db", reference: "store:1", id: "sha256:captured" }] }]);
+  root.querySelector("[data-runtime-details]").click();
+  await flush();
+  assert.match(text(page.ids["choice-list"]), /db: store:1 \(sha256:captured\)/);
+  await choice(false);
+  close();
+});
+
 test("container-only cleanup keeps data and sends exactly the reviewed fingerprint", async () => {
   await show();
   await menu("Remove containers");

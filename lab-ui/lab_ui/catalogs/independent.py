@@ -83,7 +83,9 @@ def _port(used):
 
 def rewrite(value, ports):
     if isinstance(value, dict):
-        return {key: rewrite(item, ports) for key, item in value.items()}
+        # These commands run inside the container, where the original ports remain.
+        return {key: item if key in ("healthcheck", "io.gravitee.snapshot.flush") else rewrite(item, ports)
+                for key, item in value.items()}
     if isinstance(value, list):
         return [rewrite(item, ports) for item in value]
     if isinstance(value, str):
@@ -142,12 +144,15 @@ def _requirements(gathered):
         raise ValueError("Set the required settings first: " + ", ".join(sorted({key for names in unset.values() for key in names})))
 
 
-def _config(pid, gathered, previous, dry_run=False):
-    _requirements(gathered)
-    config = compose.config_json(compose.all_files([gathered["unit"]["file"]]), timeout=60)
-    selected = standalone._keep(config, gathered, standalone._products(gathered))
-    config["services"] = {key: value for key, value in config["services"].items() if key in selected}
-    standalone._without(config["services"], set(gathered["found"]["services"]) - selected)
+def _config(pid, gathered, previous, dry_run=False, snapshot=None):
+    if snapshot is None:
+        _requirements(gathered)
+        config = compose.config_json(compose.all_files([gathered["unit"]["file"]]), timeout=60)
+        selected = standalone._keep(config, gathered, standalone._products(gathered))
+        config["services"] = {key: value for key, value in config["services"].items() if key in selected}
+        standalone._without(config["services"], set(gathered["found"]["services"]) - selected)
+    else:
+        config = copy.deepcopy(snapshot)
     config["name"] = name(pid)
     config.pop("include", None)
     ports = copy.deepcopy((previous or {}).get("ports", {}))
@@ -157,6 +162,9 @@ def _config(pid, gathered, previous, dry_run=False):
         value = json.loads(file.read_text(encoding="utf-8"))
         used.update(int(port) for port in value.get("ports", {}).values())
     binds, built = {}, {}
+    writable = {Path(mount["source"]).resolve() for service in config["services"].values()
+                for mount in service.get("volumes", []) if mount["type"] == "bind" and not mount.get("read_only")}
+    roots = [path for path in writable if not any(parent in writable for parent in path.parents)]
     allowed = [gathered["folder"].resolve(), (paths.ROOT / "certs").resolve(), (paths.ROOT / "plugins").resolve()]
     for kind, uid in gathered["nodes"]:
         allowed.append((paths.ROOT / paths.unit_file(kind, uid)).parent.resolve())
@@ -194,20 +202,34 @@ def _config(pid, gathered, previous, dry_run=False):
                 if source.name == "docker.sock" or (source.exists() and source.is_socket()):
                     raise ValueError("Independent runtimes cannot mount the host Docker socket")
                 real = source.resolve()
-                key = hashlib.sha256(str(real).encode()).hexdigest()[:24]
-                if mount.get("read_only"):
+                shared = next((root for root in roots if real == root or root in real.parents), None)
+                base = shared or real
+                key = hashlib.sha256(str(base).encode()).hexdigest()[:24]
+                if shared is None and mount.get("read_only"):
                     # Configuration and frame scripts contain browser endpoints too. Pin
                     # their inputs and rewrite only the private copy after assigning ports.
                     target = folder(pid) / "inputs" / "binds" / key
                     if not dry_run:
                         _mount(real, target, refresh=True)
                 else:
-                    if not any(real == root or root in real.parents for root in allowed):
+                    if not any(base == root or root in base.parents for root in allowed):
                         raise ValueError("A writable bind is outside the playground and its dependencies")
-                    target = folder(pid) / "mounts" / key
-                    empty = ".state" in real.parts or not source.exists()
+                    private = folder(pid) / "mounts" / key
+                    target = private / real.relative_to(base)
+                    saved = (previous or {}).get("binds", {}).get(str(real))
+                    if saved:
+                        target = Path(saved)
+                        if not target.is_relative_to(folder(pid)):
+                            raise ValueError("A saved runtime mount escapes its private directory")
+                        if target != private / real.relative_to(base):
+                            # Older runtimes stored overlapping mounts separately. Rebuild
+                            # keeps their existing data instead of switching to an empty path.
+                            base, private = real, target
+                    empty = ".state" in base.parts or not base.exists()
                     if not dry_run:
-                        _mount(real, target, empty=empty)
+                        _mount(base, private, empty=empty)
+                        if empty and (source.is_dir() or not source.exists()):
+                            target.mkdir(parents=True, exist_ok=True, mode=0o700)
                     binds[str(real)] = str(target)
                 binds[str(real)] = str(target)
                 mount["source"] = str(target)
@@ -271,6 +293,41 @@ def _config(pid, gathered, previous, dry_run=False):
     return config, ports, binds
 
 
+def _record(pid, gathered, config, ports, binds, previous=None):
+    seed = gathered["unit"].get("seed")
+    value = {"schema": 1, "id": runtime_settings.key(pid), "playground": runtime_settings.source(pid),
+             "project": name(pid), "ports": ports, "binds": binds,
+             "seed": seed, "initialized": bool(previous and previous.get("initialized")),
+             "active": bool(previous and previous.get("active")),
+             "label": runtime_settings.instances().get(pid, {}).get("name", gathered["unit"]["name"]),
+             "prepared_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+             "catalogs": sorted({paths.origin(uid) for _, uid in gathered["nodes"]}),
+             "units": [list(node) for node in gathered["nodes"]],
+             "oneshots": [key for key in config["services"] if gathered["found"]["services"].get(key, {}).get("oneshot")],
+             "services": {key: {"label": service.get("labels", {}).get("io.gravitee.name") or key,
+                                 "image": service.get("image", ""),
+                                 "display": {field: gathered["found"]["services"].get(key, {}).get(field) for field in model.SERVICE_KEYS},
+                                 "ports": [str(port["published"]) for port in service.get("ports", [])],
+                                 "targets": {str(port["published"]): str(port["target"]) for port in service.get("ports", [])}}
+                          for key, service in config["services"].items()},
+             "plugins": {product: {**copy.deepcopy(gathered["found"]["products"][product]), "names": names}
+                         for product, names in (gathered["unit"].get("requires", {}).get("plugins") or {}).items()}}
+    versions, judged = {}, {}
+    for variable in tested.variables(gathered["unit"]):
+        saved = layers.saved_setting(gathered["found"], variable)
+        if saved:
+            versions[variable] = saved[0]
+            if not variable.endswith("_REGISTRY"):
+                service_name = layers.service_of(gathered["found"], variable)[0]
+                if service_name in value["services"]:
+                    judged[variable] = service_name
+    value["tested"] = {"versions": versions, "services": judged}
+    for key in ("clone_pending", "cloned_from"):
+        if key in (previous or {}):
+            value[key] = previous[key]
+    return value
+
+
 def prepare(pid, rebuild=False):
     with LOCK:
         previous = read(pid)
@@ -284,37 +341,7 @@ def prepare(pid, rebuild=False):
         root = folder(pid)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         config, ports, binds = _config(pid, gathered, previous)
-        seed = gathered["unit"].get("seed")
-        value = {"schema": 1, "id": runtime_settings.key(pid), "playground": runtime_settings.source(pid),
-                 "project": name(pid), "ports": ports, "binds": binds,
-                 "seed": seed, "initialized": bool(previous and previous.get("initialized")),
-                 "active": bool(previous and previous.get("active")),
-                 "label": runtime_settings.instances().get(pid, {}).get("name", gathered["unit"]["name"]),
-                 "prepared_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                 "catalogs": sorted({paths.origin(uid) for _, uid in gathered["nodes"]}),
-                 "units": [list(node) for node in gathered["nodes"]],
-                 "oneshots": [key for key in config["services"] if gathered["found"]["services"].get(key, {}).get("oneshot")],
-                 "services": {key: {"label": service.get("labels", {}).get("io.gravitee.name") or key,
-                                     "image": service.get("image", ""),
-                                     "display": {field: gathered["found"]["services"].get(key, {}).get(field) for field in model.SERVICE_KEYS},
-                                     "ports": [str(port["published"]) for port in service.get("ports", [])],
-                                     "targets": {str(port["published"]): str(port["target"]) for port in service.get("ports", [])}}
-                              for key, service in config["services"].items()},
-                 "plugins": {product: {**copy.deepcopy(gathered["found"]["products"][product]), "names": names}
-                             for product, names in (gathered["unit"].get("requires", {}).get("plugins") or {}).items()}}
-        versions, judged = {}, {}
-        for variable in tested.variables(gathered["unit"]):
-            saved = layers.saved_setting(gathered["found"], variable)
-            if saved:
-                versions[variable] = saved[0]
-                if not variable.endswith("_REGISTRY"):
-                    service_name = layers.service_of(gathered["found"], variable)[0]
-                    if service_name in value["services"]:
-                        judged[variable] = service_name
-        value["tested"] = {"versions": versions, "services": judged}
-        for key in ("clone_pending", "cloned_from"):
-            if key in (previous or {}):
-                value[key] = previous[key]
+        value = _record(pid, gathered, config, ports, binds, previous)
         # Compose config already escapes literal dollars for a second read.
         _write(root / "compose.json", config)
         _write(root / "runtime.json", value)

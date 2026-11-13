@@ -299,7 +299,7 @@ test("with no platform registered the page is today's, whatever the playground d
   await leave();
 });
 
-test("creation offers fresh or a scoped runtime clone and refuses an unavailable source", async () => {
+test("creation explains complete Shared copying and offers a runtime clone and refuses an unavailable source", async () => {
   mock.timers.tick(5000);
   await flush();
   await visit({ runtime: { mode: "shared" } }, { platforms: [], places: [] });
@@ -309,6 +309,9 @@ test("creation offers fresh or a scoped runtime clone and refuses an unavailable
   await flush();
   const input = field("runtime-create-name"), select = field("runtime-create-source"), form = input.closest("form");
   input.value = "Clone";
+  select.value = "hotels";
+  select.dispatchEvent(new Ev("input", { target: select }));
+  assert.match(field("runtime-create-note").textContent, /all Shared data, including other playgrounds/);
   select.value = "runtime-off";
   form.dispatchEvent(new Ev("input", { target: select }));
   assert.ok(isOff(form.querySelector("[data-act-for]")));
