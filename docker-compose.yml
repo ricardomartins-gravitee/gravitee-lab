@@ -4,7 +4,7 @@ x-gravitee:
   name: Gravitee Platform
   groups: [API Management, Access Management, Alert Engine, Databases]
   categories: [Gravitee Platform, AI, Event, API, Observability, Other]
-  contract: 5       # The newest level of what units rely on (docs/contract.md): grows with every addition to it
+  contract: 6       # The newest level of what units rely on (docs/contract.md): grows with every addition to it
   contract_min: 1   # The oldest level still read: grows when something is removed or changed
   seeder:
     image: ghcr.io/gravitee-io-labs/gravitee-lab/seeder   # The seeder image, built from ./seeder: the only image a seed service may have
@@ -80,6 +80,7 @@ services:
       io.gravitee.name: MongoDB
       io.gravitee.description: Stores APIs, applications and configuration
       io.gravitee.group: Databases
+      io.gravitee.snapshot.flush: '["mongosh", "--quiet", "--eval", "if (db.adminCommand({fsync: 1}).ok !== 1) quit(1)"]'
     healthcheck:
       <<: *healthcheck
       interval: 30s        # mongosh starts Node.js at each check: often while it starts, then twice a minute
@@ -113,6 +114,8 @@ services:
       io.gravitee.description: Stores analytics and logs of API traffic
       io.gravitee.group: Databases
       io.gravitee.image.tags: library/elasticsearch
+      io.gravitee.snapshot.flush: >-
+        ["sh", "-c", "curl -fsS -X POST 'http://elasticsearch:9200/_flush?wait_if_ongoing=true' | grep -q '\"failed\":0'"]
     healthcheck:
       <<: *jvm-healthcheck
       test: ["CMD-SHELL", "curl -sf 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=2s'"]
@@ -134,6 +137,7 @@ services:
       io.gravitee.name: Redis
       io.gravitee.description: Stores gateway rate limit counters
       io.gravitee.group: Databases
+      io.gravitee.snapshot.flush: '["redis-cli", "-e", "SAVE"]'
     healthcheck:
       <<: *healthcheck
       test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]

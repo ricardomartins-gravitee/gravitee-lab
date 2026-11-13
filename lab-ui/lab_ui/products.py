@@ -30,3 +30,8 @@ GHCR = "ghcr.io"   # GitHub's registry, which Docker pulls from once the GitHub 
 # Management connections made directly by the seeder: an independent runtime must
 # address its own services instead of reusing a shared or Cloud management endpoint.
 SEED_MANAGEMENT_URLS = frozenset({"APIM_MANAGEMENT_URL", "AM_MANAGEMENT_URL", "AIM_AUTOMATION_URL", "OPENFGA_API_URL"})
+
+# Resources with bounded management-API checkpoint adapters in the seeder. Other
+# products can be cloned from private storage, never by copying shared databases.
+CLONE_RECORDS = {"apim": frozenset({"api", "application", "subscription"}),
+                 "apim-portal": frozenset({"portal-theme", "portal", "portal-page", "portal-listing", "portal-api-page"})}

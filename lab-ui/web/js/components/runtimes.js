@@ -5,7 +5,7 @@ import { createRuntime, independentAction } from "../dialogs/runtimes.js";
 import { openSettings } from "../dialogs/editor.js";
 import { runJob } from "../activity/jobs.js";
 
-export function runtimePanel(root, playground = null, { heading = true } = {}) {
+export function runtimePanel(root, playground = null, { heading = true, current = null } = {}) {
   let model = null, visible = false, reading = false, pending = false, serial = 0, signature = "";
   root.innerHTML = `<div class="card runtime-overview"><div class="card-head">${heading ? "<h2>Runtimes</h2>" : ""}
     <div class="page-actions">${playground ? '<button class="btn" data-runtime-create>Create runtime</button>' : ""}<button class="btn" data-runtime-refresh>Refresh storage</button></div></div>
@@ -100,7 +100,7 @@ export function runtimePanel(root, playground = null, { heading = true } = {}) {
     const button = event.target.closest("button");
     if (!button || button.getAttribute("aria-disabled") === "true") return;
     if (button.hasAttribute("data-runtime-refresh")) return read(true);
-    if (button.hasAttribute("data-runtime-create")) return createRuntime(store.item("playground", playground));
+    if (button.hasAttribute("data-runtime-create")) return createRuntime(store.item("playground", playground), current);
     const row = model?.runtimes[Number(button.closest("[data-runtime-row]")?.dataset.runtimeRow)];
     if (!row) return;
     if (button.hasAttribute("data-runtime-details")) return details(row);
