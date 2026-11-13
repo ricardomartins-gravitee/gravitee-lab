@@ -81,6 +81,18 @@ def _port(used):
     raise ValueError("No free loopback port could be assigned")
 
 
+def _loopback(url):
+    host = urlsplit(url).hostname if isinstance(url, str) else None
+    return host in ("localhost", "127.0.0.1")
+
+
+def _gateway_url(config):
+    """The gateway as another container of this runtime reaches it. Its published port is for a browser."""
+    gateway = config.get("services", {}).get("apim-gateway") or {}
+    target = next((port.get("target") for port in gateway.get("ports") or [] if port.get("target")), None)
+    return f"http://apim-gateway:{target}" if target else None
+
+
 def rewrite(value, ports):
     if isinstance(value, dict):
         # These commands run inside the container, where the original ports remain.
@@ -279,6 +291,14 @@ def _config(pid, gathered, previous, dry_run=False, snapshot=None):
             if updated != text:
                 file.write_text(updated, encoding="utf-8")
     config = rewrite(config, ports)
+    # The portal entrypoint stays on the host port a browser opens. Gravitee copies it into an API-backed
+    # tool target, which the gateway then calls from inside the runtime, so the seed is given the internal address.
+    internal = _gateway_url(config)
+    seed_environment = (config["services"].get(gathered["unit"].get("seed")) or {}).get("environment")
+    if internal and isinstance(seed_environment, dict):
+        current = seed_environment.get("GATEWAY_INTERNAL_URL")
+        if not current or _loopback(current):
+            seed_environment["GATEWAY_INTERNAL_URL"] = internal
     # A seed must address its private platform, never a shared or remote management API.
     aliases = set(config["services"])
     for service in config["services"].values():

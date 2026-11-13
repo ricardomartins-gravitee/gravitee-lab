@@ -100,6 +100,24 @@ class Independent(Case):
         self.assertEqual(changed["labels"]["io.gravitee.snapshot.flush"], config["labels"]["io.gravitee.snapshot.flush"])
         self.assertEqual(changed["labels"]["io.gravitee.console.test.url"], "http://localhost:31000")
 
+    def test_the_portal_keeps_the_host_port_and_the_seed_reaches_the_gateway_inside_the_runtime(self):
+        config = self.inputs["local/a"][0]
+        config["services"]["apim-gateway"] = {"image": "gateway", "networks": {"internal": None},
+                                              "ports": [{"target": 8082, "published": "8082", "protocol": "tcp"}]}
+        config["services"]["apim-management-api"] = {
+            "image": "management", "networks": {"internal": None},
+            "environment": {"gravitee_portal_entrypoint": "http://localhost:8082"}}
+        config["services"]["a-seed"]["environment"] = {
+            "APIM_MANAGEMENT_URL": "http://apim-management-api:8083",
+            "GATEWAY_INTERNAL_URL": "http://localhost:8082"}
+        self.prepare()
+        prepared = self.config()
+        published = prepared["services"]["apim-gateway"]["ports"][0]["published"]
+        self.assertEqual(prepared["services"]["apim-management-api"]["environment"]["gravitee_portal_entrypoint"],
+                         "http://localhost:" + published)
+        self.assertEqual(prepared["services"]["a-seed"]["environment"]["GATEWAY_INTERNAL_URL"], "http://apim-gateway:8082")
+        self.assertNotEqual(published, "8082")
+
     def test_projects_ports_volumes_networks_built_images_and_mutable_binds_are_private(self):
         a, b = self.prepare("local/a"), self.prepare("local/b")
         self.assertNotEqual(a["project"], b["project"])
