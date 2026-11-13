@@ -670,7 +670,20 @@ source playgrounds; children appear in their source's More > Runtimes dialog and
 
 The machine registry maps each child identity to a source and a display name. Legacy private projects are registered
 with an alias to their original storage identity: migration never moves data, changes a Docker project or allocates
-new ports. Registry creation records only a stopped definition; first Start captures configuration and inputs.
+new ports. Fresh creation records only a stopped definition; first Start captures configuration and inputs.
+The creation form's Start from picker also offers running Shared and named instances of this source only. It lists
+unavailable sources with their reason and disables submission for them. Opening from a named child's inventory selects
+that child; opening from the source defaults to Fresh. A clone says that its writers pause briefly and that its copy stays stopped.
+
+`catalogs/runtime_clones.py` copies verified private storage with read-only helper mounts and a new, empty destination.
+Every container this job pauses is resumed in a `finally` path, including after partial pause or copy failures.
+Application writers pause before containers with a declared `io.gravitee.snapshot.flush` hook; each hook runs as argv
+inside its verified container, then that store pauses. Stores unpause before writers. Legacy records inherit only core
+hooks whose image matches the running image. Hook failure aborts the copy and resumes already paused writers.
+Shared cloning never copies platform volumes: the seeder's `runtime_clones`, `checkpoints`, `consumer_states` and `portal_states`
+adapters export only bounded resources, reject foreign dependencies and verify the source again before importing into
+a new management API. Referenced application members map to its configured identity providers. Incomplete targets keep
+`clone_pending`, stay stopped and refuse Start/Rebuild; their normal cleanup remains scoped to their own storage.
 
 `server/runtimes.py` overlays private runtime state and stable, scoped service keys on the shared state. Its actions
 resolve those keys back to a validated runtime before invoking Compose. The compiler in `catalogs/independent.py`

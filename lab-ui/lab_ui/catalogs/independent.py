@@ -312,6 +312,9 @@ def prepare(pid, rebuild=False):
                     if service_name in value["services"]:
                         judged[variable] = service_name
         value["tested"] = {"versions": versions, "services": judged}
+        for key in ("clone_pending", "cloned_from"):
+            if key in (previous or {}):
+                value[key] = previous[key]
         # Compose config already escapes literal dollars for a second read.
         _write(root / "compose.json", config)
         _write(root / "runtime.json", value)

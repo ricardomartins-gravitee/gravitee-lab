@@ -28,6 +28,8 @@ const page = installDom({
     if (route === "/api/state") return reply(store.state);
     if (route === "/api/runtimes") return reply({ runtimes: [], shared_storage: [], problems: [] });
     if (route.endsWith("/runtimes") && call.method === "POST") return reply({ id: "runtime-new", name: call.body.name, playground: "hotels" });
+    if (route.endsWith("/runtimes")) return reply({ sources: [{ id: "hotels", name: "Shared", reason: "" },
+      { id: "runtime-demo", name: "Demo", reason: "" }, { id: "runtime-off", name: "Stopped", reason: "Start it first" }] });
     if (route === "/api/places") return server.down ? reply({ error: "Broken" }, 500) : reply(server.places);
     if (route.endsWith("/guide")) return reply({ markdown: "# Guide\n\n## 1. One\n\nClick it.\n" });
     if (route.endsWith("/check")) return reply({ checks: server.checks(query), dialog: server.dialog(query) });
@@ -297,6 +299,32 @@ test("with no platform registered the page is today's, whatever the playground d
   await leave();
 });
 
+test("creation offers fresh or a scoped runtime clone and refuses an unavailable source", async () => {
+  mock.timers.tick(5000);
+  await flush();
+  await visit({ runtime: { mode: "shared" } }, { platforms: [], places: [] });
+  await more("Runtimes");
+  const manager = page.doc.querySelector(".runtime-dialog");
+  manager.querySelector("[data-runtime-create]").click();
+  await flush();
+  const input = field("runtime-create-name"), select = field("runtime-create-source"), form = input.closest("form");
+  input.value = "Clone";
+  select.value = "runtime-off";
+  form.dispatchEvent(new Ev("input", { target: select }));
+  assert.ok(isOff(form.querySelector("[data-act-for]")));
+  assert.equal(offWhy(form.querySelector("[data-act-for]")), "Start it first");
+  select.value = "runtime-demo";
+  form.dispatchEvent(new Ev("input", { target: select }));
+  assert.ok(!isOff(form.querySelector("[data-act-for]")));
+  server.calls = [];
+  form.dispatchEvent(new Ev("submit", { target: form }));
+  await flush();
+  assert.deepEqual(server.calls.filter((c) => c.method === "POST").map((c) => c.body),
+    [{ name: "Clone", mode: "clone", source: "runtime-demo" }]);
+  manager.close();
+  await leave();
+});
+
 test("a playground creates a named child without changing the shared playground", async () => {
   await visit({ ...off, runtime: { mode: "shared" } }, { platforms: [], places: [] });
   const item = store.state.playgrounds.find((p) => p.id === "hotels");
@@ -316,11 +344,12 @@ test("a playground creates a named child without changing the shared playground"
   form.dispatchEvent(new Ev("submit", { target: form }));
   await flush();
   assert.deepEqual(server.calls.filter((c) => c.method === "POST").map((c) => [c.path, c.body]),
-    [["/api/playgrounds/hotels/runtimes", { name: "Demo" }]]);
+    [["/api/playgrounds/hotels/runtimes", { name: "Demo", mode: "fresh" }]]);
   assert.equal(item.runtime.mode, "shared");
   manager.close();
   await leave();
 });
+
 
 test("a place kept for the playground is not known before the places are read: nothing deploys, and the picker says it waits", async () => {
   await visit({ ...off }, { kept: DEV.id, now: true });

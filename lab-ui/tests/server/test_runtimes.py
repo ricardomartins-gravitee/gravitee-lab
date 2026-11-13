@@ -131,3 +131,32 @@ class RuntimeState(Case):
         for pid, body in (("local/source-a", {}), (self.rid, {"place": "cloud/environment"})):
             with self.subTest(pid=pid), self.assertRaises(ValueError):
                 runtimes.action(self.project, pid, "start", body)
+
+    def test_clone_rejects_other_playgrounds_before_registering_or_starting_anything(self):
+        before = runtime_settings.instances()
+        self.patch(runtimes, "JOBS").current = None
+        check = self.patch(runtimes.runtime_clones, "check")
+        for source in ("local/b", "runtime-unknown", None):
+            with self.subTest(source=source), self.assertRaisesRegex(ValueError, "only.*this playground"):
+                runtimes.create(self.project, "local/source-a", {"name": "Clone", "mode": "clone", "source": source})
+        check.assert_not_called()
+        self.assertEqual(runtime_settings.instances(), before)
+
+    def test_clone_uses_the_selected_child_and_keeps_the_normal_playground_shared(self):
+        self.patch(runtimes, "JOBS").current = None
+        self.patch(independent, "plan", return_value={})
+        check = self.patch(runtimes.runtime_clones, "check")
+        clone = self.patch(runtimes.runtime_clones, "create")
+        clone.return_value.summary.return_value = {"id": "clone-job"}
+        result = runtimes.create(self.project, "local/source-a", {"name": "Copy", "mode": "clone", "source": self.rid})
+        self.assertEqual(result["job"], {"id": "clone-job"})
+        check.assert_called_once_with(self.rid)
+        clone.assert_called_once_with(self.project, self.rid, result["id"])
+        self.assertEqual(runtime_settings.source(result["id"]), "local/source-a")
+        self.assertEqual(runtime_settings.mode("local/source-a"), "shared")
+
+    def test_incomplete_clones_cannot_start_or_rebuild(self):
+        self.patch(independent, "read", return_value={"clone_pending": True})
+        for operation in ("start", "rebuild"):
+            with self.subTest(operation=operation), self.assertRaisesRegex(ValueError, "clone is incomplete"):
+                runtimes.action(self.project, self.rid, operation)

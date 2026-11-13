@@ -1,4 +1,4 @@
-contract 5
+contract 6
 contract_min 1
 core.service alert-engine health=yes networks=internal since=1
 core.service am-gateway port=8092 health=yes networks=edge,internal since=1
@@ -90,6 +90,7 @@ label io.gravitee.image.tags since=1
 label io.gravitee.license since=1
 label io.gravitee.name since=1
 label io.gravitee.role since=1
+label io.gravitee.snapshot.flush since=6
 label.value io.gravitee.console.<id>.legacy=false since=1
 label.value io.gravitee.console.<id>.legacy=true since=1
 label.value io.gravitee.license=required since=1
