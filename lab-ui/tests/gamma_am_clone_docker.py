@@ -241,6 +241,69 @@ class GammaAmCloneDocker(runtime_clone_docker.RuntimeCloneDocker):
         print("Complete storage snapshots preserve Gamma tools, keys, AM users and clients", flush=True)
 
 
+class FreshApiStudioDocker(GammaAmCloneDocker):
+    """A fresh runtime seeds its own studio. The portal entrypoint is the host port; the tool call uses the gateway."""
+
+    test_complete_storage_keeps_gamma_am_credentials_and_all_shared_data = None
+
+    def test_a_fresh_runtime_calls_an_api_tool_on_its_own_gateway(self):
+        self.instances = {}
+        self.instances["fresh"] = self.json(self.lab + "/api/playgrounds/@linked/a/runtimes", "POST",
+                                            {"name": "Fresh", "mode": "fresh"})["id"]
+        self.current = "fresh"
+        print("Start a fresh runtime and call its API-backed tool", flush=True)
+        self.job(f"/api/playgrounds/{self.instances['fresh']}/start", {})
+        records = self.records("fresh")
+        studio = next(row["id"] for row in records if row["kind"] == "studio")
+        subscription = next(row for row in records if row["product"] == "aim-proxies" and row["kind"] == "subscription")
+        key = next(row["key"] for row in self.consumer_keys(subscription) if not row["revoked"])
+        api = self.management("/apis/" + studio)
+        targets = [endpoint["configuration"]["target"] for group in api.get("endpointGroups") or []
+                   for endpoint in group.get("endpoints") or [] if (endpoint.get("configuration") or {}).get("target")]
+        self.assertTrue(targets, "the studio has no HTTP backend")
+        self.assertTrue(all(target.startswith("http://apim-gateway:8082/") for target in targets), targets)
+        for group in api.get("endpointGroups") or []:
+            for endpoint in group.get("endpoints") or []:
+                configuration = endpoint.setdefault("configuration", {})
+                if configuration.get("target"):
+                    configuration["upstreamAuth"] = {"type": "api-key", "apiKeyHeader": "X-Gravitee-Api-Key",
+                                                     "apiKey": "upstream-clone-key-000000000000-a"}
+        kept = {name: value for name, value in api.items() if name not in (
+            "id", "deploymentState", "createdAt", "updatedAt", "state", "definitionContext", "links", "_links",
+            "primaryOwner", "originContext", "apiPicture", "apiBackground", "deployedAt")}
+        self.management("/apis/" + studio, "PUT", kept)
+        self.management("/apis/" + studio + "/deployments", "POST", {"deploymentLabel": "Upstream key"})
+        self.until(lambda: self.fresh_tool(key), "fresh runtime API tool call", timeout=120)
+        print("Fresh initialization serves the API tool through the runtime gateway", flush=True)
+
+    def fresh_tool(self, key):
+        url = self.endpoint("apim-gateway", 8082) + "/tools-a/"
+        headers = {"X-Gravitee-Api-Key": key, "Accept": "application/json, text/event-stream",
+                   "Content-Type": "application/json", "MCP-Protocol-Version": "2025-06-18"}
+
+        def rpc(method, params=None, notification=False):
+            body = {"jsonrpc": "2.0", "method": method, "params": params or {}}
+            if not notification:
+                body["id"] = 1
+            with urllib.request.urlopen(urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers), timeout=20) as response:
+                session = response.headers.get("Mcp-Session-Id")
+                if session:
+                    headers["Mcp-Session-Id"] = session
+                text = response.read().decode()
+            if notification:
+                return None
+            value = json.loads(next((line[5:] for line in text.splitlines() if line.startswith("data:")), text))
+            return value.get("result") or {}
+
+        rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "fresh-test", "version": "1"}})
+        rpc("notifications/initialized", notification=True)
+        tools = rpc("tools/list").get("tools", [])
+        if not tools:
+            return False
+        result = rpc("tools/call", {"name": tools[0]["name"], "arguments": {}})
+        return not result.get("isError") and "a:seed" in json.dumps(result)
+
+
 class AmCloneDocker(GammaAmCloneDocker):
     """The AM credential workflow runs in public CI without an Enterprise license."""
     GAMMA = False
