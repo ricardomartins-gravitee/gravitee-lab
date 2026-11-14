@@ -9,8 +9,8 @@ export function runtimePanel(root, playground = null, { heading = true, current 
   let model = null, visible = false, reading = false, pending = false, serial = 0, signature = "";
   root.innerHTML = `<div class="card runtime-overview"><div class="card-head">${heading ? "<h2>Runtimes</h2>" : ""}
     <div class="page-actions">${playground ? '<button class="btn" data-runtime-create>Create runtime</button>' : ""}<button class="btn" data-runtime-refresh>Refresh storage</button></div></div>
-    <div class="runtime-summary"></div><div class="table-wrap"><table class="table"><thead><tr><th>Runtime</th><th>State</th><th>CPU</th><th>Memory</th><th>Storage</th><th>Actions</th></tr></thead>
-    <tbody><tr><td colspan="6" class="empty">${loading("Reading runtimes")}</td></tr></tbody></table></div></div>`;
+    <div class="runtime-summary"></div><div class="table-wrap"><table class="table"><thead><tr><th>Runtime</th><th>State</th><th>Ports</th><th>CPU</th><th>Memory</th><th>Storage</th><th>Actions</th></tr></thead>
+    <tbody><tr><td colspan="7" class="empty">${loading("Reading runtimes")}</td></tr></tbody></table></div></div>`;
   const source = (row) => row.id ? store.item("playground", row.playground || row.id) : store.state?.platform;
   const wait = () => store.wait(true) || (reading ? "Reading runtimes" : "");
   const cannot = (row) => row.problem || (!row.source ? "Catalog source unavailable" : "");
@@ -26,13 +26,16 @@ export function runtimePanel(root, playground = null, { heading = true, current 
       const total = row.volume_bytes === null ? null : row.volume_bytes + (row.local_bytes || 0);
       const button = row.id ? actionButton({ key: `playground:${row.id}`, verb: row.running || row.active ? "stop" : "start",
         label: row.running || row.active ? "Stop" : "Start", cls: "btn", attrs: `data-runtime-act="${row.running || row.active ? "stop" : "start"}" data-busy` }) : "";
+      const ports = row.ports || [];
+      const open = row.id && row.source ? `<a class="btn" href="#/playgrounds/${esc(row.id)}" aria-label="Open runtime ${esc(row.name)}" data-tip="Guide and consoles">Open runtime</a>` : "";
       return `<tr data-runtime-row="${index}"><td>${row.id && row.source ? itemLink({ kind: "playground", id: row.id, name: row.name }) : esc(row.name)}
         <span class="sub">${row.id ? "Independent" + (row.playground_name ? `, ${row.playground_name}` : "") + (!row.source ? ", Source unavailable" : "") : "Shared"}</span></td>
         <td>${statusHtml(row.problem ? "issue" : row.running ? "running" : "stopped", row.problem ? "Needs attention" : row.state)}</td>
+        <td>${ports.length ? `<button class="btn" data-runtime-ports aria-label="Ports of ${esc(row.name)}" data-tip="Ports by service">${esc(ports[0])}${ports.length > 1 ? ` +${ports.length - 1}` : ""}</button>` : "—"}</td>
         <td>${row.cpu_percent === null ? "—" : `${row.cpu_percent}%`}</td><td>${size(row.memory_bytes, true)}</td>
         <td><button class="btn" data-runtime-details aria-label="Storage of ${esc(row.name)}" data-tip="Storage details">${size(total)}</button></td>
-        <td><span class="row-icons">${button}<button class="icon-btn" data-runtime-menu aria-haspopup="true" aria-label="Manage ${esc(row.name)}" data-tip="More">${icon("more")}</button></span></td></tr>`;
-    }).join("") || '<tr><td colspan="6" class="empty">No independent runtimes yet</td></tr>');
+        <td><span class="row-icons">${open}${button}<button class="icon-btn" data-runtime-menu aria-haspopup="true" aria-label="Manage ${esc(row.name)}" data-tip="More">${icon("more")}</button></span></td></tr>`;
+    }).join("") || '<tr><td colspan="7" class="empty">No independent runtimes yet</td></tr>');
     for (const el of root.querySelectorAll("[data-runtime-act]")) {
       const row = model.runtimes[Number(el.closest("[data-runtime-row]").dataset.runtimeRow)];
       const reason = wait() || (el.dataset.runtimeAct === "start" ? cannot(row) : row.problem);
@@ -85,6 +88,20 @@ export function runtimePanel(root, playground = null, { heading = true, current 
     } catch (error) { toast(error.message, true); }
   }
 
+  function navigate(id) {
+    root.closest("dialog[open]")?.close();
+    router.go(`#/playgrounds/${id}`);
+  }
+
+  function ports(row) {
+    const rows = row.containers.filter((c) => c.ports?.length).map((c) => ({ label: c.service,
+      items: c.ports.map((port) => `127.0.0.1:${port}`), note: true }));
+    const known = new Set(row.containers.flatMap((c) => c.ports || []));
+    const assigned = (row.ports || []).filter((port) => !known.has(port));
+    if (assigned.length) rows.push({ label: "Assigned ports", items: assigned.map((port) => `127.0.0.1:${port}`), note: true });
+    effectsDialog({ title: `Ports: ${row.name}`, options: [{ value: true, rows }], action: () => "Close" });
+  }
+
   function details(row) {
     const rows = [{ label: "Containers", items: row.containers.map((c) => `${c.name}: ${c.state}`) },
       { label: "Ports", items: row.ports || [] },
@@ -104,16 +121,17 @@ export function runtimePanel(root, playground = null, { heading = true, current 
     if (button.hasAttribute("data-runtime-create")) return createRuntime(store.item("playground", playground), current);
     const row = model?.runtimes[Number(button.closest("[data-runtime-row]")?.dataset.runtimeRow)];
     if (!row) return;
+    if (button.hasAttribute("data-runtime-ports")) return ports(row);
     if (button.hasAttribute("data-runtime-details")) return details(row);
     if (button.hasAttribute("data-runtime-act")) return act(row, button.dataset.runtimeAct);
     if (button.hasAttribute("data-runtime-menu")) {
       const item = source(row), blocked = wait();
-      const choices = row.id ? [{ label: "Source playground", onSelect: () => {
-        root.closest("dialog[open]")?.close();
-        router.go(`#/playgrounds/${row.playground || row.id}`);
-      },
-        disabled: !item, reason: item ? "" : "Catalog source unavailable" }] : [
+      const choices = row.id ? [
+        { label: "Open runtime", onSelect: () => navigate(row.id), disabled: !item, reason: item ? "" : "Catalog source unavailable" },
+        { label: "Source playground", onSelect: () => navigate(row.playground || row.id),
+          disabled: !item, reason: item ? "" : "Catalog source unavailable" }] : [
         { label: "Platform settings", disabled: !!blocked || !item, reason: blocked || "", onSelect: () => openSettings(item) }];
+      choices.push({ label: "Ports", onSelect: () => ports(row), disabled: !row.ports?.length, reason: "No assigned ports" });
       if (row.id) choices.push(
         { label: "Restart", disabled: !!blocked || !row.running || !!cannot(row), reason: blocked || cannot(row) || "Start this runtime first", onSelect: () => act(row, "restart") },
         { label: "Rebuild from current settings", disabled: !!blocked || !row.prepared || !!cannot(row), reason: blocked || cannot(row) || "Start this runtime first", onSelect: () => act(row, "rebuild") },

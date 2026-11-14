@@ -607,6 +607,8 @@
               <th>
                 "State"
               <th>
+                "Ports"
+              <th>
                 "CPU"
               <th>
                 "Memory"
@@ -616,7 +618,7 @@
                 "Actions"
           <tbody>
             <tr>
-              <td colspan="6" class="empty">
+              <td colspan="7" class="empty">
                 <span class="loading">
                   <span class="spinner">
                   "Reading runtimes"
