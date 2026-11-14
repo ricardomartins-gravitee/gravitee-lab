@@ -10,6 +10,7 @@
 import { api, store, recall, remember } from "../core.js";
 import { toast, confirmPlan } from "../components/ui.js";
 import { busy, runAction, runJob } from "../activity/jobs.js";
+import { independentAction } from "../dialogs/runtimes.js";
 import { confirmStart } from "../pages/playground.js";
 
 export const MACHINE = "machine";
@@ -66,6 +67,7 @@ export function forgetPlace() {
 // else This machine (null): Acme Bakery, which needs Gamma, is on This machine with API Management in the Cloud. A platform that cannot be
 // used answers for the place proposed, with its reason: it is not given up for This machine.
 export function chosenPlace(item) {
+  if (item?.runtime?.parent) return null;
   const id = registered() ? proposedFor(item) : null;
   const place = id && entry(store.places, id);
   return place && goes(item, place) ? place : null;
@@ -124,6 +126,7 @@ export async function deployTo(item, place, { route, verb, label }) {
 // is registered. On a remote place it deploys there.
 export function startPlayground(item, dialog = item.action.dialog) {
   const place = chosenPlace(item);
+  if (!place && item.runtime?.mode === "independent") return independentAction(item, "start");
   if (place) return deployTo(item, place, { route: "start", verb: "start", label: item.action.label });
   const shown = dialog && registered() ? { ...dialog, deploys_to: [THIS_MACHINE] } : dialog;
   return startHere(item, shown);

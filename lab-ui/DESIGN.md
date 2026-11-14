@@ -661,6 +661,66 @@ and "Unreachable", after the server's own note. They are drawn by the page from 
 choice lives in this browser, and each leads to the form or the row that fixes it. Nothing is said for This machine, a
 place gone with its platform, or a place not read yet.
 
+### Independent runtimes
+
+Ordinary playgrounds always use Shared. Explicitly created, named children own independent Compose projects; several
+children of the same source can run concurrently. Each child has a stable identity and its own page and actions, so
+opening a different runtime never redirects an in-flight action or stops another instance. The catalog list contains
+source playgrounds; children appear in their source's More > Runtimes dialog and in Containers. No default/mode settings are exposed.
+
+The machine registry maps each child identity to a source and a display name. Legacy private projects are registered
+with an alias to their original storage identity: migration never moves data, changes a Docker project or allocates
+new ports. Fresh creation records only a stopped definition; first Start captures configuration and inputs.
+The creation form's Start from picker also offers running Shared and named instances of this source only. It lists
+unavailable sources with their reason and disables submission for them. Opening from a named child's inventory selects
+that child; opening from the source defaults to Fresh. A clone says that its writers pause briefly and that its copy stays stopped.
+
+`catalogs/runtime_clones.py` copies verified private storage with read-only helper mounts and a new, empty destination.
+Every container this job pauses is resumed in a `finally` path, including after partial pause or copy failures.
+Application writers pause before containers with a declared `io.gravitee.snapshot.flush` hook; each hook runs as argv
+inside its verified container, then that store pauses. Stores unpause before writers. Legacy records inherit only core
+hooks whose image matches the running image. Hook failure aborts the copy and resumes already paused writers.
+Shared and private cloning use the same storage snapshot path. Shared captures the whole project's storage and existing
+services, including other playgrounds' data, as the creation form says before submission. The compiler isolates ports,
+networks and mounts without filtering or rewriting database resources. Exact image IDs are recorded and given private
+local tags; builds and pulls cannot change the clone at first Start. Incomplete targets keep `clone_pending`, stay stopped
+and refuse Start, Apply and Update; their normal cleanup remains scoped to their own storage.
+
+`server/runtimes.py` overlays private runtime state and stable, scoped service keys on the shared state. Its actions
+resolve those keys back to a validated runtime before invoking Compose. The compiler in `catalogs/independent.py`
+reuses the standalone dependency selector; every command supplies both a private Compose file and project name.
+Configuration and copied inputs are retained until Apply; Update refreshes the configured image references. Ports stay assigned. Writable binds, volume and network names, built image
+tags, persona cookies and management API relays are private. Read-only text inputs and console URLs use the assigned
+loopback ports. Existing catalog and worktree links are read, never replaced.
+
+Start initializes once, then resumes without replaying one-shots. Stop retains storage. Runtime menus reuse Apply and Update.
+Apply refreshes saved source configuration and read-only inputs, retaining writable storage and ports; only running services
+are recreated, with changed read-only input consumers forced to recreate. Failed services restart only when their dependencies
+are available, using the existing service-state rules. Stopped services retain their state and use the
+saved configuration at the next Start. Update uses the captured configuration and selected image references, pulling registry
+images and refreshing clone-owned aliases without retagging a source runtime’s aliases. Neither action runs seeds or starts
+stopped containers. Restart targets running services only. Re-seed remains the explicit seed replay on the runtime page.
+Active runtime metadata holds dependent catalogs against replacement or removal, including after a partial start.
+Platform controls remain scoped to the shared project. The private runtime group exposes its own services in Containers;
+resource use includes active private projects. An unreadable private record is a problem of that playground and holds
+its actions, rather than hiding the whole Lab.
+
+The Containers page's runtime card reads `/api/runtimes` separately from state polling: storage scans and Docker stats
+must not slow the normal state stream. Completed jobs and explicit refresh update the inventory. The inventory opens on demand from More > Runtimes; it does not scan storage or occupy the playground view while closed.
+Creation uses the existing form dialog over that inventory; the normal source page stays Shared. Stopped and source-unavailable runtimes remain visible.
+Each available child has an explicit Open runtime link to its own guide and consoles. The Ports column opens addresses
+by service, with assigned ports retained after container removal. Both are also available from its menu; Source playground
+continues to open the Shared parent.
+
+`catalogs/runtime_storage.py` binds cleanup previews to explicit Docker identities and a fingerprint of the private
+filesystem tree. Both confirmation and execution recheck ownership and stopped state. Container removal keeps volumes
+and initialized metadata; readiness tolerates removed completed one-shots on resume. Data deletion removes only the
+selected runtime's volumes and generated folder, with a fixed helper bound to that folder and its verified manifest.
+The cleanup labels state their scope: Delete containers, keep data; Delete data, keep runtime; Delete runtime and data.
+The menu hint and both confirmation stages use the same action text and describe the next Start.
+Catalog source, links, other projects, images and caches are retained. Shared image/cache usage is machine-wide and is
+never added to every runtime's total. Unreadable storage remains unknown and is reported, rather than counted as zero.
+
 ### Playgrounds
 
 - A playground's first Start sets it up, in phases: Plugins, Apps and services ("Platform, apps and services" when the

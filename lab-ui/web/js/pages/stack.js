@@ -10,6 +10,7 @@ import { onCloud, coreOf, runCore, gatewayWhy } from "../platform/core-choice.js
 import { selectLogs } from "./logs.js";
 import { selectProduct } from "./plugins.js";
 import { openFile, openSettings } from "../dialogs/editor.js";
+import { runtimePanel } from "../components/runtimes.js";
 import { License } from "../dialogs/license.js";
 
 // An action of the platform in the head: it shows on its button as it works
@@ -23,10 +24,10 @@ const headButton = (verb, label, glyph, title = "") => actionButton({ key: "plat
 // neither Restart, Update nor the menu, which are the Containers page's. One head, one set of buttons on one key: both pages
 // start and stop the platform the same way, and show the same progress. As in every head, the primary (Start or Apply) is the
 // last button, before the menu.
-export const platformHead = (title, { lean = false } = {}) => `
+export const platformHead = (title, { lean = false, scope = "" } = {}) => `
   <div class="page-head">
     <div class="page-title"><h1>${title}</h1></div>
-    <div class="page-actions"${lean ? " data-lean" : ""}>
+    <div class="page-actions"${lean ? " data-lean" : ""}>${scope ? `<span class="sub">${esc(scope)}</span>` : ""}
       ${headButton("stop", lean ? "Stop all" : "Stop", "stop")}${lean ? "" : `
       ${headButton("restart", "Restart", "restart", "Restart as it is")}
       ${headButton("update", "Update", "download", "Pull and recreate")}`}
@@ -38,7 +39,8 @@ export const platformHead = (title, { lean = false } = {}) => `
   </div>`;
 
 const SKELETON = `
-  ${platformHead("Containers")}
+  ${platformHead("Containers", { scope: "Shared platform" })}
+  <div data-runtime-panel></div>
   <div class="stack-layout">
     <div class="card">
       <div class="cols stack-head" aria-hidden="true"><span></span><span>Service</span><span>State</span><span>Version</span><span>Ports</span><span>Uptime</span><span></span></div>
@@ -61,6 +63,7 @@ const CONFIRM = {
   reset: { title: "Reset", text: "Deletes every container and volume", word: "reset", action: "Reset", danger: true },
 };
 
+let runtimes = null;
 let page = null;   // the section of the page
 let groups = [];   // the groups drawn last, which the buttons act on
 // group -> expanded. The groups shape the page: the browser remembers which are open, unlike the detail of a list row
@@ -134,7 +137,7 @@ function containerHtml(name, state) {
   return `
     <li class="container cols" data-service="${esc(name)}">
       <span></span>
-      <span class="s-name"><span class="c-name" data-tip="${esc([`${service.label} (${name})`, service.description].filter(Boolean).join(": "))}">${esc(service.label)}</span><span class="c-id">${esc(name)}</span>${service.note_apply ? "" : noteBadge(service)}</span>
+      <span class="s-name"><span class="c-name" data-tip="${esc([`${service.label} (${service.runtime?.service || name})`, service.description].filter(Boolean).join(": "))}">${esc(service.label)}</span><span class="c-id">${esc(service.runtime?.service || name)}</span>${service.note_apply ? "" : noteBadge(service)}</span>
       ${stateCell(st, key)}
       ${serviceCells(service)}
       <span class="s-uptime"></span>
@@ -301,6 +304,7 @@ export function paintHead(root, { platform }) {
 
 function render(state) {
   paintHead(page, state);
+  runtimes.render(state);
   renderGroups(state);
   renderLinks(state);
   paintActions(page);
@@ -315,8 +319,10 @@ const stays = (state) => state.playgrounds.flatMap((p) => (p.deployed || []).map
 // What Reset says: that it turns off the playground that is on (`reset_turns_off`), what its seed created being gone
 // with the volumes, and what stays in a platform
 function resetConfirm(state) {
-  const off = state.platform.reset_turns_off, left = stays(state);
-  const text = [CONFIRM.reset.text + (off ? `, and turns off ${off}` : ""), left.length && `Stays: ${left.join(", ")}`];
+  const off = state.platform.reset_turns_off, privateOnes = state.playgrounds.filter((p) => p.runtime?.prepared);
+  const left = [...stays(state), ...privateOnes.map((p) => p.name + " (independent)")];
+  const scope = privateOnes.length ? "Deletes the shared platform’s containers and volumes" : CONFIRM.reset.text;
+  const text = [scope + (off ? `, and turns off ${off}` : ""), left.length && `Stays: ${left.join(", ")}`];
   return { ...CONFIRM.reset, text: text.filter(Boolean).join(". ") };
 }
 
@@ -396,6 +402,7 @@ function foldBand(key) {
 function init(section) {
   page = section;
   section.innerHTML = SKELETON;
+  runtimes = runtimePanel($("[data-runtime-panel]", section));
   section.addEventListener("click", (e) => {
     const on = (selector) => e.target.closest(selector);
     // The chip, on what the license gives; a note that says what is wrong with it, on the form that takes a new one
@@ -426,4 +433,4 @@ function init(section) {
   });
 }
 
-export const stackPage = { id: "stack", pattern: /^#\/containers$/, nav: "stack", title: "Containers", init, render };
+export const stackPage = { id: "stack", pattern: /^#\/containers$/, nav: "stack", title: "Containers", init, render, show: () => runtimes.show(), hide: () => runtimes.hide() };

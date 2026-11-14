@@ -26,3 +26,7 @@ GATEWAY = "apim-gateway"   # the image of API Management's gateway: the service 
 
 AZURE = re.compile(r"[a-z0-9]+\.azurecr\.io")   # an Azure registry, which Docker pulls from once the Azure CLI logged it in
 GHCR = "ghcr.io"   # GitHub's registry, which Docker pulls from once the GitHub CLI logged it in
+
+# Management connections made directly by the seeder: an independent runtime must
+# address its own services instead of reusing a shared or Cloud management endpoint.
+SEED_MANAGEMENT_URLS = frozenset({"APIM_MANAGEMENT_URL", "AM_MANAGEMENT_URL", "AIM_AUTOMATION_URL", "OPENFGA_API_URL"})

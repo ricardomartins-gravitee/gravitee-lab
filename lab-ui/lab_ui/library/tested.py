@@ -75,6 +75,11 @@ def record(project, pid):
             versions[variable] = found[0]
             if not variable.endswith("_REGISTRY"):
                 images[variable] = image_id(layers.service_of(project, variable)[1])
+    remember(pid, versions, images)
+
+
+def remember(pid, versions, images):
+    """Keep a successful start's evidence, whether its services belong to the shared project or a private runtime."""
     held = read()
     others = [one for one in sets(pid) if (one["versions"], one.get("images")) != (versions, images)]
     held[pid] = (others + [{"versions": versions, "images": images, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}])[-KEPT:]

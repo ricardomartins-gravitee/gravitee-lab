@@ -539,14 +539,7 @@ def install_steps(project, product, names):
             for name in stopped:
                 job.unit(("Container", services[name]["container"]), 1)
             return
-        try:
-            published = {p["name"]: p for p in catalog(project, product)}
-            for name in missing:
-                if name not in published:
-                    raise JobFailed(f"Plugin {name} is not on {SITE}")
-            picked = [(None, published[name], _latest(name, versions(published[name]["path"]))) for name in missing]
-        except RuntimeError as error:   # the site said why in plain words: the reason of the job
-            raise JobFailed(str(error)) from error
+        picked = _required_versions(project, product, missing)
 
         def unload(job):
             # What runs now stops, also a service that started since the job began
@@ -556,3 +549,33 @@ def install_steps(project, product, names):
         _change(job, ROOT / target["folder"], picked, then=[unload])
 
     return [install], stopped, waits
+
+
+def _required_versions(project, product, missing):
+    try:
+        published = {p["name"]: p for p in catalog(project, product)}
+        for name in missing:
+            if name not in published:
+                raise JobFailed(f"Plugin {name} is not on {SITE}")
+        picked = [(None, published[name], _latest(name, versions(published[name]["path"]))) for name in missing]
+    except RuntimeError as error:   # the site said why in plain words: the reason of the job
+        raise JobFailed(str(error)) from error
+    return picked
+
+
+def required(job, project, product, names, pull):
+    """Install required plugins into a private target; its caller supplies the scoped image pull.
+
+    No running service is stopped here. Returns whether plugins were added, so the runtime can recreate only their consumers.
+    """
+    target = _target(project, product)
+    present = _installed(project, target)
+    if present["bundled_error"]:
+        pull(list(target["services"]))
+        present = _installed(project, target)
+        if present["bundled_error"]:
+            raise JobFailed(present["bundled_error"])
+    missing = _missing(present, names)
+    if missing:
+        _change(job, Path(target["folder"]), _required_versions(project, product, missing))
+    return bool(missing)

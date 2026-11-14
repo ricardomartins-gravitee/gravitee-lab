@@ -8,6 +8,8 @@ import { effectsDialog, paintLinks, platformLinks, progressBar, dockerDown, stat
   actionButton, paintActions, planRows, accepted, itemLink, openButton, noteHtml, licenseForm, starButton, toggleStar, pluginWords,
   GAP, applyBadge, TURNS, fileButtons } from "../components/ui.js";
 import { runJob, busy, showOutput, cancelJob, jobTitle } from "../activity/jobs.js";
+import { runtimeActionEntries, independentAction } from "../dialogs/runtimes.js";
+import { runtimeManagerEntry } from "../dialogs/runtime-manager.js";
 import { openFile, openSettings } from "../dialogs/editor.js";
 import { share, home } from "../dialogs/create.js";
 import { addCatalog, tryAgain } from "../dialogs/catalog.js";
@@ -193,7 +195,7 @@ const copyToPersonal = (x) => planned(x, "copy", `/api/${x.kind}s/${x.id}/copy`,
 
 // The menu of a playground's head: Export when it can be, Export for Docker Compose, Move to Personal for an imported one, Copy to Personal for one of a catalog,
 // Share and Delete for one of this machine
-const menuOf = (x) => [exportable(x) && exportEntry(x), x.kind === "playground" && standaloneEntry(x), movable(x) && moveEntry(x), copyable(x) && copyEntry(x), x.personal && shareEntry(x),
+const menuOf = (x) => x.runtime?.parent ? [runtimeManagerEntry(x), ...runtimeActionEntries(x)] : [runtimeManagerEntry(x), ...(x.runtime?.mode === "independent" ? runtimeActionEntries(x) : []), exportable(x) && exportEntry(x), x.kind === "playground" && standaloneEntry(x), movable(x) && moveEntry(x), copyable(x) && copyEntry(x), x.personal && shareEntry(x),
   ...(x.personal ? [{ separator: true }, deleteEntry(x)] : [])].filter(Boolean);
 
 // A file the server made, as base64, saved where the browser saves downloads
@@ -310,7 +312,7 @@ function seedButton(item) {
 // platforms, each with what it lacks. A place that lacks something can be chosen, its Before you start offers the way out; one
 // the playground cannot go to, and a platform that cannot be used, are options that cannot be chosen, each with its reason.
 function picker(item) {
-  if (!registered()) return "";
+  if (!registered() || item.runtime?.parent) return "";
   const held = holding(item), text = `Deploy to ${chosenPlace(item)?.name || THIS_MACHINE.name}`;
   return `<button class="combo-btn" data-place data-busy ${held ? 'aria-disabled="true" data-why="Loading"' : `data-tip="${esc(text)}"`} aria-haspopup="dialog"
     ><span class="value">${held ? loading("Loading") : esc(text)}</span>${icon("chevron")}</button>`;
@@ -775,9 +777,11 @@ function render(state) {
   }
   const job = shownJob(item, state), live = living(item, state);
   setHTML($("#pg-title", root), esc(item.name));
-  setHTML($("#pg-star", root), starButton(item));
+  setHTML($("#pg-star", root), item.runtime?.parent
+    ? `<a class="text-link" href="#/playgrounds/${esc(item.runtime.parent)}">${esc(item.runtime.parent_name || "Source playground")}</a> <span class="pill">Independent</span>`
+    : `${item.runtime?.mode === "shared" ? '<span class="pill">Shared</span> ' : ""}${starButton(item)}`);
   // Its file is within reach in every state, as on its row in the list
-  setHTML($("#pg-actions", root), `${live ? actions(item, job) : picker(item)}<span class="row-icons">${fileButtons(item, false)}${
+  setHTML($("#pg-actions", root), `${live ? actions(item, job) : picker(item)}<span class="row-icons">${item.runtime?.parent ? "" : fileButtons(item, false)}${
     menuOf(item).length ? `<button class="icon-btn" data-more data-tip="More" aria-label="${esc(`More for ${item.name}`)}" aria-haspopup="true">${icon("more")}</button>` : ""}</span>`);
   if (live) session(item, job, state);
   else details(item);
@@ -807,6 +811,7 @@ function keepOrDelete(item, shown) {
 }
 
 export async function stopPlayground(item) {
+  if (item.runtime?.mode === "independent") return independentAction(item, "stop");
   const action = stopOf(item), label = action?.label || "Stop", plan = action?.dialog || item.stop;
   const choice = keepOrDelete(item, plan);
   const deletes = await effectsDialog({
