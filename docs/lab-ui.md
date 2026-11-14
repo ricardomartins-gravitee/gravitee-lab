@@ -91,10 +91,9 @@ Stop an independent runtime before cleanup, then choose:
 
 | Action | What it removes | What it keeps |
 |---|---|---|
-| *Remove containers* | That runtime's containers and networks | Its volumes, private files and initialized data; Start recreates containers without replaying the seed |
-| *Delete runtime data* | That runtime's containers, networks, volumes and generated runtime folder | Its named definition, catalog source and links, all other runtimes, images and build caches; Start initializes fresh data |
-
-| *Delete runtime* | That runtime and its private containers, networks, volumes and generated folder | Its source playground, catalog links, shared data and all other runtimes |
+| *Delete containers, keep data* | That runtime's containers and networks | Its volumes, private files and initialized data; Start recreates containers without replaying the seed |
+| *Delete data, keep runtime* | That runtime's containers, networks, volumes and generated runtime folder | Its named definition, catalog source and links, all other runtimes, images and build caches; Start initializes fresh data |
+| *Delete runtime and data* | That runtime and its private containers, networks, volumes and generated folder | Its source playground, catalog links, shared data and all other runtimes |
 
 Review the exact resources before confirming. Data deletion also asks you to type `delete`. A resource or file changed
 since the preview requires a new preview. Cleanup refuses ambiguous ownership, resources used outside the runtime and

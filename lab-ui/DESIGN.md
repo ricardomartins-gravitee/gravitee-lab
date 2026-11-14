@@ -711,6 +711,8 @@ continues to open the Shared parent.
 filesystem tree. Both confirmation and execution recheck ownership and stopped state. Container removal keeps volumes
 and initialized metadata; readiness tolerates removed completed one-shots on resume. Data deletion removes only the
 selected runtime's volumes and generated folder, with a fixed helper bound to that folder and its verified manifest.
+The cleanup labels state their scope: Delete containers, keep data; Delete data, keep runtime; Delete runtime and data.
+The menu hint and both confirmation stages use the same action text and describe the next Start.
 Catalog source, links, other projects, images and caches are retained. Shared image/cache usage is machine-wide and is
 never added to every runtime's total. Unreadable storage remains unknown and is reported, rather than counted as zero.
 

@@ -5,6 +5,12 @@ import { createRuntime, independentAction } from "../dialogs/runtimes.js";
 import { openSettings } from "../dialogs/editor.js";
 import { runJob } from "../activity/jobs.js";
 
+const CLEANUP = {
+  containers: { label: "Delete containers, keep data", hint: "Keeps runtime; Start recreates containers" },
+  data: { label: "Delete data, keep runtime", hint: "Deletes all data; next Start initializes fresh data" },
+  delete: { label: "Delete runtime and data", hint: "Permanently deletes this runtime and all its data" },
+};
+
 export function runtimePanel(root, playground = null, { heading = true, current = null } = {}) {
   let model = null, visible = false, reading = false, pending = false, serial = 0, signature = "";
   root.innerHTML = `<div class="card runtime-overview"><div class="card-head">${heading ? "<h2>Runtimes</h2>" : ""}
@@ -77,12 +83,12 @@ export function runtimePanel(root, playground = null, { heading = true, current 
     try {
       const path = `/api/runtimes/${row.id}/cleanup`;
       const plan = await api(path, { operation, check: true });
-      const title = operation === "containers" ? "Remove containers" : operation === "delete" ? "Delete runtime" : "Delete runtime data";
+      const { label: title, hint } = CLEANUP[operation];
       const rows = Object.entries(plan.removes).filter(([, values]) => values.length).map(([kind, values]) => ({ label: `Removes ${kind}`, items: values }));
       rows.push({ label: "Keeps", items: plan.keeps, note: true });
-      if (!(await effectsDialog({ title: `${title}: ${row.name}`, options: [{ value: true, rows }], action: () => title, danger: () => operation !== "containers" }))) return;
+      if (!(await effectsDialog({ title: `${title}: ${row.name}`, options: [{ value: true, rows, sub: hint }], action: () => title, danger: () => operation !== "containers" }))) return;
       if (operation !== "containers" && !(await confirmDialog({ title: `${title}: ${row.name}`,
-        text: "Deletes only this runtime’s resources listed in the preview. The source playground, shared platform and other runtimes stay.",
+        text: `${hint}. The source playground, shared platform and other runtimes stay.`,
         action: title, word: "delete", danger: true }))) return;
       runJob(() => api(path, { operation, fingerprint: plan.fingerprint }), { key: `playground:${row.id}`, verb: "stop" });
     } catch (error) { toast(error.message, true); }
@@ -135,7 +141,7 @@ export function runtimePanel(root, playground = null, { heading = true, current 
       if (row.id) choices.push(
         { label: "Restart", disabled: !!blocked || !row.running || !!cannot(row), reason: blocked || cannot(row) || "Start this runtime first", onSelect: () => act(row, "restart") },
         { label: "Rebuild from current settings", disabled: !!blocked || !row.prepared || !!cannot(row), reason: blocked || cannot(row) || "Start this runtime first", onSelect: () => act(row, "rebuild") },
-        ...["containers", "data", "delete"].map((operation) => ({ label: operation === "containers" ? "Remove containers" : operation === "delete" ? "Delete runtime" : "Delete runtime data", danger: operation !== "containers",
+        ...["containers", "data", "delete"].map((operation) => ({ ...CLEANUP[operation], danger: operation !== "containers",
           disabled: !!blocked || !(row.cleanup[operation] || { enabled: false }).enabled, reason: blocked || row.cleanup[operation]?.reason,
           onSelect: () => cleanup(row, operation) })));
       openMenu(button, choices);

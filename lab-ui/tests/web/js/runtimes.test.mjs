@@ -147,10 +147,12 @@ test("rebuild opens its scoped confirmation before sending a change", async () =
 
 test("container-only cleanup keeps data and sends exactly the reviewed fingerprint", async () => {
   await show();
-  await menu("Remove containers");
+  await menu("Delete containers, keep data");
   assert.deepEqual(posts(), []);
   assert.match(text(page.ids["choice-list"]), /own-app/);
   assert.match(text(page.ids["choice-list"]), /Other runtimes/);
+  assert.match(text(page.ids["choice-title"]), /Delete containers, keep data/);
+  assert.match(text(page.ids["choice-list"]), /Start recreates containers/);
   await choice(true);
   mock.timers.tick(600);
   await flush();
@@ -160,12 +162,14 @@ test("container-only cleanup keeps data and sends exactly the reviewed fingerpri
 
 test("data deletion waits for both the exact scope and typed confirmation; cancellation removes nothing", async () => {
   await show();
-  await menu("Delete runtime data");
+  await menu("Delete data, keep runtime");
   assert.match(text(page.ids["choice-list"]), /own-volume/);
   assert.match(text(page.ids["choice-list"]), /\.lab\/runtimes\/own/);
   assert.deepEqual(posts(), []);
   await choice(true);
   assert.equal(page.ids["confirm-input"].placeholder, "Type delete to confirm");
+  assert.match(text(page.ids["confirm-title"]), /Delete data, keep runtime/);
+  assert.match(text(page.ids["confirm-text"]), /next Start initializes fresh data/);
   assert.deepEqual(posts(), []);
   page.ids.confirm.returnValue = "";
   page.ids.confirm.onclose();
