@@ -703,6 +703,9 @@ its actions, rather than hiding the whole Lab.
 The Containers page's runtime card reads `/api/runtimes` separately from state polling: storage scans and Docker stats
 must not slow the normal state stream. Completed jobs and explicit refresh update the inventory. The inventory opens on demand from More > Runtimes; it does not scan storage or occupy the playground view while closed.
 Creation uses the existing form dialog over that inventory; the normal source page stays Shared. Stopped and source-unavailable runtimes remain visible.
+Each available child has an explicit Open runtime link to its own guide and consoles. The Ports column opens addresses
+by service, with assigned ports retained after container removal. Both are also available from its menu; Source playground
+continues to open the Shared parent.
 
 `catalogs/runtime_storage.py` binds cleanup previews to explicit Docker identities and a fingerprint of the private
 filesystem tree. Both confirmation and execution recheck ownership and stopped state. Container removal keeps volumes

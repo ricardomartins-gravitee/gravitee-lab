@@ -64,6 +64,7 @@ test("stopped and missing-source runtimes stay visible, with shared images count
   assert.match(text(root), /Private A/);
   assert.match(text(root), /Stopped/);
   assert.match(text(root), /Source unavailable/);
+  assert.equal(root.querySelector("a.btn"), null);
   assert.match(text(root), /Images: 9 kB \(machine-wide\)/);
   const start = root.querySelector("[data-runtime-act]");
   assert.ok(isOff(start));
@@ -80,6 +81,48 @@ test("Source playground navigates to the parent for named and legacy runtimes", 
     assert.deepEqual(posts(), [], "navigation never starts or changes a runtime");
     close();
   }
+});
+
+test("Open runtime targets the selected child's guide, while Source playground targets Shared", async () => {
+  await show([{ ...privateRow, id: "runtime-demo", playground: "local/a", name: "Demo" }]);
+  const open = root.querySelectorAll("a.btn").find((el) => el.getAttribute("aria-label") === "Open runtime Demo");
+  assert.equal(open.getAttribute("href"), "#/playgrounds/runtime-demo");
+  location.hash = "#/containers";
+  await menu("Open runtime");
+  assert.equal(location.hash, "#/playgrounds/runtime-demo");
+  await menu("Source playground");
+  assert.equal(location.hash, "#/playgrounds/local/a");
+  assert.deepEqual(posts(), []);
+  close();
+});
+
+test("Ports opens only the selected runtime's service addresses and retains ports without containers", async () => {
+  const rows = [{ ...privateRow, id: "runtime-demo", playground: "local/a", name: "Demo", running: 1,
+    ports: ["31000", "31001"], containers: [{ name: "demo-api", service: "sample-api", ports: ["31000"] }] },
+    { ...privateRow, id: "runtime-other", ports: ["32000"] }];
+  for (const fromMenu of [false, true]) {
+    await show(rows);
+    assert.match(text(root.querySelector("[data-runtime-ports]")), /31000 \+1/);
+    if (fromMenu) await menu("Ports");
+    else root.querySelector("[data-runtime-ports]").click();
+    await flush();
+    assert.match(text(page.ids["choice-title"]), /Ports: Demo/);
+    const shown = text(page.ids["choice-list"]);
+    assert.match(shown, /sample-api/);
+    assert.match(shown, /127\.0\.0\.1:31000/);
+    assert.match(shown, /Assigned ports/);
+    assert.match(shown, /127\.0\.0\.1:31001/);
+    assert.doesNotMatch(shown, /32000/);
+    assert.deepEqual(posts(), []);
+    await choice(false);
+    close();
+  }
+  await show([{ ...privateRow, ports: [] }]);
+  assert.equal(root.querySelector("[data-runtime-ports]"), null);
+  root.querySelector("[data-runtime-menu]").click();
+  const ports = page.ids.menu.querySelectorAll(".menu-item").find((el) => text(el).startsWith("Ports"));
+  assert.ok(ports.disabled);
+  close();
 });
 
 test("storage details show captured image references and exact identities", async () => {
