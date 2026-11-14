@@ -1479,11 +1479,11 @@ test("a catalog's name and the author's words are text, never markup, in the hea
 });
 
 
-test("private Start and Rebuild confirm only their runtime, while Stop explicitly keeps every runtime's data", async () => {
+test("private Start and Apply confirm only their runtime; Update is direct and Stop keeps every runtime's data", async () => {
   const { independentAction } = await import("../../../web/js/dialogs/runtimes.js");
   await visit({ ...off, runtime: { mode: "independent", prepared: true } }, { platforms: [], places: [] });
   const item = store.state.playgrounds.find((p) => p.id === "hotels");
-  for (const verb of ["start", "rebuild", "stop"]) {
+  for (const verb of ["start", "apply", "stop"]) {
     server.calls = [];
     const asked = independentAction(item, verb);
     await flush();
@@ -1491,8 +1491,12 @@ test("private Start and Rebuild confirm only their runtime, while Stop explicitl
     assert.equal(posts(verb).length, 0, "waits for confirmation");
     await answer(true);
     await asked;
-    const path = `/api/playgrounds/hotels/${verb === "rebuild" ? "runtime/rebuild" : verb}`;
+    const path = ["apply", "update"].includes(verb) ? `/api/runtimes/hotels/${verb}` : `/api/playgrounds/hotels/${verb}`;
     assert.equal(server.calls.filter((c) => c.method === "POST" && c.path === path).length, 1, verb);
   }
+  server.calls = [];
+  await independentAction(item, "update");
+  assert.equal(server.calls.filter((c) => c.method === "POST" && c.path === "/api/runtimes/hotels/update").length, 1,
+    "Update runs directly, like the existing Shared action");
   await leave();
 });

@@ -8,7 +8,7 @@ import { effectsDialog, paintLinks, platformLinks, progressBar, dockerDown, stat
   actionButton, paintActions, planRows, accepted, itemLink, openButton, noteHtml, licenseForm, starButton, toggleStar, pluginWords,
   GAP, applyBadge, TURNS, fileButtons } from "../components/ui.js";
 import { runJob, busy, showOutput, cancelJob, jobTitle } from "../activity/jobs.js";
-import { rebuildRuntimeEntry, independentAction } from "../dialogs/runtimes.js";
+import { runtimeActionEntries, independentAction } from "../dialogs/runtimes.js";
 import { runtimeManagerEntry } from "../dialogs/runtime-manager.js";
 import { openFile, openSettings } from "../dialogs/editor.js";
 import { share, home } from "../dialogs/create.js";
@@ -195,7 +195,7 @@ const copyToPersonal = (x) => planned(x, "copy", `/api/${x.kind}s/${x.id}/copy`,
 
 // The menu of a playground's head: Export when it can be, Export for Docker Compose, Move to Personal for an imported one, Copy to Personal for one of a catalog,
 // Share and Delete for one of this machine
-const menuOf = (x) => x.runtime?.parent ? [runtimeManagerEntry(x), rebuildRuntimeEntry(x)] : [runtimeManagerEntry(x), x.runtime?.mode === "independent" && rebuildRuntimeEntry(x), exportable(x) && exportEntry(x), x.kind === "playground" && standaloneEntry(x), movable(x) && moveEntry(x), copyable(x) && copyEntry(x), x.personal && shareEntry(x),
+const menuOf = (x) => x.runtime?.parent ? [runtimeManagerEntry(x), ...runtimeActionEntries(x)] : [runtimeManagerEntry(x), ...(x.runtime?.mode === "independent" ? runtimeActionEntries(x) : []), exportable(x) && exportEntry(x), x.kind === "playground" && standaloneEntry(x), movable(x) && moveEntry(x), copyable(x) && copyEntry(x), x.personal && shareEntry(x),
   ...(x.personal ? [{ separator: true }, deleteEntry(x)] : [])].filter(Boolean);
 
 // A file the server made, as base64, saved where the browser saves downloads

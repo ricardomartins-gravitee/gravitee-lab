@@ -2,7 +2,7 @@
 
 Catalog source stays in place. Writable binds, Compose volumes, networks, built image
 names and published ports belong to the runtime. Its generated configuration is private
-and fixed until an explicit rebuild; stop keeps every runtime's data and seed record.
+and fixed until an explicit Apply; stop keeps every runtime's data and seed record.
 """
 
 import copy
@@ -234,7 +234,7 @@ def _config(pid, gathered, previous, dry_run=False, snapshot=None):
                         if not target.is_relative_to(folder(pid)):
                             raise ValueError("A saved runtime mount escapes its private directory")
                         if target != private / real.relative_to(base):
-                            # Older runtimes stored overlapping mounts separately. Rebuild
+                            # Older runtimes stored overlapping mounts separately. Apply
                             # keeps their existing data instead of switching to an empty path.
                             base, private = real, target
                     empty = ".state" in base.parts or not base.exists()
@@ -348,10 +348,10 @@ def _record(pid, gathered, config, ports, binds, previous=None):
     return value
 
 
-def prepare(pid, rebuild=False):
+def prepare(pid, refresh=False):
     with LOCK:
         previous = read(pid)
-        if previous and not rebuild:
+        if previous and not refresh:
             return previous
         gathered = standalone._gather(runtime_settings.source(pid))
         catalog_service.preflight(gathered["found"], gathered["nodes"])
@@ -384,16 +384,16 @@ def containers(pid):
 def describe(pid, rows=None):
     value = read(pid)
     if not value:
-        return {"mode": "independent", "prepared": False, "running": False, "on": False, "services": []}
+        return {"mode": "independent", "prepared": False, "initialized": False, "running": False, "on": False, "services": []}
     rows = containers(pid) if rows is None else rows
     running = any(row.get("State") in ("running", "restarting", "paused") for row in rows.values())
-    return {"mode": "independent", "prepared": True, "running": running, "on": running or value.get("active", False),
+    return {"mode": "independent", "prepared": True, "initialized": bool(value.get("initialized")), "running": running, "on": running or value.get("active", False),
             "services": [{"id": key, "label": service["label"], "image": service["image"],
                           "state": rows.get(key, {}).get("State", "absent"),
                           "health": rows.get(key, {}).get("Health", "")} for key, service in value["services"].items()]}
 
 
-def _wait(pid, job):
+def _wait(pid, job, names=None):
     value = read(pid)
     deadline = time.monotonic() + 600
     while time.monotonic() < deadline:
@@ -401,7 +401,7 @@ def _wait(pid, job):
             raise JobFailed("Canceled")
         rows = containers(pid)
         good = True
-        for key in value["services"]:
+        for key in names if names is not None else value["services"]:
             row = rows.get(key, {})
             if key in value["oneshots"]:
                 if value["initialized"] and not row:
@@ -423,39 +423,206 @@ def _label(pid):
     return runtime_settings.instances().get(pid, {}).get("name", "independent playground")
 
 
-def start(pid, rebuild=False):
+def _plugins(pid, value, job):
+    changed = set()
+    for product, target in value["plugins"].items():
+        job.step("Prepare required plugins")
+        private = value["binds"].get(str((paths.ROOT / target["folder"]).resolve()))
+        if not private:
+            raise JobFailed("The product's plugin folder is not mounted in this independent runtime")
+        services = {key: {**spec["display"], "image": spec["image"],
+                          "container": f"{value['project']}-{key}-1"} for key, spec in value["services"].items()}
+        own_target = {**target, "folder": private,
+                      "services": {key: path for key, path in target["services"].items() if key in services}}
+        plugin_project = {"services": services, "products": {product: own_target}}
+        if plugins.required(job, plugin_project, product, target["names"],
+                            lambda keys: job.exec(command(pid, "pull", *keys))):
+            changed.update(own_target["services"])
+    return changed
+
+
+def start(pid):
     def run(job):
         job.step("Prepare independent runtime")
-        value = prepare(pid, rebuild=rebuild)
+        value = prepare(pid)
         value["active"] = True
         _write(folder(pid) / "runtime.json", value)
-        if not value["initialized"] or rebuild:
-            for product, target in value["plugins"].items():
-                job.step("Prepare required plugins")
-                private = value["binds"].get(str((paths.ROOT / target["folder"]).resolve()))
-                if not private:
-                    raise JobFailed("The product's plugin folder is not mounted in this independent runtime")
-                services = {key: {**spec["display"], "image": spec["image"],
-                                  "container": f"{value['project']}-{key}-1"} for key, spec in value["services"].items()}
-                own_target = {**target, "folder": private,
-                              "services": {key: path for key, path in target["services"].items() if key in services}}
-                plugin_project = {"services": services, "products": {product: own_target}}
-                plugins.required(job, plugin_project, product, target["names"],
-                                 lambda keys: job.exec(command(pid, "pull", *keys)))
         if not value["initialized"]:
+            _plugins(pid, value, job)
             job.step("Start independent platform and apps")
             job.exec(command(pid, "up", "-d", "--build"))
         else:
             lasting = [key for key in value["services"] if key not in value["oneshots"]]
             job.step("Resume independent platform and apps")
-            job.exec(command(pid, "up", "-d", "--no-deps",
-                             *(["--build", "--force-recreate"] if rebuild else ["--no-recreate"]), *lasting))
+            job.exec(command(pid, "up", "-d", "--no-deps", *lasting))
         _wait(pid, job)
         _tested(pid, value)
         value["initialized"] = True
         _write(folder(pid) / "runtime.json", value)
     return JOBS.start("Start " + _label(pid), [run], key=f"playground:{pid}", verb="start",
                       changes={"start": [["playground", pid]]})
+
+
+
+def _configuration(pid):
+    return json.loads((folder(pid) / "compose.json").read_text(encoding="utf-8"))
+
+
+def _running(pid, value):
+    return [key for key, row in containers(pid).items() if key in value["services"]
+            and key not in value["oneshots"] and row.get("State") in ("running", "restarting")]
+
+
+
+def _applying(pid, value, config):
+    rows = containers(pid)
+    states = {key: model.service_state({"state": row.get("State"), "exit_code": row.get("ExitCode"),
+                                       "health": row.get("Health")}, key in value["oneshots"], False)
+              for key in value["services"] for row in [rows.get(key, {})]}
+    running = {key for key, row in states.items() if row["running"] and key not in value["oneshots"]}
+    if not running:
+        return []
+    failed = {key for key, row in states.items() if row["key"] == "issue" and not row["running"] and key not in value["oneshots"]}
+    ready = running | {key for key, row in states.items() if row["key"] == "done"}
+    # Match Apply's existing failed-service recovery without starting stopped dependencies or replaying the seed.
+    while True:
+        alone = {key for key in failed if set(config["services"][key].get("depends_on", ())) - ready - failed}
+        if not alone:
+            return sorted(running | failed)
+        failed -= alone
+
+
+def _inputs(config, names):
+    # A read-only file can change without changing Compose's configuration hash.
+    # Compare its contents so Apply recreates its consumers, while writable data never enters this comparison.
+    cache = {}
+    writable = [Path(mount["source"]) for service in config["services"].values() for mount in service.get("volumes", [])
+                if mount["type"] == "bind" and not mount.get("read_only")]
+    def digest(file):
+        file = Path(file)
+        if str(file) not in cache:
+            value = hashlib.sha256()
+            entries = sorted(file.rglob("*")) if file.is_dir() else [file]
+            for entry in entries:
+                name = str(entry.relative_to(file) if entry != file else ".").encode()
+                value.update(len(name).to_bytes(8, "big") + name)
+                if entry.is_symlink():
+                    value.update(b"L" + hashlib.sha256(os.readlink(entry).encode()).digest())
+                elif entry.is_file():
+                    contents = hashlib.sha256()
+                    with entry.open("rb") as stream:
+                        for block in iter(lambda: stream.read(1 << 20), b""):
+                            contents.update(block)
+                    value.update(b"F" + contents.digest())
+                else:
+                    value.update(b"D")
+            cache[str(file)] = value.hexdigest()
+        return cache[str(file)]
+    found = {}
+    for key in names:
+        service = config["services"][key]
+        files = [mount["source"] for mount in service.get("volumes", [])
+                 if mount["type"] == "bind" and mount.get("read_only")
+                 and not any(Path(mount["source"]).is_relative_to(root) for root in writable)]
+        for kind in ("secrets", "configs"):
+            for spec in service.get(kind, []):
+                name = spec if isinstance(spec, str) else spec["source"]
+                file = config.get(kind, {}).get(name, {}).get("file")
+                if file:
+                    files.append(file)
+        found[key] = [(file, digest(file)) for file in files]
+    return found
+
+
+def change_plan(pid, operation):
+    if operation not in ("apply", "update"):
+        raise ValueError("Choose Apply or Update")
+    value = read(pid)
+    if not value:
+        raise ValueError("Start this runtime first")
+    if value.get("clone_pending"):
+        raise ValueError("This clone is incomplete; delete it and create a new runtime")
+    if not value.get("initialized"):
+        raise ValueError("Start this runtime successfully first")
+    running = _running(pid, value)
+    if operation == "apply":
+        plan(pid, refresh=True)
+    elif not running:
+        raise ValueError("Nothing runs")
+    return {"starts": [], "stops": [], "turns_off": [], "keeps": [], "independent": True,
+            "restarts": [],
+            "scope": "Recreates changed running containers and starts failed services" if running else "Saved settings apply at the next Start"}
+
+
+def apply(pid):
+    change_plan(pid, "apply")
+    def run(job):
+        previous = read(pid)
+        previous_config = _configuration(pid)
+        running = _applying(pid, previous, previous_config)
+        old = _inputs(previous_config, running)
+        value = prepare(pid, refresh=True)
+        config = _configuration(pid)
+        plugins_changed = _plugins(pid, value, job)
+        names = [key for key in running if key in value["services"] and key not in value["oneshots"]]
+        current = _inputs(config, names)
+        changed = [key for key in names if current[key] != old[key] or key in plugins_changed]
+        ordinary = [key for key in names if key not in changed]
+        if ordinary:
+            job.exec(command(pid, "up", "-d", "--no-deps", *ordinary))
+        if changed:
+            job.exec(command(pid, "up", "-d", "--no-deps", "--force-recreate", *changed))
+        if names:
+            _wait(pid, job, names)
+        else:
+            job.lines.append("Nothing runs: saved settings apply at the next Start")
+    return JOBS.start("Apply " + _label(pid), [run], key=f"playground:{pid}", verb="apply",
+                      changes={"start": [["playground", pid]]})
+
+
+def update(pid):
+    change_plan(pid, "update")
+    def run(job):
+        value = read(pid)
+        names = _running(pid, value)
+        if not names:
+            raise JobFailed("Nothing runs")
+        config = _configuration(pid)
+        snapshot = value.get("snapshot") or {}
+        references = snapshot.get("references") or {}
+        # Clones own their image aliases. Refresh those aliases from their configured references;
+        # never retag another runtime's image or substitute today's Shared configuration.
+        if any(not config["services"][key]["image"].startswith(name(pid) + "/")
+               for key in references if key in config["services"]):
+            raise JobFailed("The clone image alias does not belong to this runtime")
+        pulls = sorted({references[key] for key, service in config["services"].items() if key in references
+                        and key not in snapshot.get("local", [])
+                        and not (value["services"][key].get("display") or {}).get("built")})
+        for reference in pulls:
+            job.exec(["docker", "pull", reference])
+        for key, reference in references.items():
+            service = config["services"].get(key)
+            if not service:
+                continue
+            job.exec(["docker", "image", "tag", reference, service["image"]])
+        if not references:
+            pulls = [key for key, service in config["services"].items() if not service.get("build") and service.get("pull_policy") != "never"]
+            if pulls:
+                job.exec(command(pid, "pull", "--ignore-buildable", "--ignore-pull-failures", *pulls))
+        job.exec(command(pid, "up", "-d", "--no-deps", "--build", *names))
+        _wait(pid, job, names)
+    return JOBS.start("Update " + _label(pid), [run], key=f"playground:{pid}", verb="update",
+                      changes={"start": [["playground", pid]]})
+
+
+def restart(pid):
+    value = read(pid)
+    if not value:
+        raise ValueError("Start this runtime first")
+    names = _running(pid, value)
+    if not names:
+        raise ValueError("Nothing runs")
+    return JOBS.start("Restart " + _label(pid), [command(pid, "restart", *names)], key=f"playground:{pid}", verb="restart")
 
 
 def _tested(pid, value):
@@ -517,14 +684,14 @@ def created(pid):
     return [{"what": label, "count": count} for label, count in counts.items()]
 
 
-def plan(pid, rebuild=False):
+def plan(pid, refresh=False):
     gathered = standalone._gather(runtime_settings.source(pid))
     catalog_service.preflight(gathered["found"], gathered["nodes"])
     if gathered["unit"].get("blocked") or gathered["unit"].get("needs_catalogs"):
         raise ValueError("; ".join((gathered["unit"].get("blocked") or {}).get("reasons", []))
                              or "The playground needs its catalog dependencies before it can run")
     previous = read(pid)
-    config = _config(pid, gathered, previous, dry_run=True)[0] if not previous or rebuild else json.loads(
+    config = _config(pid, gathered, previous, dry_run=True)[0] if not previous or refresh else json.loads(
         (folder(pid) / "compose.json").read_text(encoding="utf-8"))
     return {"starts": [{"kind": "service", "id": key, "name": service.get("labels", {}).get("io.gravitee.name") or key}
                        for key, service in config["services"].items()],

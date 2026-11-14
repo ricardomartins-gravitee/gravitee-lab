@@ -99,7 +99,7 @@ class Installed(Case):
         self.patch(plugins, "_required_versions", return_value=selected)
         change = self.patch(plugins, "_change")
         pull, job = mock.Mock(), mock.Mock()
-        plugins.required(job, own, "apim", ["plugin-a"], pull)
+        self.assertTrue(plugins.required(job, own, "apim", ["plugin-a"], pull))
         pull.assert_called_once_with(["gateway"])
         change.assert_called_once_with(job, self.root / "private-plugins", selected)
         job.exec.assert_not_called()
