@@ -11,7 +11,7 @@ const page = installDom({ fetch: async (path, options = {}) => {
   if (!options.body && holdRead && path.startsWith("/api/runtimes")) await holdRead;
   const body = options.body ? JSON.parse(options.body) : null;
   calls.push({ path, body });
-  const value = /\/api\/playgrounds\/.+\/check/.test(path) ? { checks: [], dialog: { starts: [] } }
+  const value = /\/api\/(?:playgrounds|runtimes)\/.+\/check/.test(path) ? { checks: [], dialog: { starts: [] } }
     : path.startsWith("/api/runtimes/") && body?.check ? { fingerprint: "reviewed-resources", removes: {
     containers: ["own-app"], networks: ["own-net"], volumes: body.operation === "data" ? ["own-volume"] : [],
     folders: body.operation === "data" ? [".lab/runtimes/own"] : [] }, keeps: ["Other runtimes", "Catalog source and links"] }
@@ -24,7 +24,7 @@ const { store } = await import("../../../web/js/core.js");
 const { runtimePanel } = await import("../../../web/js/components/runtimes.js");
 const flush = async () => { for (let i = 0; i < 14; i += 1) await Promise.resolve(); };
 const base = { blind: false, wait: "", docker: { error: null }, job: null, services: {}, links: [], addons: [], setups: [],
-  playgrounds: [{ kind: "playground", id: "local/a", name: "Private A", on: false, runtime: { mode: "independent" }, settings: [] }],
+  playgrounds: [{ kind: "playground", id: "local/a", name: "Private A", on: false, runtime: { mode: "independent", prepared: true, running: false }, settings: [] }],
   platform: { name: "Platform", settings: [] } };
 const privateRow = { id: "local/a", name: "Private A", mode: "independent", selected: true, prepared: true, source: true,
   containers: [], volumes: [{ name: "own-volume", bytes: 100 }], local_bytes: 100, volume_bytes: 100,
@@ -46,6 +46,7 @@ async function show(rows = [privateRow], playground = null) {
 async function menu(label) {
   root.querySelector("[data-runtime-menu]").click();
   await flush();
+  assert.doesNotMatch(text(page.ids.menu), /Rebuild/, "runtime controls reuse the existing Apply and Update concepts");
   const entry = page.ids.menu.querySelectorAll(".menu-item").find((el) => text(el).startsWith(label));
   assert.ok(entry, label);
   page.doc.dispatchEvent(new Ev("click", { target: entry }));
@@ -134,11 +135,11 @@ test("storage details show captured image references and exact identities", asyn
   close();
 });
 
-test("rebuild opens its scoped confirmation before sending a change", async () => {
+test("Apply opens its scoped confirmation before sending a change", async () => {
   await show();
-  await menu("Rebuild from current settings");
-  assert.equal(calls.at(-1).path, "/api/playgrounds/local/a/check?rebuild=1");
-  assert.match(text(page.ids["choice-title"]), /Rebuild Private A/);
+  await menu("Apply");
+  assert.equal(calls.at(-1).path, "/api/runtimes/local/a/check?action=apply");
+  assert.match(text(page.ids["choice-title"]), /Apply Private A/);
   assert.match(text(page.ids["choice-list"]), /All its data/);
   assert.deepEqual(posts(), []);
   await choice(false);

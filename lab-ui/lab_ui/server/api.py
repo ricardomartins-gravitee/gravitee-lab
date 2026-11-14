@@ -723,11 +723,11 @@ ROUTES = [(method, re.compile(pattern), handler) for method, pattern, handler in
     ("GET", "/favicon.ico", lambda r: r.answer(204)),   # the page carries its own icon
     ("GET", "/api/state", state),
     ("GET", "/api/runtimes", lambda r: runtimes.listing(project.load(), fresh=r.query.get("refresh") == "1", playground=r.query.get("playground"))),
-    ("POST", f"/api/runtimes/{UNIT}/(start|stop|restart|rebuild)", lambda r, pid, op: runtimes.managed_action(project.load(), pid, op)),
+    ("POST", f"/api/runtimes/{UNIT}/(start|stop|restart|apply|update)", lambda r, pid, op: runtimes.managed_action(project.load(), pid, op)),
+    ("GET", f"/api/runtimes/{UNIT}/check", lambda r, pid: runtimes.check(project.load(), pid, operation=r.query.get("action", "start"))),
     ("POST", f"/api/runtimes/{UNIT}/cleanup", lambda r, pid: runtimes.cleanup(pid, r.body)),
     ("POST", f"/api/playgrounds/{UNIT}/runtimes", lambda r, pid: runtimes.create(project.load(), pid, r.body)),
     ("GET", f"/api/playgrounds/{UNIT}/runtimes", lambda r, pid: runtimes.creation_options(project.load(), pid)),
-    ("POST", f"/api/playgrounds/{UNIT}/runtime/rebuild", lambda r, pid: runtimes.action(project.load(), pid, "rebuild", r.body)),
     ("GET", "/api/jobs/([a-f0-9]{8})", stream_job),
     ("GET", "/api/logs", stream_logs),
     ("GET", "/api/dashboard", lambda r: dashboard.read(project.load(), refresh=r.query.get("refresh") == "1")),
@@ -748,7 +748,7 @@ ROUTES = [(method, re.compile(pattern), handler) for method, pattern, handler in
     ("GET", "/api/machine", lambda r: machine.report(fresh=r.query.get("fresh") == "1")),
     ("POST", "/api/machine/act", lambda r: machine.act(r.body.get("id"))),
     ("GET", f"/api/playgrounds/{UNIT}/check",
-     lambda r, pid: runtimes.check(project.load(), pid, rebuild=r.query.get("rebuild") == "1") if not at(r.query.get("place")) and runtimes.selected(pid)
+     lambda r, pid: runtimes.check(project.load(), pid) if not at(r.query.get("place")) and runtimes.selected(pid)
      else playgrounds.check(project.load(), pid, **at(r.query.get("place")))),
     ("GET", f"/api/(addon|setup)s/{UNIT}/check", check_unit),
     ("GET", f"/api/playgrounds/{UNIT}/guide", lambda r, pid: {"markdown": runtimes.independent.rewrite(playgrounds.guide(runtimes.runtime_settings.source(pid)),
