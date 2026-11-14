@@ -153,6 +153,7 @@ test("container-only cleanup keeps data and sends exactly the reviewed fingerpri
   assert.match(text(page.ids["choice-list"]), /Other runtimes/);
   assert.match(text(page.ids["choice-title"]), /Delete containers, keep data/);
   assert.match(text(page.ids["choice-list"]), /Start recreates containers/);
+  assert.match(text(page.ids["choice-list"]), /Deletes containers/);
   await choice(true);
   mock.timers.tick(600);
   await flush();
