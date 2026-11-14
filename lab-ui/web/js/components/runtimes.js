@@ -84,7 +84,7 @@ export function runtimePanel(root, playground = null, { heading = true, current 
       const path = `/api/runtimes/${row.id}/cleanup`;
       const plan = await api(path, { operation, check: true });
       const { label: title, hint } = CLEANUP[operation];
-      const rows = Object.entries(plan.removes).filter(([, values]) => values.length).map(([kind, values]) => ({ label: `Removes ${kind}`, items: values }));
+      const rows = Object.entries(plan.removes).filter(([, values]) => values.length).map(([kind, values]) => ({ label: `Deletes ${kind}`, items: values }));
       rows.push({ label: "Keeps", items: plan.keeps, note: true });
       if (!(await effectsDialog({ title: `${title}: ${row.name}`, options: [{ value: true, rows, sub: hint }], action: () => title, danger: () => operation !== "containers" }))) return;
       if (operation !== "containers" && !(await confirmDialog({ title: `${title}: ${row.name}`,

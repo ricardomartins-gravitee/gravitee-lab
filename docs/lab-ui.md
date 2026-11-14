@@ -89,7 +89,7 @@ shared platform. A runtime whose source is unavailable can still be stopped and 
 
 Stop an independent runtime before cleanup, then choose:
 
-| Action | What it removes | What it keeps |
+| Action | What it deletes | What it keeps |
 |---|---|---|
 | *Delete containers, keep data* | That runtime's containers and networks | Its volumes, private files and initialized data; Start recreates containers without replaying the seed |
 | *Delete data, keep runtime* | That runtime's containers, networks, volumes and generated runtime folder | Its named definition, catalog source and links, all other runtimes, images and build caches; Start initializes fresh data |
