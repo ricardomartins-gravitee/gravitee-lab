@@ -427,7 +427,8 @@ class IndependentDocker(unittest.TestCase):
         self.assertEqual(self.command([*self.runtime_command("a"), "ps", "--all", "--format", "{{.State}}", "a-idle"]), "exited")
         print("Update rebuilds the configured local image without adopting unapplied settings", flush=True)
         settings["services"]["a-backend"]["environment"]["RUNTIME_ACTION_TEST"] = "not-applied"
-        (source_a / "compose.yml").write_text(json.dumps(settings))
+        saved_source = json.dumps(settings).encode()
+        (source_a / "compose.yml").write_bytes(saved_source)
         (image / "Dockerfile").write_text("FROM busybox:1.37.0\nRUN printf action-v2 > /action-version\n")
         self.job(f"/api/runtimes/{self.instances['a']}/update", {})
         self.assertEqual(self.command([*self.runtime_command("a"), "exec", "-T", "a-backend", "cat", "/action-version"]), "action-v2")
@@ -450,7 +451,7 @@ class IndependentDocker(unittest.TestCase):
         self.assertEqual(self.command([*compose.COMPOSE, "exec", "-T", "redis", "redis-cli", "GET", "shared-sentinel"]), "keep-original")
         self.assertTrue((self.root / ".lab/catalogs/linked").is_symlink())
         self.assertTrue(source_a.is_symlink())
-        self.assertEqual((source_a / "compose.yml").read_bytes(), original)
+        self.assertEqual((source_a / "compose.yml").read_bytes(), saved_source)
         self.assertFalse((source_a / ".state/created.json").exists())
         self.current = "b"
         self.assertEqual(self.api("a")["id"], other_api)
