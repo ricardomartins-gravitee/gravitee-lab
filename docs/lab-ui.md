@@ -44,7 +44,7 @@ are separate; localhost URLs in its configuration follow the new ports. URLs sto
 remain as captured and may need changing in the clone's own consoles. Catalog files and links stay in place.
 
 A stopped source must be started first. External or ambiguous storage is refused. A failed or canceled clone stays stopped
-and cannot be started or rebuilt; delete the incomplete copy and try again. Cancellation may wait for a storage copy to
+and cannot be started or have settings applied; delete the incomplete copy and try again. Cancellation may wait for a storage copy to
 finish so that source containers can always resume.
 
 Process memory is not copied. Datastores that buffer persistent writes declare `io.gravitee.snapshot.flush` as a JSON
