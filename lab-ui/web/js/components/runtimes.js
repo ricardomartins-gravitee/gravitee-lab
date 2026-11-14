@@ -1,7 +1,7 @@
 // The Containers page's runtime inventory: stopped runtimes stay visible, and cleanup previews only their own resources.
 import { $, esc, icon, size, api, store, router, setHTML, loading } from "../core.js";
 import { effectsDialog, confirmDialog, openMenu, toast, statusHtml, itemLink, paintActions, actionButton, holdOff } from "./ui.js";
-import { createRuntime, independentAction } from "../dialogs/runtimes.js";
+import { createRuntime, independentAction, runtimeActionEntries } from "../dialogs/runtimes.js";
 import { openSettings } from "../dialogs/editor.js";
 import { runJob } from "../activity/jobs.js";
 
@@ -75,8 +75,8 @@ export function runtimePanel(root, playground = null, { heading = true, current 
 
   async function act(row, operation) {
     if (wait()) return;
-    if (operation === "start" || operation === "rebuild") return independentAction(store.item("playground", row.id) || { id: row.id, name: row.name }, operation);
-    runJob(() => api(`/api/runtimes/${row.id}/${operation}`, {}), { key: `playground:${row.id}`, verb: operation === "rebuild" ? "start" : operation });
+    if (operation === "start") return independentAction(store.item("playground", row.id) || { id: row.id, name: row.name }, operation);
+    runJob(() => api(`/api/runtimes/${row.id}/${operation}`, {}), { key: `playground:${row.id}`, verb: operation });
   }
 
   async function cleanup(row, operation) {
@@ -140,7 +140,9 @@ export function runtimePanel(root, playground = null, { heading = true, current 
       choices.push({ label: "Ports", onSelect: () => ports(row), disabled: !row.ports?.length, reason: "No assigned ports" });
       if (row.id) choices.push(
         { label: "Restart", disabled: !!blocked || !row.running || !!cannot(row), reason: blocked || cannot(row) || "Start this runtime first", onSelect: () => act(row, "restart") },
-        { label: "Rebuild from current settings", disabled: !!blocked || !row.prepared || !!cannot(row), reason: blocked || cannot(row) || "Start this runtime first", onSelect: () => act(row, "rebuild") },
+        ...runtimeActionEntries(store.item("playground", row.id) || { id: row.id, name: row.name,
+          runtime: { prepared: row.prepared, initialized: row.initialized, running: !!row.running } }).map((entry) => ({ ...entry,
+          disabled: !!blocked || !!cannot(row) || entry.disabled, reason: blocked || cannot(row) || entry.reason })),
         ...["containers", "data", "delete"].map((operation) => ({ ...CLEANUP[operation], danger: operation !== "containers",
           disabled: !!blocked || !(row.cleanup[operation] || { enabled: false }).enabled, reason: blocked || row.cleanup[operation]?.reason,
           onSelect: () => cleanup(row, operation) })));

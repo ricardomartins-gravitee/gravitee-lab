@@ -684,17 +684,22 @@ Shared and private cloning use the same storage snapshot path. Shared captures t
 services, including other playgrounds' data, as the creation form says before submission. The compiler isolates ports,
 networks and mounts without filtering or rewriting database resources. Exact image IDs are recorded and given private
 local tags; builds and pulls cannot change the clone at first Start. Incomplete targets keep `clone_pending`, stay stopped
-and refuse Start/Rebuild; their normal cleanup remains scoped to their own storage.
+and refuse Start, Apply and Update; their normal cleanup remains scoped to their own storage.
 
 `server/runtimes.py` overlays private runtime state and stable, scoped service keys on the shared state. Its actions
 resolve those keys back to a validated runtime before invoking Compose. The compiler in `catalogs/independent.py`
 reuses the standalone dependency selector; every command supplies both a private Compose file and project name.
-Configuration, ports and copied inputs are pinned until Rebuild. Writable binds, volume and network names, built image
+Configuration and copied inputs are retained until Apply; Update refreshes the configured image references. Ports stay assigned. Writable binds, volume and network names, built image
 tags, persona cookies and management API relays are private. Read-only text inputs and console URLs use the assigned
 loopback ports. Existing catalog and worktree links are read, never replaced.
 
-Start initializes once, then resumes without replaying one-shots. Stop retains storage. Rebuild refreshes configuration
-and immutable inputs while retaining writable storage and port assignments; Re-seed is the explicit seed replay.
+Start initializes once, then resumes without replaying one-shots. Stop retains storage. Runtime menus reuse Apply and Update.
+Apply refreshes saved source configuration and read-only inputs, retaining writable storage and ports; only running services
+are recreated, with changed read-only input consumers forced to recreate. Failed services restart only when their dependencies
+are available, using the existing service-state rules. Stopped services retain their state and use the
+saved configuration at the next Start. Update uses the captured configuration and selected image references, pulling registry
+images and refreshing clone-owned aliases without retagging a source runtime’s aliases. Neither action runs seeds or starts
+stopped containers. Restart targets running services only. Re-seed remains the explicit seed replay on the runtime page.
 Active runtime metadata holds dependent catalogs against replacement or removal, including after a partial start.
 Platform controls remain scoped to the shared project. The private runtime group exposes its own services in Containers;
 resource use includes active private projects. An unreadable private record is a problem of that playground and holds
