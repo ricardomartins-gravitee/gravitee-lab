@@ -116,7 +116,7 @@ def inventory(pid):
 
 def preview(pid, operation):
     if operation not in OPERATIONS:
-        raise ValueError("Choose Remove containers or Delete runtime data")
+        raise ValueError("Choose a runtime cleanup action")
     registered = runtime_settings.instances().get(pid)
     if operation == "delete" and not registered:
         raise paths.NotFound("No such runtime definition")
@@ -204,5 +204,5 @@ def cleanup(pid, operation, fingerprint):
             record = independent.read(pid)
             record["active"] = False
             independent._write(independent.folder(pid) / "runtime.json", record)
-    return JOBS.start("Remove runtime containers" if operation == "containers" else "Delete runtime" if operation == "delete" else "Delete runtime data", [run],
+    return JOBS.start("Delete containers, keep data" if operation == "containers" else "Delete runtime and data" if operation == "delete" else "Delete data, keep runtime", [run],
                       key=f"playground:{pid}", verb="stop")
