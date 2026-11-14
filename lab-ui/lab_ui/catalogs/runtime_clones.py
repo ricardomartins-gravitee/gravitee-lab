@@ -116,7 +116,7 @@ def _inherit_flushes(config, inspected):
         if hook and not labels.get("io.gravitee.snapshot.flush"):
             rc, image, _ = compose.run(["docker", "image", "inspect", "--format", "{{.Id}}", candidate["image"]], timeout=15)
             if rc or image.strip() != container["Image"]:
-                raise ValueError("Rebuild this runtime before cloning: its flush metadata and current settings use different images")
+                raise ValueError("Apply this runtime’s settings before cloning: its flush metadata and current settings use different images")
             labels["io.gravitee.snapshot.flush"] = hook
 
 
@@ -306,6 +306,10 @@ def _snapshot(job, project, source, target, config):
     references = (original.get("snapshot") or {}).get("references") if private else None
     value["snapshot"] = {"scope": "runtime", "images": actual, "references": references or {
         key: service.get("image", "") for key, service in source_config["services"].items()}}
+    built = {service.get("image") for service in source_config["services"].values() if service.get("build")}
+    value["snapshot"]["local"] = (original.get("snapshot") or {}).get("local", []) if private and original.get("snapshot") else sorted(
+        key for key, service in source_config["services"].items() if service.get("build") or service.get("image") in built
+        or service.get("pull_policy") == "never" or (value["services"].get(key, {}).get("display") or {}).get("built"))
     for key, service in value["services"].items():
         service["image"] = config["services"][key].get("image", "")
         service["ports"] = [str(port["published"]) for port in config["services"][key].get("ports", [])]

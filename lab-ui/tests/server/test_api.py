@@ -1495,7 +1495,7 @@ class StartsAreVerified(GatewayCase):
     # The routes that start containers of what is on already: they take no plan and put no unit in the on file (8.5 gates the
     # plan of a start), and say so here. A route that is new and starts something is not among them: it joins the table
     NO_PLAN = {
-        f"/api/runtimes/{api.UNIT}/(start|stop|restart|rebuild)": "private runtime commands never change the on file; independent.plan verifies the catalog closure",
+        f"/api/runtimes/{api.UNIT}/(start|stop|restart|apply|update)": "private runtime commands never change the on file; independent.plan verifies the catalog closure",
         f"/api/(addon|playground)s/{api.UNIT}/containers/{api.DO}": "the containers of an item that is on, as the files say now",
         f"/api/groups/{api.ID}/{api.DO}": "the containers of a group of the platform",
         f"/api/services/{api.SERVICE}/{api.DO}": "one service that is on",

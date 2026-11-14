@@ -337,7 +337,7 @@ class IndependentDocker(unittest.TestCase):
         subprocess.run(["docker", "image", "rm", self.seed_image], cwd=self.root, env=self.env,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
 
-    def test_private_data_consumers_links_and_shared_platform_survive_stop_resume_and_rebuild(self):
+    def test_private_data_consumers_links_and_shared_platform_survive_apply_and_update(self):
         self.instances = {}
         for letter, name in (("a", "Demo"), ("b", "Sandbox")):
             created = self.json(self.lab + "/api/playgrounds/@linked/a/runtimes", "POST", {"name": name})
@@ -353,6 +353,16 @@ class IndependentDocker(unittest.TestCase):
         self.concurrent = self.json(self.lab + "/api/playgrounds/local/concurrent/runtimes", "POST", {"name": "Concurrent"})["id"]
         source_a = self.linked / "playgrounds/a"
         original = (source_a / "compose.yml").read_bytes()
+        image = source_a / "action-image"
+        image.mkdir()
+        (image / "Dockerfile").write_text("FROM busybox:1.37.0\nRUN printf action-v1 > /action-version\n")
+        (source_a / "backend/action.txt").write_text("read-only-v1")
+        settings = json.loads(original)
+        settings["services"]["a-backend"].update(image=self.name + "/action-backend:local",
+            build={"context": "./action-image"}, pull_policy="never", environment={"RUNTIME_ACTION_TEST": "initial"})
+        settings["services"]["a-idle"] = {"image": "busybox:1.37.0", "restart": "unless-stopped",
+            "command": ["sleep", "86400"], "networks": ["internal"]}
+        (source_a / "compose.yml").write_text(json.dumps(settings))
         parent = next(p for p in self.json(self.lab + "/api/state")["playgrounds"] if p["id"] == "@linked/a")
         self.assertEqual(parent["runtime"]["mode"], "shared")
         self.assertFalse(parent["on"])
@@ -396,11 +406,44 @@ class IndependentDocker(unittest.TestCase):
         self.assertEqual(state_file.read_bytes(), ownership, "Resume reran its seed")
         self.assertEqual((data / "sentinel").read_text(), "private user data")
         self.assertEqual(self.command([*self.runtime_command("a"), "exec", "-T", "redis", "redis-cli", "GET", "private-sentinel"]), "only-a")
+        print("Apply refreshes saved settings and read-only inputs without seeding or starting stopped services", flush=True)
+        self.command([*self.runtime_command("a"), "stop", "a-idle"])
+        def ids():
+            return dict(line.split() for line in self.command([*self.runtime_command("a"), "ps", "--all", "--format", "{{.Service}} {{.ID}}"]).splitlines())
+        before = ids()
+        settings["services"]["a-backend"]["environment"]["RUNTIME_ACTION_TEST"] = "applied"
+        (source_a / "compose.yml").write_text(json.dumps(settings))
+        (source_a / "backend/action.txt").write_text("read-only-v2")
+        self.job(f"/api/runtimes/{self.instances['a']}/apply", {})
+        after = ids()
+        self.assertNotEqual(after.pop("a-backend"), before.pop("a-backend"))
+        self.assertEqual(after, before, "Apply recreated an unchanged or stopped container")
+        self.assertEqual(self.command([*self.runtime_command("a"), "exec", "-T", "a-backend", "cat", "/www/action.txt"]), "read-only-v2")
+        self.assertEqual(self.command([*self.runtime_command("a"), "exec", "-T", "a-backend", "printenv", "RUNTIME_ACTION_TEST"]), "applied")
+        before = ids()
+        self.job(f"/api/runtimes/{self.instances['a']}/apply", {})
+        self.assertEqual(ids(), before, "No-op Apply recreated containers")
+        self.job(f"/api/runtimes/{self.instances['a']}/restart", {})
+        self.assertEqual(self.command([*self.runtime_command("a"), "ps", "--all", "--format", "{{.State}}", "a-idle"]), "exited")
+        print("Update rebuilds the configured local image without adopting unapplied settings", flush=True)
+        settings["services"]["a-backend"]["environment"]["RUNTIME_ACTION_TEST"] = "not-applied"
+        (source_a / "compose.yml").write_text(json.dumps(settings))
+        (image / "Dockerfile").write_text("FROM busybox:1.37.0\nRUN printf action-v2 > /action-version\n")
+        self.job(f"/api/runtimes/{self.instances['a']}/update", {})
+        self.assertEqual(self.command([*self.runtime_command("a"), "exec", "-T", "a-backend", "cat", "/action-version"]), "action-v2")
+        self.assertEqual(self.command([*self.runtime_command("a"), "exec", "-T", "a-backend", "printenv", "RUNTIME_ACTION_TEST"]), "applied")
+        self.assertEqual(self.command([*self.runtime_command("a"), "ps", "--all", "--format", "{{.State}}", "a-idle"]), "exited")
+        self.assertEqual(state_file.read_bytes(), ownership, "Apply or Update replayed the seed")
+        self.assert_key_access("a", key["key"], True)
         self.job(f"/api/playgrounds/{self.instances['a']}/stop", {})
-        print("Rebuild refreshes inputs and keeps mutable data and ports", flush=True)
-        self.job(f"/api/playgrounds/{self.instances['a']}/runtime/rebuild", {})
+        self.job(f"/api/runtimes/{self.instances['a']}/apply", {})
+        self.assertFalse(self.metadata("a")["active"])
+        self.assertNotIn("running", self.command([*self.runtime_command("a"), "ps", "--all", "--format", "{{.State}} "]))
+        self.job(f"/api/playgrounds/{self.instances['a']}/start", {})
+        self.assertEqual(self.command([*self.runtime_command("a"), "exec", "-T", "a-backend", "printenv", "RUNTIME_ACTION_TEST"]), "not-applied")
         self.assertEqual(self.metadata("a")["ports"], own["ports"])
         self.assertEqual((data / "sentinel").read_text(), "private user data")
+        self.assertEqual(state_file.read_bytes(), ownership, "Start after Apply replayed the seed")
         self.assert_key_access("a", key["key"], True)
         self.job(f"/api/playgrounds/{self.instances['a']}/stop", {})
         self.cleanup_workflow(api_id, app, sub, key, own, state_file, ownership, data, source_a)
@@ -472,6 +515,9 @@ class IndependentDocker(unittest.TestCase):
         self.job(f"/api/runtimes/{self.instances['a']}/start", {})
         self.assertNotEqual(self.api("a")["id"], api_id)
         self.assert_key_access("a", key["key"], False)
+        seeded = self.api("a")["id"]
+        self.job(f"/api/playgrounds/{self.instances['a']}/reseed", {})
+        self.assertEqual(self.api("a")["id"], seeded, "Re-seed did not reconcile the runtime's own API")
         self.job(f"/api/runtimes/{self.instances['a']}/stop", {})
         delete = self.json(self.lab + path, "POST", {"operation": "delete", "check": True})
         self.job(path, {"operation": "delete", "fingerprint": delete["fingerprint"]})

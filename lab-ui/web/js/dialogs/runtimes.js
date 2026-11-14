@@ -47,26 +47,31 @@ export async function createRuntime(item, current = null) {
 
 export async function independentAction(item, verb) {
   try {
+    if (verb === "update") return runJob(() => api(`/api/runtimes/${item.id}/update`, {}), { key: `playground:${item.id}`, verb });
+    const label = verb[0].toUpperCase() + verb.slice(1);
     let rows;
-    if (verb === "start" || verb === "rebuild") {
-      const path = `/api/playgrounds/${item.id}/check`;
-      const checks = await api(verb === "rebuild" ? `${path}?rebuild=1` : path);
+    if (["start", "apply"].includes(verb)) {
+      const path = verb === "start" ? `/api/playgrounds/${item.id}/check` : `/api/runtimes/${item.id}/check?action=${verb}`;
+      const checks = await api(path);
       const blocked = checks.checks.find((row) => row.state === "warn");
       if (blocked) throw new Error(blocked.detail);
       rows = planRows(checks.dialog || {});
+      if (checks.dialog?.scope) rows.push({ label: label, items: [checks.dialog.scope], note: true });
       rows.push({ label: "Keeps", items: ["All its data", "Other playgrounds and the shared platform"], note: true });
     } else {
       rows = [{ label: "Stops", items: ["Only this playground's platform and apps"] },
         { label: "Keeps", items: ["All its data", "Other playgrounds and the shared platform"], note: true }];
     }
-    const confirmed = await effectsDialog({ title: `${verb === "rebuild" ? "Rebuild" : verb === "start" ? "Start" : "Stop"} ${item.name}`,
-      options: [{ value: true, rows }], action: () => verb === "rebuild" ? "Rebuild runtime" : verb === "start" ? "Start" : "Stop" });
+    const confirmed = await effectsDialog({ title: `${label} ${item.name}`,
+      options: [{ value: true, rows }], action: () => label });
     if (!confirmed) return;
-    const route = verb === "rebuild" ? "runtime/rebuild" : verb;
-    runJob(() => api(`/api/playgrounds/${item.id}/${route}`, {}), { key: `playground:${item.id}`, verb: verb === "rebuild" ? "start" : verb });
+    const route = verb === "apply" ? `/api/runtimes/${item.id}/${verb}` : `/api/playgrounds/${item.id}/${verb}`;
+    runJob(() => api(route, {}), { key: `playground:${item.id}`, verb });
   } catch (error) { toast(error.message, true); }
 }
 
-export const rebuildRuntimeEntry = (item) => ({ label: "Rebuild runtime from current settings",
-  disabled: !!store.wait(true) || !item.runtime?.prepared, reason: store.wait(true) || (item.runtime?.prepared ? "" : "Start this playground first"),
-  onSelect: () => independentAction(item, "rebuild") });
+export const runtimeActionEntries = (item) => ["apply", "update"].map((verb) => {
+  const reason = store.wait(true) || (!item.runtime?.prepared ? "Start this runtime first" : item.runtime.initialized === false ? "Start this runtime successfully first" : verb === "update" && !item.runtime.running ? "Nothing runs" : "");
+  return { label: verb === "apply" ? "Apply" : "Update", disabled: !!reason, reason,
+    onSelect: () => independentAction(item, verb) };
+});

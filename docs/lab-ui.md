@@ -51,7 +51,7 @@ Process memory is not copied. Datastores that buffer persistent writes declare `
 array of command arguments in their Compose labels; the command runs inside their own container after application writers
 pause and must fail if flushing fails. The core declares this for MongoDB, Elasticsearch and Redis. Stores resume before
 their writers. Older runtime records inherit a core flush command only when its image exactly matches the running image;
-otherwise rebuild the source first. Custom stores need an appropriate flush command for their persistence model.
+otherwise apply the source’s settings first. Custom stores need an appropriate flush command for their persistence model.
 
 There are no global runtime defaults or per-playground Shared/Independent settings.
 
@@ -64,8 +64,14 @@ networks, storage and loopback ports. Several can run at once. Use the links and
 from the shared platform's. Start, Stop, Restart, Re-seed, logs and the terminal act on that runtime alone.
 
 Stop keeps its data, including API edits, applications, subscriptions, API keys and the seed's ownership record. Start resumes
-it without replaying its seed. *Rebuild runtime from current settings* refreshes its configuration, images and read-only
-inputs, preserves its writable data and ports, and does not replay its seed. Choose *Re-seed* explicitly to apply seed data again.
+it without replaying its seed. The runtime’s More menu uses the existing actions:
+
+- *Apply* applies the current saved playground and Lab settings to this runtime. Changed running containers are recreated and failed services are restarted when their dependencies are available; stopped services stay stopped. With the whole runtime stopped, the saved settings take effect at its next Start.
+- *Update* refreshes images using this runtime’s configured versions, then recreates changed running containers. It does not adopt later Shared settings or select newer version tags. Local builds are rebuilt when the runtime configuration declares them; a cloned local image refreshes from its recorded local image reference.
+- *Re-seed*, on the running runtime’s page, reapplies its seed data in Gravitee.
+
+Apply and Update keep writable data and assigned ports and never run the seed. Restart only restarts running containers.
+The normal runtime creation, cloning and deletion actions remain separate.
 
 The Lab keeps private configuration and copied mounts in `.lab/runtimes/`, and named runtime identities in
 `.lab/playground-runtimes.json`. Catalogs and linked worktrees stay in place. Shared data enters a named runtime only through
@@ -83,8 +89,8 @@ volumes, runtime files, ports and captured versions. Clones also show their sour
 are shown once as machine-wide storage; several runtimes can use the same image layers.
 
 Choose *Open runtime* on its row to open its guide and consoles. The *Ports* column opens its loopback addresses by service;
-the menu offers the same two actions. *Source playground* opens the original Shared playground. Use the menu to restart or rebuild it. Source settings apply at first Start;
-Rebuild applies later changes to that runtime. The platform controls in the page header explicitly manage the
+the menu offers the same two actions. *Source playground* opens the original Shared playground. Use the menu to restart, Apply or Update it. Source settings apply at first Start;
+Apply applies later saved changes to that runtime. The platform controls in the page header explicitly manage the
 shared platform. A runtime whose source is unavailable can still be stopped and cleaned up.
 
 Stop an independent runtime before cleanup, then choose:

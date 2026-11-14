@@ -130,16 +130,17 @@ def _overlay(body, project):
     return body
 
 
-def check(project, pid, rebuild=False):
+def check(project, pid, operation="start"):
     unit = layers.lookup(project, "playground", runtime_settings.source(pid))
     try:
-        dialog = independent.plan(pid, rebuild=rebuild)
+        dialog = independent.plan(pid) if operation == "start" else independent.change_plan(pid, operation)
         checks = [{"name": "Independent runtime", "state": "ok", "detail": "Own platform, data and ports"}]
     except (ValueError, compose.ComposeError) as error:
         dialog = None
         checks = [{"name": "Independent runtime", "state": "warn", "detail": str(error)}]
-    checks += playgrounds._host_checks(unit)
-    checks += playgrounds._license_checks(project, unit, {})
+    if operation != "update":
+        checks += playgrounds._host_checks(unit)
+        checks += playgrounds._license_checks(project, unit, {})
     return {"checks": checks, "dialog": dialog}
 
 
@@ -159,7 +160,7 @@ def create(project, pid, body):
             raise ValueError("Clone only a runtime of this playground")
         runtime_clones.check(source)
     if mode == "fresh":
-        independent.plan(pid, rebuild=True)  # A snapshot uses its captured configuration.
+        independent.plan(pid, refresh=True)  # A snapshot uses its captured configuration.
     created = runtime_settings.create(pid, body.get("name"))
     if mode == "clone":
         try:
@@ -187,23 +188,19 @@ def action(project, pid, operation, body=None):
     body = body or {}
     if body.get("place") not in (None, "machine"):
         raise ValueError("An independent runtime runs only on this machine")
-    if operation in ("start", "rebuild"):
+    if operation in ("start", "apply", "update"):
         if (independent.read(pid) or {}).get("clone_pending"):
             raise ValueError("This clone is incomplete; delete it and create a new runtime")
-        result = check(project, pid, rebuild=operation == "rebuild")
+        result = check(project, pid, operation=operation)
         if any(row["state"] == "warn" for row in result["checks"]):
             raise ValueError(next(row["detail"] for row in result["checks"] if row["state"] == "warn"))
-        return independent.start(pid, rebuild=operation == "rebuild")
+        return {"start": independent.start, "apply": independent.apply, "update": independent.update}[operation](pid)
     if operation == "stop":
         return independent.stop(pid, remove=bool(body.get("remove")))
     if operation == "reseed":
         return independent.reseed(pid)
     if operation == "restart":
-        if not independent.read(pid):
-            raise ValueError("Start this playground first")
-        value = independent.read(pid)
-        lasting = [key for key in value["services"] if key not in value["oneshots"]]
-        return JOBS.start("Restart " + independent._label(pid), [independent.command(pid, "restart", *lasting)], key=f"playground:{pid}", verb="restart")
+        return independent.restart(pid)
     raise ValueError("Unknown independent runtime action")
 
 
@@ -326,7 +323,7 @@ def listing(project, fresh=False, playground=None):
         resources = value["resources"]
         row = {"id": pid, "name": names[pid],
                "playground": parent, "playground_name": (unit or {}).get("name") or parent,
-               "mode": "independent", "selected": True, "prepared": bool(record), "source": unit is not None,
+               "mode": "independent", "selected": True, "prepared": bool(record), "initialized": bool(record and record.get("initialized")), "source": unit is not None,
                "containers": resources["containers"], "volumes": resources["volumes"],
                "local_bytes": value["local"]["bytes"] if value["local"] else None,
                "folder": independent.folder(pid).relative_to(paths.ROOT).as_posix() if record else None,

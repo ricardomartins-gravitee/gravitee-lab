@@ -566,7 +566,7 @@ def _required_versions(project, product, missing):
 def required(job, project, product, names, pull):
     """Install required plugins into a private target; its caller supplies the scoped image pull.
 
-    No running service is stopped here. The independent runtime recreates its own services after preparation.
+    No running service is stopped here. Returns whether plugins were added, so the runtime can recreate only their consumers.
     """
     target = _target(project, product)
     present = _installed(project, target)
@@ -578,3 +578,4 @@ def required(job, project, product, names, pull):
     missing = _missing(present, names)
     if missing:
         _change(job, Path(target["folder"]), _required_versions(project, product, missing))
+    return bool(missing)

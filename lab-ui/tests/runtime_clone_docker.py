@@ -15,7 +15,7 @@ from tests import independent_docker
 
 
 class RuntimeCloneDocker(independent_docker.IndependentDocker):
-    test_private_data_consumers_links_and_shared_platform_survive_stop_resume_and_rebuild = None
+    test_private_data_consumers_links_and_shared_platform_survive_apply_and_update = None
 
     def make_playground(self, letter):
         super().make_playground(letter)
@@ -151,6 +151,15 @@ class RuntimeCloneDocker(independent_docker.IndependentDocker):
         self.assert_key_access("a", key, True)
         self.assertEqual(self.command([*self.runtime_command("b"), "exec", "-T", "redis", "redis-cli", "GET", "private-clone"]), "current private data")
         self.assertEqual(self.command([*self.runtime_command("b"), "exec", "-T", "mongodb", "cat", "/data/configdb/clone-marker"]), "cloned")
+        print("Update a cloned runtime from its configured image references and preserve copied data", flush=True)
+        source_ids = self.command([*self.runtime_command("a"), "ps", "--all", "--format", "{{.ID}} {{.State}}"])
+        self.command([*compose.COMPOSE, "build", "a-backend"])
+        self.job(f"/api/runtimes/{self.instances['b']}/update", {})
+        self.assertEqual(self.command([*self.runtime_command("b"), "exec", "-T", "a-backend", "cat", "/image-version"]), "edited-image")
+        self.assertEqual(self.command([*self.runtime_command("b"), "exec", "-T", "mongodb", "cat", "/data/configdb/clone-marker"]), "cloned")
+        self.assertEqual(self.command([*self.runtime_command("a"), "ps", "--all", "--format", "{{.ID}} {{.State}}"]), source_ids)
+        self.assertEqual(self.api("a")["id"], api_id)
+        self.assert_key_access("a", key, True)
         self.job(f"/api/playgrounds/{self.instances['b']}/stop", {})
         print("Fresh creation uses the seed instead of copying current changes", flush=True)
         self.instances["fresh"] = self.json(self.lab + "/api/playgrounds/@linked/a/runtimes", "POST", {"name": "Fresh", "mode": "fresh"})["id"]

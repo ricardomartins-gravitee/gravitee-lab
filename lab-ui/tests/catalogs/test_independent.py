@@ -78,7 +78,7 @@ class Independent(Case):
         self.assertEqual(Path(app[0]["source"]), Path(value["binds"][str(state)]) / "app")
         self.assertTrue(app[1]["read_only"])
 
-    def test_rebuild_keeps_legacy_overlapping_mount_locations_and_their_existing_data(self):
+    def test_apply_keeps_legacy_overlapping_mount_locations_and_their_existing_data(self):
         config, gathered = self.inputs["local/a"]
         state = gathered["folder"] / ".state"
         (state / "app").mkdir()
@@ -155,11 +155,11 @@ class Independent(Case):
         (left / "value.txt").write_text("Only Demo")
         self.assertEqual((right / "value.txt").read_text(), "initial a")
         self.assertEqual((source / "data/value.txt").read_text(), "initial a")
-        self.assertEqual(independent.prepare(one, rebuild=True)["ports"], a["ports"])
+        self.assertEqual(independent.prepare(one, refresh=True)["ports"], a["ports"])
         self.assertEqual((left / "value.txt").read_text(), "Only Demo")
         self.assertEqual(runtime_settings.mode("local/a"), "shared")
 
-    def test_prepare_and_rebuild_preserve_runtime_storage_and_port_assignments(self):
+    def test_prepare_and_refresh_preserve_runtime_storage_and_port_assignments(self):
         value = self.prepare()
         source = self.inputs["local/a"][1]["folder"]
         target = Path(value["binds"][str(source / "data")])
@@ -172,7 +172,7 @@ class Independent(Case):
         (source / "seed/hosts.js").write_text('const updated = "http://localhost:18000";')
         value.update(clone_pending=True, cloned_from="local/a")
         independent._write(independent.folder("local/a") / "runtime.json", value)
-        self.assertEqual(self.prepare(rebuild=True)["ports"], value["ports"])
+        self.assertEqual(self.prepare(refresh=True)["ports"], value["ports"])
         self.assertTrue(independent.read("local/a")["clone_pending"])
         self.assertIn("updated", (private_seed / "hosts.js").read_text())
         self.assertEqual((target / "value.txt").read_text(), "keep private data")
@@ -219,7 +219,7 @@ class Independent(Case):
         steps[0](worker)
         sent = worker.exec.call_args.args[0]
         self.assertTrue(independent.tested.ran("local/a"), "A successful private start must enable the normal Share workflow")
-        self.assertIn("--no-recreate", sent)
+        self.assertNotIn("--force-recreate", sent)
         self.assertIn("a-app", sent)
         self.assertNotIn("a-seed", sent)
         independent.stop("local/a")
@@ -276,3 +276,158 @@ class Independent(Case):
             self.prepare()
         jobs.start.assert_not_called()
         self.assertFalse(independent.folder("local/a").exists())
+
+    def test_apply_refreshes_read_only_inputs_but_keeps_stopped_services_data_and_ports(self):
+        config, gathered = self.inputs["local/a"]
+        file = gathered["folder"] / "config.txt"
+        file.write_text("first")
+        config["services"]["db"]["volumes"].append({"type": "bind", "source": str(file), "target": "/config", "read_only": True})
+        value = self.prepare()
+        value.update(initialized=True, active=True)
+        independent._write(independent.folder("local/a") / "runtime.json", value)
+        data = Path(value["binds"][str(gathered["folder"] / "data")]) / "value.txt"
+        data.write_text("existing runtime data")
+        file.write_text("second")
+        self.patch(independent, "containers", return_value={"db": {"State": "running"}, "a-app": {"State": "exited"}})
+        self.patch(independent, "_wait")
+        jobs = self.patch(independent, "JOBS")
+        independent.apply("local/a")
+        title, steps, kwargs = self.started(jobs)
+        worker = Mock()
+        steps[0](worker)
+        sent = worker.exec.call_args.args[0]
+        self.assertEqual((title, kwargs["verb"]), ("Apply independent playground", "apply"))
+        self.assertIn("--force-recreate", sent)
+        self.assertEqual(sent[-1], "db")
+        self.assertNotIn("a-app", sent)
+        self.assertNotIn("a-seed", sent)
+        current = independent.read("local/a")
+        self.assertEqual(current["ports"], value["ports"])
+        self.assertTrue(current["initialized"])
+        self.assertTrue(current["active"])
+        self.assertEqual(Path(current["binds"][str(file)]).read_text(), "second")
+        self.assertEqual(data.read_text(), "existing runtime data")
+        self.assertEqual((gathered["folder"] / "data/value.txt").read_text(), "initial a")
+
+    def test_apply_while_stopped_saves_settings_for_start_and_does_not_run_the_seed(self):
+        value = self.prepare()
+        value.update(initialized=True, active=False)
+        independent._write(independent.folder("local/a") / "runtime.json", value)
+        self.inputs["local/a"][0]["services"]["db"]["environment"] = {"FIXTURE_SETTING": "new"}
+        self.patch(independent, "containers", return_value={"db": {"State": "exited"}})
+        self.patch(independent, "_wait")
+        self.patch(independent, "_tested")
+        jobs = self.patch(independent, "JOBS")
+        independent.apply("local/a")
+        _, steps, _ = self.started(jobs)
+        worker = Mock()
+        steps[0](worker)
+        worker.exec.assert_not_called()
+        self.assertFalse(independent.read("local/a")["active"])
+        self.assertEqual(self.config()["services"]["db"]["environment"], {"FIXTURE_SETTING": "new"})
+        independent.start("local/a")
+        _, steps, _ = self.started(jobs)
+        steps[0](worker)
+        sent = worker.exec.call_args.args[0]
+        self.assertNotIn("--no-recreate", sent, "Start must pick up settings applied while containers were stopped")
+        self.assertNotIn("a-seed", sent)
+        self.assertEqual(independent.read("local/a")["ports"], value["ports"])
+
+    def test_update_uses_captured_configuration_and_only_recreates_running_services(self):
+        value = self.prepare()
+        value["initialized"] = True
+        independent._write(independent.folder("local/a") / "runtime.json", value)
+        before = (independent.folder("local/a") / "compose.json").read_bytes()
+        self.inputs["local/a"][0]["services"]["db"]["environment"] = {"FIXTURE_SETTING": "not applied"}
+        self.patch(independent, "containers", return_value={"db": {"State": "running"}, "a-app": {"State": "exited"}})
+        self.patch(independent, "_wait")
+        jobs = self.patch(independent, "JOBS")
+        independent.update("local/a")
+        _, steps, kwargs = self.started(jobs)
+        worker = Mock()
+        steps[0](worker)
+        commands = [call.args[0] for call in worker.exec.call_args_list]
+        self.assertEqual(kwargs["verb"], "update")
+        self.assertIn("pull", commands[0])
+        self.assertIn("--ignore-buildable", commands[0])
+        self.assertEqual(commands[-1][-1], "db")
+        self.assertNotIn("a-app", commands[-1])
+        self.assertNotIn("a-seed", commands[-1])
+        self.assertEqual((independent.folder("local/a") / "compose.json").read_bytes(), before)
+
+    def test_cloned_update_refreshes_only_its_image_aliases_and_off_update_is_refused(self):
+        value = self.prepare()
+        config = self.config()
+        references = {"db": "registry.example/store:8", "a-app": "source/app:local", "a-seed": "source/seed:local"}
+        for key, service in config["services"].items():
+            service["image"] = value["project"] + "/" + key + ":clone"
+            service.pop("build", None)
+            service["pull_policy"] = "never"
+            value["services"][key]["display"] = {"built": key != "db"}
+        value.update(initialized=True, snapshot={"references": references})
+        independent._write(independent.folder("local/a") / "runtime.json", value)
+        independent._write(independent.folder("local/a") / "compose.json", config)
+        rows = self.patch(independent, "containers", return_value={"db": {"State": "running"}, "a-app": {"State": "exited"}})
+        self.patch(independent, "_wait")
+        jobs = self.patch(independent, "JOBS")
+        independent.update("local/a")
+        _, steps, _ = self.started(jobs)
+        worker = Mock()
+        steps[0](worker)
+        sent = [call.args[0] for call in worker.exec.call_args_list]
+        self.assertEqual([cmd for cmd in sent if cmd[:2] == ["docker", "pull"]], [["docker", "pull", references["db"]]])
+        tags = [cmd for cmd in sent if cmd[:3] == ["docker", "image", "tag"]]
+        self.assertEqual({cmd[-2] for cmd in tags}, set(references.values()))
+        self.assertTrue(all(cmd[-1].startswith(value["project"] + "/") for cmd in tags))
+        self.assertNotIn("a-app", sent[-1])
+        self.assertNotIn("a-seed", sent[-1])
+        rows.return_value = {"db": {"State": "exited"}}
+        with self.assertRaisesRegex(ValueError, "Nothing runs"):
+            independent.update("local/a")
+
+    def test_apply_recovers_failed_services_but_never_starts_their_stopped_dependencies(self):
+        config, gathered = self.inputs["local/a"]
+        config["services"]["a-app"]["depends_on"] = {"db": {"condition": "service_started"}}
+        config["services"]["other"] = {"image": "fixture:local", "command": ["sleep", "86400"]}
+        gathered["found"]["services"]["other"] = {"oneshot": False}
+        value = self.prepare()
+        value["initialized"] = True
+        independent._write(independent.folder("local/a") / "runtime.json", value)
+        rows = self.patch(independent, "containers", return_value={
+            "db": {"State": "running"}, "a-app": {"State": "exited", "ExitCode": 1},
+            "other": {"State": "exited", "ExitCode": 0}})
+        self.patch(independent, "_wait")
+        jobs = self.patch(independent, "JOBS")
+        independent.apply("local/a")
+        _, steps, _ = self.started(jobs)
+        worker = Mock()
+        steps[0](worker)
+        sent = worker.exec.call_args.args[0]
+        self.assertIn("db", sent)
+        self.assertIn("a-app", sent)
+        self.assertNotIn("other", sent)
+        self.assertNotIn("a-seed", sent)
+        rows.return_value = {"db": {"State": "exited", "ExitCode": 0},
+            "a-app": {"State": "exited", "ExitCode": 1}, "other": {"State": "running"}}
+        independent.apply("local/a")
+        _, steps, _ = self.started(jobs)
+        worker = Mock()
+        steps[0](worker)
+        self.assertEqual(worker.exec.call_args.args[0][-1], "other")
+        self.assertNotIn("db", worker.exec.call_args.args[0])
+        self.assertNotIn("a-app", worker.exec.call_args.args[0])
+
+    def test_required_plugin_preparation_reports_only_private_consumers_that_need_recreation(self):
+        value = self.prepare()
+        source = self.inputs["local/a"][1]["folder"] / "data"
+        value["plugins"] = {"fixture": {"folder": str(source), "services": {"db": "/plugins"}, "names": ["required-plugin"]}}
+        required = self.patch(independent.plugins, "required", return_value=True)
+        worker = Mock()
+        self.assertEqual(independent._plugins("local/a", value, worker), {"db"})
+        target = required.call_args.args[1]["products"]["fixture"]
+        self.assertEqual(target["folder"], value["binds"][str(source)])
+        self.assertNotEqual(Path(target["folder"]), source)
+        required.call_args.args[4](["db"])
+        self.assertEqual(worker.exec.call_args.args[0], independent.command("local/a", "pull", "db"))
+        required.return_value = False
+        self.assertEqual(independent._plugins("local/a", value, worker), set())

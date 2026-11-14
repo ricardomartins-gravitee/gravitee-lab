@@ -66,7 +66,10 @@ class RuntimeState(Case):
         rows.pop("seed")
         resumed = runtimes.overlay(copy.deepcopy(self.body), self.project)
         self.assertTrue(resumed["playgrounds"][2]["up"], "Removed completed one-shots must not leave the runtime partly running")
-        jobs = self.patch(runtimes, "JOBS")
+        value["services"]["stopped"] = {"label": "Stopped app", "image": "fixture:local"}
+        rows["stopped"] = {"State": "exited", "ExitCode": 0}
+        self.patch(independent, "containers", return_value=rows)
+        jobs = self.patch(independent, "JOBS")
         runtimes.action(self.project, self.rid, "restart")
         _, commands, _ = self.started(jobs)
         self.assertEqual(commands[0][-2:], ["restart", "db"])
@@ -119,7 +122,7 @@ class RuntimeState(Case):
         self.assertNotEqual(demo["id"], other["id"])
         self.assertEqual(runtime_settings.mode("local/source-a"), "shared")
         self.assertEqual(plan.call_args.args, ("local/source-a",))
-        self.assertEqual(plan.call_args.kwargs, {"rebuild": True})
+        self.assertEqual(plan.call_args.kwargs, {"refresh": True})
         start.assert_not_called()
         self.assertFalse(independent.folder(demo["id"]).exists())
         self.assertFalse(independent.folder(other["id"]).exists())
@@ -130,9 +133,12 @@ class RuntimeState(Case):
         self.assertEqual(runtime_settings.instances(), before)
 
     def test_named_runtime_actions_cannot_target_the_shared_or_remote_platform(self):
-        for pid, body in (("local/source-a", {}), (self.rid, {"place": "cloud/environment"})):
-            with self.subTest(pid=pid), self.assertRaises(ValueError):
-                runtimes.action(self.project, pid, "start", body)
+        for operation in ("start", "apply", "update"):
+            for pid, body in (("local/source-a", {}), (self.rid, {"place": "cloud/environment"})):
+                with self.subTest(pid=pid, operation=operation), self.assertRaises(ValueError):
+                    runtimes.action(self.project, pid, operation, body)
+        with self.assertRaisesRegex(ValueError, "Unknown independent runtime action"):
+            runtimes.action(self.project, self.rid, "rebuild")
 
     def test_clone_rejects_other_playgrounds_before_registering_or_starting_anything(self):
         before = runtime_settings.instances()
@@ -157,8 +163,8 @@ class RuntimeState(Case):
         self.assertEqual(runtime_settings.source(result["id"]), "local/source-a")
         self.assertEqual(runtime_settings.mode("local/source-a"), "shared")
 
-    def test_incomplete_clones_cannot_start_or_rebuild(self):
+    def test_incomplete_clones_cannot_start_apply_or_update(self):
         self.patch(independent, "read", return_value={"clone_pending": True})
-        for operation in ("start", "rebuild"):
+        for operation in ("start", "apply", "update"):
             with self.subTest(operation=operation), self.assertRaisesRegex(ValueError, "clone is incomplete"):
                 runtimes.action(self.project, self.rid, operation)
