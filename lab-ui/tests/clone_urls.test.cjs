@@ -23,7 +23,8 @@ test('nested URLs and serialized definitions relocate once; external addresses a
     'http://localhost:8082/callback?q=1#fragment', 'https://127.0.0.1:8082/path',
     'wss://[::1]:8082/socket', 'http://host.docker.internal:49001/path',
     'http://gateway.docker.internal:8082/path', 'https://external.test:8082/path',
-    'http://localhost:80820/path', 'http://apim-gateway:8082/path']},
+    'http://localhost:80820/path', 'http://apim-gateway:8082/path',
+    'http://demo:p%40ss@host.docker.internal:08082/path', 'http://localhost.evil.test:8082/path']},
     definition: '{"url":"http://localhost:8082/api","target":"http://localhost:8082/self","big":9223372036854775806}', count: 8082,
     endpoint: {target: 'http://localhost:8082/self'},
     binary: {_bsontype: 'Binary', value: 'http://localhost:8082/credential'}, date: new Date()};
@@ -38,8 +39,9 @@ test('nested URLs and serialized definitions relocate once; external addresses a
   assert.equal(set['nested.callbacks.2'], 'wss://[::1]:49001/socket');
   assert.equal(set['nested.callbacks.3'], 'http://host.docker.internal:49002/path');
   assert.equal(set['nested.callbacks.4'], 'http://gateway.docker.internal:49001/path');
+  assert.equal(set['nested.callbacks.8'], 'http://demo:p%40ss@host.docker.internal:49001/path');
   assert.equal(set.definition, '{"url":"http://localhost:49001/api","target":"http://localhost:8082/self","big":9223372036854775806}');
-  assert.equal(Object.keys(set).length, 6);
+  assert.equal(Object.keys(set).length, 7);
 });
 test('a database without source-local URLs receives no write', () => {
   assert.equal(run({_id: 'id', endpoint: 'https://external.test:8082', secret: 'opaque'}).length, 0);

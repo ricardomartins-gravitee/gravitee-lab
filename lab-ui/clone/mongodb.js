@@ -1,15 +1,15 @@
 // Change string values only: BSON identities, numbers, dates and binary credentials stay intact.
 const ports = JSON.parse(process.env.GRAVITEE_LAB_CLONE_PORTS);
-const local = /\b(https?|wss?):\/\/(localhost|127\.0\.0\.1|\[::1\]|host\.docker\.internal|gateway\.docker\.internal)(?::(\d+))?(?=$|[/?#\s"'<>\\)])/gi;
+const local = /\b(https?|wss?):\/\/([^/?#\s"'<>@]*@)?(localhost|127\.0\.0\.1|\[::1\]|host\.docker\.internal|gateway\.docker\.internal)(?::(\d+))?(?=$|[/?#\s"'<>\\)])/gi;
 function relocate(value, path) {
-  return value.replace(local, (url, scheme, host, port, offset) => {
+  return value.replace(local, (url, scheme, userinfo, host, port, offset) => {
     // A Gravitee endpoint target on loopback calls its own container, not the host.
     // Definitions may be JSON strings: inspect the immediate key without parsing
     // and reserializing unrelated numbers or credentials in that definition.
     const target = path[path.length - 1] === 'target' || /"target"\s*:\s*"$/.test(value.slice(0, offset));
     if (target && /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(host)) return url;
-    const original = port || (/s$/i.test(scheme) ? '443' : '80');
-    return Object.hasOwn(ports, original) ? `${scheme}://${host}:${ports[original]}` : url;
+    const original = port ? String(Number(port)) : (/s$/i.test(scheme) ? '443' : '80');
+    return Object.hasOwn(ports, original) ? `${scheme}://${userinfo || ''}${host}:${ports[original]}` : url;
   });
 }
 function changes(value, path, result) {
