@@ -214,6 +214,9 @@ class GammaAmCloneDocker(runtime_clone_docker.RuntimeCloneDocker):
         self.am("/domains/" + ids["domain"] + "/users", "POST", {"username": "manual-user", "password": "Manual-Password-456!",
                 "email": "manual@example.test", "firstName": "Manual", "lastName": "User", "preRegistration": False, "forceResetPassword": False})
         self.password_login("clone-domain-a", "manual-user", "Manual-Password-456!")
+        # This disposable demo domain needs AM's explicit opt-in for local HTTP callbacks.
+        self.am("/domains/" + ids["domain"], "PATCH", {"oidc": {"clientRegistrationSettings": {
+            "allowLocalhostRedirectUri": True, "allowHttpSchemeRedirectUri": True}}})
         client = self.am("/domains/" + ids["domain"] + "/applications", "POST", {"name": "Manual client", "type": "BROWSER",
                          "clientId": "manual-clone-client", "clientSecret": "Manual-Client-Secret-789!", "redirectUris": ["https://example.test/callback"]})
         ids["client"] = client["id"]
