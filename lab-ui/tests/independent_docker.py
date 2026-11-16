@@ -40,8 +40,15 @@ class IndependentDocker(unittest.TestCase):
         self.env.update(compose.NO_REMOTE, COMPOSE_FILE="docker-compose.yml:.lab/on.yml")
         self.log = self.root / "lab.log"
         self.log.touch()
-        self.addCleanup(self.cleanup_lab)
         self.make_lab()
+        # Resolved Compose files carry concrete names; refuse another lab's resources before starting or cleaning up.
+        resolved = json.loads(self.command([*compose.COMPOSE, "config", "--format", "json"]))
+        for kind in ("volumes", "networks"):
+            for resource in resolved.get(kind, {}).values():
+                self.assertFalse(resource.get("external"), "An isolated fixture cannot use external resources")
+                self.assertTrue(resource["name"].startswith(self.name + "_"),
+                                "An isolated fixture must use its own volume and network names")
+        self.addCleanup(self.cleanup_lab)
         print("Starting isolated Gravitee lab " + self.name, flush=True)
         self.command([*compose.COMPOSE, "up", "-d", "--wait", "redis"], timeout=120)
         self.command([*compose.COMPOSE, "exec", "-T", "redis", "redis-cli", "SET", "shared-sentinel", "keep-original"])
