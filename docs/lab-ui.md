@@ -40,8 +40,12 @@ applications, subscriptions, keys, Gamma and Access Management data retain their
 
 The source's application writers briefly pause, declared datastores flush and pause, storage is copied into new volumes
 and private files, then the same source containers resume. The copy stays stopped throughout. Its networks and host ports
-are separate; localhost URLs in its configuration follow the new ports. URLs stored inside databases or application data
-remain as captured and may need changing in the clone's own consoles. Catalog files and links stay in place.
+are separate; localhost URLs in its configuration follow the new ports. Before any cloned application starts, an offline
+helper updates local HTTP, HTTPS and WebSocket URLs in the copied MongoDB documents, including nested settings and JSON
+definitions. It translates only source runtime ports on localhost, loopback IPs and Docker host aliases. Internal service
+names still resolve within the clone's network. Gravitee endpoint `target` URLs on loopback retain their container's
+internal port; Docker host targets follow the clone's published ports. External addresses, record identities and binary credentials stay intact.
+The helper mounts only copied storage and has no network access. Catalog files, source databases and links stay in place.
 
 A stopped source must be started first. External or ambiguous storage is refused. A failed or canceled clone stays stopped
 and cannot be started or have settings applied; delete the incomplete copy and try again. Cancellation may wait for a storage copy to
@@ -52,6 +56,12 @@ array of command arguments in their Compose labels; the command runs inside thei
 pause and must fail if flushing fails. The core declares this for MongoDB, Elasticsearch and Redis. Stores resume before
 their writers. Older runtime records inherit a core flush command only when its image exactly matches the running image;
 otherwise apply the source’s settings first. Custom stores need an appropriate flush command for their persistence model.
+
+The core's `x-gravitee.snapshot.<service>.relocate` declares an array of arguments for an offline command on that store's
+copied mounts. This metadata does not change running containers or require Apply on the source. It receives
+`GRAVITEE_LAB_CLONE_PORTS`, a JSON map of original host ports to clone host ports. The core's
+MongoDB hook updates stored URL strings without exporting resources or replaying seeds. Other datastores and opaque or
+encrypted URL values need their own relocation support; arbitrary external hostnames are not guessed or changed.
 
 There are no global runtime defaults or per-playground Shared/Independent settings.
 
