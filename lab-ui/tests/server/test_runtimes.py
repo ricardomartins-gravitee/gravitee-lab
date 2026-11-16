@@ -76,7 +76,8 @@ class RuntimeState(Case):
 
     def test_central_inventory_keeps_stopped_and_missing_source_runtimes_and_counts_exclusive_storage(self):
         records = [(self.rid, {"active": False, "label": "A", "tested": {"versions": {"VERSION": "1"}},
-                              "services": {"db": {"label": "Database", "ports": ["31000"]}},
+                              "services": {"db": {"label": "Database", "ports": ["31000"], "image": "store:1",
+                                                  "display": {"tag": "1"}}, "worker": {"label": "Worker", "ports": []}},
                               "snapshot": {"images": {"db": "sha256:captured"}, "references": {"db": "store:1"}}}),
                    ("local/orphan", {"active": False, "label": "Orphan", "services": {}})]
         self.patch(runtimes.runtime_storage, "known", return_value=(records, []))
@@ -91,7 +92,11 @@ class RuntimeState(Case):
         self.assertEqual(rows[self.rid]["images"], [{"service": "db", "id": "sha256:captured", "reference": "store:1"}])
         self.assertEqual(rows[self.rid]["volume_bytes"], 200)
         self.assertEqual(rows[self.rid]["local_bytes"], 100)
-        self.assertEqual(rows[self.rid]["services"], [{"id": "db", "label": "Database", "ports": ["31000"]}])
+        db, worker = rows[self.rid]["services"]
+        self.assertEqual((db["id"], db["label"], db["ports"], db["containers"], db["image"], db["tag"]),
+                         ("db", "Database", ["31000"], [], "store:1", "1"))
+        self.assertEqual(db["state"]["key"], "absent")
+        self.assertEqual((worker["id"], worker["ports"]), ("worker", []))
         self.assertEqual(rows[self.rid]["ports"], ["31000"])
         self.assertTrue(rows["local/orphan"]["cleanup"]["data"]["enabled"])
         self.assertFalse(rows["local/orphan"]["source"])
@@ -101,7 +106,9 @@ class RuntimeState(Case):
             with self.subTest(state=state):
                 private["resources"]["containers"] = [{"name": "runtime-db", "service": "db", "state": state, "ports": ports}]
                 row = next(r for r in runtimes.listing(self.project)["runtimes"] if r["id"] == self.rid)
-                self.assertEqual(row["services"], [{"id": "db", "label": "Database", "ports": expected}])
+                self.assertEqual(row["services"][0]["ports"], expected)
+                self.assertEqual(row["services"][0]["containers"], [{"name": "runtime-db", "state": state}])
+                self.assertEqual(row["services"][0]["state"]["key"], "running" if state == "running" else "stopped")
                 self.assertEqual(row["ports"], expected)
 
     def test_missing_source_runtime_can_be_stopped_without_rewriting_catalogs_or_choices(self):
