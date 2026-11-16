@@ -41,7 +41,7 @@ export function runtimePanel(root, playground = null, { heading = true, current 
   function toggle(row) {
     const key = row.id || "shared";
     expanded[key] = !expanded[key];
-    remember("runtime-expanded", expanded);
+    remember("runtime-expanded", JSON.stringify(expanded));
     render();
     $(`[data-runtime-row="${model.runtimes.indexOf(row)}"] [data-runtime-toggle]`, root)?.focus();
   }
