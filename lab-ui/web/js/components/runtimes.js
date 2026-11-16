@@ -32,7 +32,7 @@ export function runtimePanel(root, playground = null, { heading = true, current 
       return `<li class="container cols"><span></span><span class="s-name"><span class="c-name" data-tip="${esc(entry.id)}">${esc(entry.label)}</span>
         <span class="c-id" data-tip="${esc(containers || "No container")}">${esc(containers || "No container")}</span></span>
         <span class="s-state">${statusHtml(state.key, state.label)}</span>${serviceCells(service)}
-        <span class="s-uptime">${esc(service.uptime || "")}</span><span class="row-icons"></span></li>`;
+        <span class="s-uptime">${esc(state.running ? service.uptime || "" : "")}</span><span class="row-icons"></span></li>`;
     }).join("");
     return `<div class="cols stack-head" aria-hidden="true"><span></span><span>Service / container</span><span>State</span><span>Version</span><span>Ports</span><span>Uptime</span><span></span></div>
       <ul class="containers">${rows || '<li class="empty">No containers or services yet</li>'}</ul>`;
