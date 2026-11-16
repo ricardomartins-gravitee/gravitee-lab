@@ -1114,6 +1114,7 @@ dialog .pairs .snippet { flex: 1; }
 .runtime-overview .sub { display: block; }
 .runtime-overview td .page-actions { flex-wrap: nowrap; }
 .runtime-name { display: flex; align-items: center; gap: var(--sp-2); }
+.runtime-services { --version-width: 116px; }
 .runtime-services > td { padding: 0; }
 .runtime-summary { padding: 0 var(--pad) var(--sp-3); }
 
