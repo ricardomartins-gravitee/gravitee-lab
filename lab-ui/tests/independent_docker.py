@@ -308,6 +308,61 @@ class IndependentDocker(unittest.TestCase):
                       if json.loads(file.read_text())["id"] == self.instances[letter])
         return [*compose.COMPOSE, "--project-directory", str(folder), "-f", str(folder / "compose.json"), "-p", value["project"]]
 
+    def assert_service_controls_isolated(self, target, sibling):
+        """The same service name in Shared and another runtime must remain untouched."""
+        rows = self.json(self.lab + "/api/runtimes")["runtimes"]
+        own = next(r for r in rows if r["id"] == self.instances[target])
+        key = next(s["key"] for s in own["services"] if s["id"] == "redis")
+        other = next(r for r in rows if r["id"] == self.instances[sibling])
+        self.assertNotEqual(key, next(s["key"] for s in other["services"] if s["id"] == "redis"))
+        self.assertNotEqual(key, "redis")
+        protected = self.command([*compose.COMPOSE, "-p", self.name, "ps", "-aq"]).split()
+        protected += self.command([*self.runtime_command(sibling), "ps", "-aq"]).split()
+
+        def identity(cid):
+            return self.command(["docker", "inspect", "--format", "{{.Id}} {{.State.StartedAt}} {{.State.Status}}", cid])
+        before = {cid: identity(cid) for cid in protected}
+        cmd = self.runtime_command(target)
+        self.command([*cmd, "exec", "-T", "redis", "redis-cli", "SET", "service-action-sentinel", "keep-private-data"])
+        self.command([*cmd, "exec", "-T", "redis", "redis-cli", "SAVE"])
+        marker = "selected-service-" + uuid.uuid4().hex
+        self.command([*cmd, "exec", "-T", "redis", "redis-cli", "CONFIG", "SET", "loglevel", "debug"])
+        self.command([*cmd, "exec", "-T", "redis", "redis-cli", "CLIENT", "SETNAME", marker])
+        self.command([*cmd, "exec", "-T", "redis", "redis-cli", "CONFIG", "SET", "loglevel", "notice"])
+        request = urllib.request.Request(self.lab + "/api/logs?services=" + key + "&tail=100")
+        found = False
+        with urllib.request.urlopen(request, timeout=20) as response:
+            for _ in range(100):
+                line = response.readline().decode()
+                if not line.startswith("data:"):
+                    continue
+                batch = json.loads(line[5:])
+                if isinstance(batch, dict):
+                    self.assertEqual(batch.get("service"), key)
+                else:
+                    self.assertTrue(all(row[0] == key for row in batch), "The log stream included another service")
+                if marker in line:
+                    found = True
+                    break
+        self.assertTrue(found, "The selected runtime's log marker was missing")
+        path = "/api/services/" + key
+        for operation in ("stop", "start", "restart"):
+            self.job(path + "/" + operation, {})
+            self.assertEqual({cid: identity(cid) for cid in protected}, before)
+        self.job(path + "/stop", {})
+        cid = self.command([*cmd, "ps", "-aq", "redis"])
+        self.assertEqual(self.command(["docker", "inspect", "--format",
+            '{{index .Config.Labels "com.docker.compose.project"}}', cid]), self.metadata(target)["project"])
+        self.command(["docker", "rm", cid])
+        self.job(path + "/start", {})
+        self.assertNotEqual(self.command([*cmd, "ps", "-aq", "redis"]), cid)
+        self.until(lambda: self.json(self.lab + "/api/state")["services"][key]["state"]["key"] == "healthy",
+                   "recreated service became healthy", timeout=30)
+        self.assertEqual(self.command([*cmd, "exec", "-T", "redis", "redis-cli", "GET", "service-action-sentinel"]), "keep-private-data")
+        self.json(self.lab + "/api/services/runtime-missing--redis/stop", "POST", {}, expected=(404,))
+        self.assertEqual({cid: identity(cid) for cid in protected}, before)
+        print("Logs, Start, Stop and Restart used only the selected runtime; removed container recreated with data", flush=True)
+
     def cleanup_lab(self):
         if hasattr(self, "process"):
             self.process.terminate()
@@ -375,6 +430,8 @@ class IndependentDocker(unittest.TestCase):
         key = next(row for row in self.consumer_keys(sub) if not row["revoked"])
         self.assert_key_access("a", key["key"], True)
         self.job(f"/api/playgrounds/{self.concurrent}/start", {})
+        self.instances["concurrent"] = self.concurrent
+        self.assert_service_controls_isolated("concurrent", "a")
         self.assert_key_access("a", key["key"], True)
         self.assertTrue(next(item for item in self.json(self.lab + "/api/state")["playgrounds"] if item["id"] == self.instances["a"])["on"])
         self.job(f"/api/playgrounds/{self.concurrent}/stop", {})

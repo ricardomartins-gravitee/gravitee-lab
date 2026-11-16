@@ -704,14 +704,17 @@ def service(pid, service_name, operation):
         raise paths.NotFound("No such independent service")
     if operation not in ("start", "stop", "restart"):
         raise ValueError("Choose Start, Stop or Restart")
+    if operation != "stop" and value.get("clone_pending"):
+        raise ValueError("This clone is incomplete; delete it and create a new runtime")
     if service_name in value["oneshots"] and operation != "stop":
         raise ValueError("Use Re-seed to run the playground seed")
     def run(job):
         if operation != "stop":
             value["active"] = True
             _write(folder(pid) / "runtime.json", value)
-        job.exec(command(pid, operation, service_name))
-    return JOBS.start(f"{operation.capitalize()} {value['services'][service_name]['label']}",
+        args = ["up", "-d", "--no-deps"] if operation == "start" else [operation]
+        job.exec(command(pid, *args, service_name))
+    return JOBS.start(f"{operation.capitalize()} {value['services'][service_name]['label']} ({_label(pid)})",
                       [run], key=f"service:{service_key(pid, service_name)}", verb=operation)
 
 

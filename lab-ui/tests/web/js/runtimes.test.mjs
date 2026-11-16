@@ -19,13 +19,14 @@ const page = installDom({ fetch: async (path, options = {}) => {
   return reply(value);
 } });
 globalThis.innerHeight = 900;
-globalThis.EventSource = class { close() {} addEventListener() {} };
+const logStreams = [];
+globalThis.EventSource = class { constructor(url) { logStreams.push(url); } close() {} addEventListener() {} };
 const { store, remember } = await import("../../../web/js/core.js");
 const { runtimePanel } = await import("../../../web/js/components/runtimes.js");
 const flush = async () => { for (let i = 0; i < 14; i += 1) await Promise.resolve(); };
 const base = { blind: false, wait: "", docker: { error: null }, job: null, services: {}, links: [], addons: [], setups: [],
   playgrounds: [{ kind: "playground", id: "local/a", name: "Private A", on: false, runtime: { mode: "independent", prepared: true, running: false }, settings: [] }],
-  platform: { name: "Platform", settings: [] } };
+  platform: { name: "Platform", settings: [], start: { needed: false }, groups: [] } };
 const privateRow = { id: "local/a", name: "Private A", mode: "independent", selected: true, prepared: true, source: true,
   containers: [], volumes: [{ name: "own-volume", bytes: 100 }], local_bytes: 100, volume_bytes: 100,
   ports: ["31000"], problem: null, state: "Stopped", running: 0, active: false, memory_bytes: 0, cpu_percent: 0,
@@ -167,6 +168,47 @@ test("storage details show captured image references and exact identities", asyn
   assert.match(text(page.ids["choice-list"]), /db: store:1 \(sha256:captured\)/);
   await choice(false);
   close();
+});
+
+test("container controls target only their runtime key, share seed rules and select only its logs", async () => {
+  const { logsPage } = await import("../../../web/js/pages/logs.js");
+  const logRoot = page.doc.createElement("section");
+  page.doc.body.append(logRoot);
+  logsPage.init(logRoot);
+  const service = (id, key, state, more = {}) => ({ id, key, label: "API", ports: [], on: true,
+    state: { key: state, label: state, running: state === "running" }, containers: [{ name: key, state }],
+    image: "fixture:1", tag: "1", ...more });
+  const a = service("api", "runtime-a--api", "running"), b = service("api", "runtime-b--api", "running");
+  const seed = service("seed", "runtime-a--seed", "done", { role: "seed" });
+  for (const action of ["stop", "restart", "start", "logs"]) {
+    a.state = { key: action === "start" ? "stopped" : "running", label: "API state", running: action !== "start" };
+    await show([{ ...privateRow, id: "runtime-a", services: [a, seed] }, { ...privateRow, id: "runtime-b", services: [b] }]);
+    store.state.services = { api: service("api", "api", "running"),
+      [a.key]: { ...a, runtime: { id: "runtime-a", service: "api" } },
+      [b.key]: { ...b, runtime: { id: "runtime-b", service: "api" } },
+      [seed.key]: { ...seed, role: null, runtime: { id: "runtime-a", service: "seed" } } };
+    panel.render(store.state);
+    root.querySelector("[data-runtime-toggle]").click();
+    const own = root.querySelector('[data-runtime-service="runtime-a--api"]');
+    const seedRow = root.querySelector('[data-runtime-service="runtime-a--seed"]');
+    assert.equal(seedRow.querySelector('[data-runtime-service-act="start"]'), null);
+    assert.equal(seedRow.querySelector('[data-runtime-service-act="restart"]'), null);
+    const button = own.querySelector(`[data-runtime-service-act="${action}"]`);
+    assert.ok(button && !isOff(button), action);
+    button.click();
+    await flush();
+    if (action === "logs") {
+      assert.equal(location.hash, "#/logs");
+      assert.match(logStreams.at(-1), /services=runtime-a--api&/);
+      assert.doesNotMatch(logStreams.at(-1), /runtime-b--api|services=api&/);
+      assert.deepEqual(posts(), []);
+    } else {
+      assert.deepEqual(posts().map((p) => p.path), [`/api/services/runtime-a--api/${action}`]);
+    }
+    close();
+  }
+  logsPage.hide();
+  logRoot.remove();
 });
 
 test("Apply opens its scoped confirmation before sending a change", async () => {
