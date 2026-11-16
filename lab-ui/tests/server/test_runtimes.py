@@ -61,6 +61,7 @@ class RuntimeState(Case):
         self.patch(runtimes.frames, "declared", return_value=[])
         result = runtimes.overlay(copy.deepcopy(self.body), self.project)
         self.assertNotIn("do-not-return", repr(result))
+        self.assertEqual(result["services"][independent.service_key(self.rid, "db")]["name"], "Database (A)")
         self.assertTrue(result["playgrounds"][2]["up"])
         value["initialized"] = True
         rows.pop("seed")
@@ -96,6 +97,8 @@ class RuntimeState(Case):
         self.assertEqual((db["id"], db["label"], db["ports"], db["containers"], db["image"], db["tag"]),
                          ("db", "Database", ["31000"], [], "store:1", "1"))
         self.assertEqual(db["state"]["key"], "absent")
+        self.assertEqual(db["key"], independent.service_key(self.rid, "db"))
+        self.assertNotEqual(db["key"], "db")
         self.assertEqual((worker["id"], worker["ports"]), ("worker", []))
         self.assertEqual(rows[self.rid]["ports"], ["31000"])
         self.assertTrue(rows["local/orphan"]["cleanup"]["data"]["enabled"])

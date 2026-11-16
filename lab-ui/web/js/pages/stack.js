@@ -3,7 +3,7 @@
 import { $, $$, esc, icon, setHTML, loading, api, store, router, recallObject, remember, bareTag, ofPlatform } from "../core.js";
 import { confirmDialog, confirmPlan, openMenu, paintLinks, progressBar, GAP, fileButtons,
   keyed, dockerDown, onKnown, serviceVersion, serviceCells, serviceOpen, actionButton,
-  paintActions, showing, noteBadge, itemLink, statusHtml, holdOff } from "../components/ui.js";
+  paintActions, showing, noteBadge, itemLink, statusHtml, holdOff, containerActions } from "../components/ui.js";
 import { runJob, runPlatform, showOutput } from "../activity/jobs.js";
 import { recordName } from "../platform/places.js";
 import { onCloud, coreOf, runCore, gatewayWhy } from "../platform/core-choice.js";
@@ -130,10 +130,7 @@ function groupActions(g, services) {
 // its uptime while it runs, its actions. A one-shot that ended well did its part: it has no Start. A playground's
 // seed has neither Start nor Restart: its playground's Re-seed runs it again.
 function containerHtml(name, state) {
-  const service = state.services[name], st = service.state, key = `service:${name}`, seed = service.role === "seed";
-  const restart = !seed && (st.running || restarting(key)) && "restart";
-  const actions = [created(service) && "logs", restart,
-    st.running ? "stop" : !seed && service.on && st.key !== "done" && "start"];
+  const service = state.services[name], st = service.state, key = `service:${name}`;
   return `
     <li class="container cols" data-service="${esc(name)}">
       <span></span>
@@ -141,7 +138,7 @@ function containerHtml(name, state) {
       ${stateCell(st, key)}
       ${serviceCells(service)}
       <span class="s-uptime"></span>
-      <span class="row-icons">${serviceOpen(name)}${GAP}${GAP}${actions.map((act) => rowButton(act, key, service.label)).join("")}</span>
+      <span class="row-icons">${serviceOpen(name)}${GAP}${GAP}${containerActions(name, service)}</span>
     </li>`;
 }
 
@@ -252,7 +249,7 @@ function renderGroups(state) {
   });
   // Uptimes tick on their own: written apart, a tick replaces no row (hover and focus stay). A container in an issue has
   // none, its State says which (it keeps restarting, it is unhealthy). Without Docker, nothing is said.
-  for (const li of $$(".container", page)) {
+  for (const li of $$(".groups .container", page)) {
     const { state: st, uptime } = state.services[li.dataset.service];
     $(".s-uptime", li).textContent = dockerDown() || !st.running || st.key === "issue" ? "" : uptime;
   }

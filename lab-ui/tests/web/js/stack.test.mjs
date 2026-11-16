@@ -252,3 +252,14 @@ test("shared Reset names its own scope and explicitly keeps independent runtime 
   assert.match(text, /shared platform/);
   assert.match(text, /Stays: Private A \(independent\)/);
 });
+
+test("Shared rendering does not interpret expanded runtime rows as Shared services", () => {
+  draw(lab({ licensed: true }));
+  const inventory = section.querySelector("[data-runtime-panel]");
+  const child = page.doc.createElement("li");
+  child.className = "container";
+  child.innerHTML = '<span class="s-uptime"></span>';
+  inventory.append(child);
+  assert.doesNotThrow(() => stackPage.render(store.state));
+  child.remove();
+});

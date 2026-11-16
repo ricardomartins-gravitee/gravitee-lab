@@ -100,6 +100,8 @@ are shown once as machine-wide storage; several runtimes can use the same image 
 
 Expand a runtime's row to see its services, container names, states, versions and ports inline, as on the shared platform.
 Stopped runtimes and services whose containers were removed keep their captured port assignments visible.
+Service rows offer the same Logs, Start, Stop and Restart controls as Shared, scoped to that runtime. Start can recreate
+a removed service container and keeps its data; seeds run through Re-seed.
 Choose *Open runtime* on its row to open its guide and consoles. *Source playground* in the menu opens the original Shared playground. Use the menu to restart, Apply or Update it. Source settings apply at first Start;
 Apply applies later saved changes to that runtime. The platform controls in the page header explicitly manage the
 shared platform. A runtime whose source is unavailable can still be stopped and cleaned up.
