@@ -5,14 +5,20 @@ between pause, copy and resume without depending on a Docker daemon.
 """
 
 import copy
+import json
+import shutil
+import subprocess
+import unittest
+from pathlib import Path
 from unittest.mock import Mock, call
 
 from lab_ui import paths
-from lab_ui.catalogs import independent, runtime_clones, runtime_storage, standalone
+from lab_ui.catalogs import independent, runtime_clones, runtime_storage, runtime_urls, standalone
 from lab_ui.library import runtime_settings
 from lab_ui.docker import compose, storage
 from lab_ui.docker.jobs import JobFailed
 from tests import Case
+from tests.fixtures import have_compose
 
 
 class Clones(Case):
@@ -57,6 +63,70 @@ class Clones(Case):
         run.return_value = (0, "sha256:changed\n", "")
         with self.assertRaisesRegex(ValueError, "different images"):
             runtime_clones._inherit_flushes({"services": {"db": {}}}, inspected)
+
+    def test_legacy_relocation_metadata_is_inherited_even_when_flush_metadata_exists(self):
+        self.patch(compose, "config_json", return_value={"services": {"db": {"image": "store:1"}},
+            "x-gravitee": {"snapshot": {"db": {"relocate": ["relocate"]}}}})
+        self.patch(compose, "run", return_value=(0, "sha256:running\n", ""))
+        config = {"services": {"db": {"labels": {"io.gravitee.snapshot.flush": '["flush"]'}}}}
+        runtime_clones._inherit_flushes(config, [{"Config": {"Labels": {"com.docker.compose.service": "db"}}, "Image": "sha256:running"}])
+        self.assertEqual(config["x-gravitee"]["snapshot"]["db"]["relocate"], ["relocate"])
+
+    @unittest.skipUnless(have_compose(), "Docker Compose is needed to verify container configuration hashes")
+    def test_relocation_metadata_does_not_require_recreating_source_containers(self):
+        file = self.root / "compose.json"
+        config = {"services": {"db": {"image": "store:1"}}}
+        file.write_text(json.dumps(config))
+        before = compose.config_hashes(["-f", str(file)])
+        self.assertTrue(before)
+        config["x-gravitee"] = {"snapshot": {"db": {"relocate": ["relocate"]}}}
+        file.write_text(json.dumps(config))
+        self.assertEqual(compose.config_hashes(["-f", str(file)]), before)
+
+    def test_relocation_maps_dynamic_source_ports_and_retains_declared_url_aliases(self):
+        source = {"services": {"api": {"ports": [{"target": 8083, "published": "0"}]}}}
+        destination = {"services": {"api": {"ports": [{"target": 8083, "published": "49002"}]}}}
+        inspected = [{"Config": {"Labels": {"com.docker.compose.service": "api"}}, "NetworkSettings": {
+            "Ports": {"8083/tcp": [{"HostPort": "49001"}]}}}]
+        self.assertEqual(runtime_urls.ports(source, destination, inspected, {"8083": 49002, "api:0": 49002}),
+                         {"8083": 49002, "49001": 49002})
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            runtime_urls.ports(source, destination, inspected, {"49001": 49999})
+
+    def test_relocation_mounts_only_copied_storage_and_cleans_up_after_hook_failure(self):
+        rid = runtime_settings.create("local/source", "Copy")["id"]
+        project = independent.name(rid)
+        config = {"x-gravitee": {"snapshot": {"db": {"relocate": ["rewrite"]}}},
+            "services": {"db": {"image": "private/db:clone",
+            "volumes": [{"type": "volume", "source": "data", "target": "/data"}]}}}
+        self.patch(storage, "inspect", side_effect=[[{"Labels": {storage.PROJECT: project}}], [{"State": {"ExitCode": 2}}]])
+        remove = self.patch(compose, "run", return_value=(0, "", ""))
+        execute = Mock(side_effect=["helper-id", ""])
+        with self.assertRaisesRegex(JobFailed, "copied data"):
+            runtime_urls.relocate(config, rid, {"8082": 49002}, execute)
+        command = execute.call_args_list[0].args[0]
+        self.assertIn("type=volume,source=" + project + "_data,target=/data", command)
+        self.assertEqual(command[command.index("--network") + 1], "none")
+        self.assertNotIn("--publish", command)
+        remove.assert_called_once_with(["docker", "rm", "--force", "helper-id"], timeout=30)
+
+    def test_relocation_refuses_foreign_mounts_before_creating_a_helper(self):
+        rid = runtime_settings.create("local/source", "Copy")["id"]
+        execute = Mock()
+        self.patch(storage, "inspect", return_value=[{"Labels": {storage.PROJECT: "source"}}])
+        for mount in ({"type": "volume", "source": "data", "target": "/data"},
+                      {"type": "bind", "source": str(self.root / "source"), "target": "/data"}):
+            with self.subTest(mount=mount), self.assertRaisesRegex(ValueError, "clone's own"):
+                runtime_urls.relocate({"x-gravitee": {"snapshot": {"db": {"relocate": ["rewrite"]}}},
+                                      "services": {"db": {"volumes": [mount]}}},
+                                      rid, {}, execute)
+        execute.assert_not_called()
+
+    @unittest.skipUnless(shutil.which("node"), "Node is needed for the MongoDB relocation script tests")
+    def test_mongodb_relocation_preserves_bson_and_external_addresses(self):
+        result = subprocess.run(["node", "--test", str(Path(__file__).resolve().parents[1] / "clone_urls.test.cjs")],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_pause_can_hide_ports_but_cannot_change_container_or_storage_identity(self):
         before = {"containers": [{"id": "ours", "state": "running", "ports": ["18000"], "project": "private"}],

@@ -79,7 +79,8 @@ class RuntimeCloneDocker(independent_docker.IndependentDocker):
         edited["description"] = "Current source changes, absent from the initial seed"
         self.management("/apis/" + api_id, "PUT", edited)
         self.management("/apis/" + api_id + "/deployments", "POST", {"deploymentLabel": "Current changes"})
-        app = self.consumer_app("Current consumer")
+        callback = self.endpoint("apim-management-api", 8083) + "/callback?demo=clone"
+        app = self.consumer_app("Current consumer", callback)
         sub = self.consumer_sub("a", app)
         key = next(row["key"] for row in self.consumer_keys(sub) if not row["revoked"])
         self.assert_key_access("a", key, True)
@@ -111,6 +112,7 @@ class RuntimeCloneDocker(independent_docker.IndependentDocker):
         self.assertEqual(self.command([*compose.COMPOSE, "ps", "--format", "{{.ID}} {{.State}}"]), source_rows)
         self.assertEqual(self.management("/apis/" + foreign["id"]), foreign_before)
         self.assertEqual(self.consumer_keys(foreign_sub), foreign_keys)
+        self.assertEqual(self.consumer("/applications/" + app["id"])["description"], callback)
         self.assert_key_access("a", key, True)
         self.assertEqual((source / ".state/created.json").read_bytes(), ownership)
         self.assertEqual(self.command([*compose.COMPOSE, "exec", "-T", "a-backend", "cat", "/image-version"]), "running-image")
@@ -130,6 +132,8 @@ class RuntimeCloneDocker(independent_docker.IndependentDocker):
         for field in ("id", "name", "description", "endpointGroups", "listeners"):
             self.assertEqual(copied_foreign[field], foreign_before[field])
         self.assertEqual(self.consumer("/applications/" + app["id"])["name"], app["name"])
+        self.assertEqual(self.consumer("/applications/" + app["id"])["description"],
+                         self.endpoint("apim-management-api", 8083) + "/callback?demo=clone")
         self.assertEqual(self.consumer("/applications/" + foreign_app["id"])["name"], foreign_app["name"])
         self.assertEqual(self.consumer_keys(foreign_sub), foreign_keys)
         self.assert_key_access("a", key, True)
@@ -148,6 +152,8 @@ class RuntimeCloneDocker(independent_docker.IndependentDocker):
         self.current = "b"
         self.job(f"/api/playgrounds/{self.instances['b']}/start", {})
         self.assertEqual(self.api("a")["id"], api_id)
+        self.assertEqual(self.consumer("/applications/" + app["id"])["description"],
+                         self.endpoint("apim-management-api", 8083) + "/callback?demo=clone")
         self.assert_key_access("a", key, True)
         self.assertEqual(self.command([*self.runtime_command("b"), "exec", "-T", "redis", "redis-cli", "GET", "private-clone"]), "current private data")
         self.assertEqual(self.command([*self.runtime_command("b"), "exec", "-T", "mongodb", "cat", "/data/configdb/clone-marker"]), "cloned")

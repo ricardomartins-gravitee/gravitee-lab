@@ -2,7 +2,7 @@
 
 Both Shared and private projects copy their complete verified storage while their
 writers are briefly paused. The resolved configuration and exact container images
-travel with the snapshot; no Gravitee resources are exported or rewritten. Incomplete
+travel with the snapshot; declared offline hooks relocate URLs only in copied storage. Incomplete
 targets stay stopped and marked unusable, with their definition retained for cleanup.
 """
 
@@ -17,7 +17,7 @@ from .. import paths
 from ..docker import compose, storage
 from ..docker.jobs import JOBS, JobFailed
 from ..library import runtime_settings
-from . import independent, runtime_storage, standalone
+from . import independent, runtime_storage, runtime_urls, standalone
 
 
 def _configuration(pid):
@@ -105,19 +105,24 @@ def _flushes(config, rows):
 
 
 def _inherit_flushes(config, inspected):
-    # Older runtime records predate flush metadata. Inherit only a core hook for
+    # Older runtime records predate snapshot metadata. Inherit only a core hook for
     # the exact image already running, without rewriting the source's saved config.
     core = compose.config_json(compose.all_files([]), timeout=30)
     for container in inspected:
         key = container["Config"]["Labels"]["com.docker.compose.service"]
         labels = config["services"][key].setdefault("labels", {})
         candidate = core["services"].get(key, {})
-        hook = candidate.get("labels", {}).get("io.gravitee.snapshot.flush")
-        if hook and not labels.get("io.gravitee.snapshot.flush"):
+        missing = {label: candidate.get("labels", {}).get(label) for label in ("io.gravitee.snapshot.flush",)
+                   if candidate.get("labels", {}).get(label) and not labels.get(label)}
+        relocate = core.get("x-gravitee", {}).get("snapshot", {}).get(key, {}).get("relocate")
+        captured = config.get("x-gravitee", {}).get("snapshot", {}).get(key, {}).get("relocate")
+        if missing or relocate is not None and captured is None:
             rc, image, _ = compose.run(["docker", "image", "inspect", "--format", "{{.Id}}", candidate["image"]], timeout=15)
             if rc or image.strip() != container["Image"]:
-                raise ValueError("Apply this runtime’s settings before cloning: its flush metadata and current settings use different images")
-            labels["io.gravitee.snapshot.flush"] = hook
+                raise ValueError("Apply this runtime’s settings before cloning: its snapshot metadata and current settings use different images")
+            labels.update(missing)
+            if relocate is not None and captured is None:
+                config.setdefault("x-gravitee", {}).setdefault("snapshot", {}).setdefault(key, {})["relocate"] = relocate
 
 
 def _paused(ids, action, flush=None):
@@ -359,6 +364,9 @@ def _snapshot(job, project, source, target, config):
             changed = independent.rewrite(text, translate)
             if changed != text:
                 file.write_text(changed, encoding="utf-8")
+    _check_canceled(job)
+    job.step("Update local URLs in the clone's copied data")
+    runtime_urls.relocate(config, target, runtime_urls.ports(source_config, config, inspected, {**ports, **translate}), _execute)
     return value
 
 

@@ -134,6 +134,9 @@ class GammaAmCloneDocker(runtime_clone_docker.RuntimeCloneDocker):
         domains = self.am("/domains")
         domains = domains.get("data", domains) if isinstance(domains, dict) else domains
         self.assertEqual({row["id"] for row in domains}, set(ids["domains"]))
+        client = self.am("/domains/" + ids["domain"] + "/applications/" + ids["client"])
+        self.assertEqual(client["settings"]["oauth"]["redirectUris"],
+                         [self.endpoint("am-management-api", 8093) + "/callback", "https://example.test/callback"])
         self.password_login("clone-domain-b", "seed-user", "Seed-Password-123!")
         self.until(lambda: self.password_login("clone-domain-a", "manual-user" if manual else "seed-user",
                    "Manual-Password-456!" if manual else "Seed-Password-123!") or True, "cloned AM user sign-in", timeout=120)
@@ -213,8 +216,10 @@ class GammaAmCloneDocker(runtime_clone_docker.RuntimeCloneDocker):
         self.password_login("clone-domain-a", "manual-user", "Manual-Password-456!")
         client = self.am("/domains/" + ids["domain"] + "/applications", "POST", {"name": "Manual client", "type": "BROWSER",
                          "clientId": "manual-clone-client", "clientSecret": "Manual-Client-Secret-789!", "redirectUris": ["https://example.test/callback"]})
+        ids["client"] = client["id"]
+        callbacks = [self.endpoint("am-management-api", 8093) + "/callback", "https://example.test/callback"]
         self.am("/domains/" + ids["domain"] + "/applications/" + client["id"], "PATCH", {"settings": {"oauth": {
-            "grantTypes": ["client_credentials"], "tokenEndpointAuthMethod": "client_secret_basic"}}})
+            "grantTypes": ["client_credentials"], "tokenEndpointAuthMethod": "client_secret_basic", "redirectUris": callbacks}}})
         self.until(lambda: self.client_login("clone-domain-a", "manual-clone-client", "Manual-Client-Secret-789!") or True,
                    "source manual client credentials", timeout=120)
         domains = self.am("/domains")
@@ -223,6 +228,7 @@ class GammaAmCloneDocker(runtime_clone_docker.RuntimeCloneDocker):
         owned = (self.linked / ".worktrees/playgrounds/a/.state/created.json").read_bytes()
         print("Copy complete Shared storage with Gamma and AM credentials", flush=True)
         self.instances["a"] = self.clone("@linked/a", "Gamma AM copy")
+        self.assertEqual(self.am("/domains/" + ids["domain"] + "/applications/" + client["id"])["settings"]["oauth"]["redirectUris"], callbacks)
         self.assertEqual(self.gamma("/catalog/sources?perPage=200") if self.GAMMA else self.am("/domains"), foreign_before)
         self.password_login("clone-domain-b", "seed-user", "Seed-Password-123!")
         self.assertEqual((self.linked / ".worktrees/playgrounds/a/.state/created.json").read_bytes(), owned)

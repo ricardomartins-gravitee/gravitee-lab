@@ -262,8 +262,8 @@ class IndependentDocker(unittest.TestCase):
         return self.json(self.endpoint("apim-management-api", 8083) + base + path, method, body,
                          auth="developer" if developer else True)
 
-    def consumer_app(self, name):
-        return self.consumer("/applications", "POST", {"name": name, "description": "Independent consumer settings",
+    def consumer_app(self, name, description="Independent consumer settings"):
+        return self.consumer("/applications", "POST", {"name": name, "description": description,
                              "settings": {"app": {"type": "SIMPLE"}}}, developer=True)
 
     def consumer_sub(self, letter, app, approve=True):
