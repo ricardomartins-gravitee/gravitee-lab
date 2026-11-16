@@ -20,7 +20,7 @@ const page = installDom({ fetch: async (path, options = {}) => {
 } });
 globalThis.innerHeight = 900;
 globalThis.EventSource = class { close() {} addEventListener() {} };
-const { store } = await import("../../../web/js/core.js");
+const { store, remember } = await import("../../../web/js/core.js");
 const { runtimePanel } = await import("../../../web/js/components/runtimes.js");
 const flush = async () => { for (let i = 0; i < 14; i += 1) await Promise.resolve(); };
 const base = { blind: false, wait: "", docker: { error: null }, job: null, services: {}, links: [], addons: [], setups: [],
@@ -32,6 +32,7 @@ const privateRow = { id: "local/a", name: "Private A", mode: "independent", sele
   cleanup: { containers: { enabled: true }, data: { enabled: true } } };
 let root, panel;
 async function show(rows = [privateRow], playground = null) {
+  remember("runtime-expanded", {});
   store.state = structuredClone(base);
   store.error = null;
   store.offline = false;
@@ -97,36 +98,48 @@ test("Open runtime targets the selected child's guide, while Source playground t
   close();
 });
 
-test("Ports names each service for running, stopped and removed containers in the selected runtime", async () => {
+test("runtime rows expand inline to their own services, containers and ports, retaining expansion through refresh", async () => {
   const rows = [{ ...privateRow, id: "runtime-demo", playground: "local/a", name: "Demo", running: 1,
-    ports: ["31000", "31001"], services: [{ id: "sample-api", label: "Sample API", ports: ["31000"] },
-      { id: "console", label: "Console", ports: ["31001"] }],
+    ports: ["31000", "31001"], services: [{ id: "sample-api", label: "Sample API", ports: ["31000"], image: "sample:2.3", tag: "2.3" },
+      { id: "console", label: "Console", ports: ["31001"] }, { id: "worker", label: "Worker", ports: [] }],
     containers: [{ name: "demo-api", service: "sample-api", ports: ["31000"] }] },
     { ...privateRow, id: "runtime-other", ports: ["32000"] }];
-  for (const [fromMenu, containers] of [[false, rows[0].containers], [true, [{ ...rows[0].containers[0], ports: [] }]], [false, []]]) {
+  for (const containers of [rows[0].containers, [{ ...rows[0].containers[0], ports: [] }], []]) {
     rows[0].containers = containers;
+    rows[0].services[0].containers = containers.map((c) => ({ name: c.name, state: "exited" }));
+    rows[0].services[0].state = { key: containers.length ? "stopped" : "absent", label: containers.length ? "Exited" : "Not created" };
     await show(rows);
-    assert.match(text(root.querySelector("[data-runtime-ports]")), /31000 \+1/);
-    if (fromMenu) await menu("Ports");
-    else root.querySelector("[data-runtime-ports]").click();
-    await flush();
-    assert.match(text(page.ids["choice-title"]), /Ports: Demo/);
-    const shown = text(page.ids["choice-list"]);
+    const selector = '[data-runtime-services="runtime-demo"]';
+    assert.equal(root.querySelector(selector), null);
+    assert.equal(root.querySelector("[data-runtime-ports]"), null, "ports no longer open a separate popup");
+    root.querySelector("[data-runtime-toggle]").click();
+    assert.equal(root.querySelector("[data-runtime-toggle]").getAttribute("aria-expanded"), "true");
+    const shown = text(root.querySelector(selector));
     assert.match(shown, /Sample API/);
-    assert.match(shown, /127\.0\.0\.1:31000/);
+    assert.match(shown, /31000/);
+    assert.match(shown, containers.length ? /demo-api/ : /No container/);
+    assert.match(shown, /2\.3/);
     assert.match(shown, /Console/);
-    assert.doesNotMatch(shown, /Assigned ports/);
-    assert.match(shown, /127\.0\.0\.1:31001/);
+    assert.match(shown, /Worker/);
+    assert.match(shown, /31001/);
     assert.doesNotMatch(shown, /32000/);
+    assert.equal(root.querySelector('[data-runtime-services="runtime-other"]'), null);
     assert.deepEqual(posts(), []);
-    await choice(false);
+    root.querySelector("[data-runtime-refresh]").click();
+    await flush();
+    assert.ok(root.querySelector(selector), "inventory refresh keeps the same runtime expanded");
+    root.querySelector("[data-runtime-toggle]").click();
+    assert.equal(root.querySelector(selector), null);
     close();
   }
-  await show([{ ...privateRow, ports: [] }]);
-  assert.equal(root.querySelector("[data-runtime-ports]"), null);
-  root.querySelector("[data-runtime-menu]").click();
-  const ports = page.ids.menu.querySelectorAll(".menu-item").find((el) => text(el).startsWith("Ports"));
-  assert.ok(ports.disabled);
+  await show([{ ...privateRow, id: null, name: "Shared platform", services: rows[0].services }]);
+  root.querySelector("[data-runtime-toggle]").click();
+  assert.match(text(root.querySelector('[data-runtime-services="shared"]')), /Sample API/);
+  close();
+  await show([{ ...privateRow, source: false, services: rows[0].services }]);
+  root.querySelector("[data-runtime-toggle]").click();
+  assert.match(text(root.querySelector('[data-runtime-services="local/a"]')), /Worker/);
+  assert.ok(isOff(root.querySelector("[data-runtime-act]")), "a missing source does not block reading captured services");
   close();
 });
 

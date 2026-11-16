@@ -1,6 +1,6 @@
 // The Containers page's runtime inventory: stopped runtimes stay visible, and cleanup previews only their own resources.
-import { $, esc, icon, size, api, store, router, setHTML, loading } from "../core.js";
-import { effectsDialog, confirmDialog, openMenu, toast, statusHtml, itemLink, paintActions, actionButton, holdOff } from "./ui.js";
+import { $, esc, icon, size, api, store, router, setHTML, loading, recallObject, remember } from "../core.js";
+import { effectsDialog, confirmDialog, openMenu, toast, statusHtml, itemLink, paintActions, actionButton, holdOff, serviceCells } from "./ui.js";
 import { createRuntime, independentAction, runtimeActionEntries } from "../dialogs/runtimes.js";
 import { openSettings } from "../dialogs/editor.js";
 import { runJob } from "../activity/jobs.js";
@@ -13,6 +13,7 @@ const CLEANUP = {
 
 export function runtimePanel(root, playground = null, { heading = true, current = null } = {}) {
   let model = null, visible = false, reading = false, pending = false, serial = 0, signature = "";
+  const expanded = recallObject("runtime-expanded");
   root.innerHTML = `<div class="card runtime-overview"><div class="card-head">${heading ? "<h2>Runtimes</h2>" : ""}
     <div class="page-actions">${playground ? '<button class="btn" data-runtime-create>Create runtime</button>' : ""}<button class="btn" data-runtime-refresh>Refresh storage</button></div></div>
     <div class="runtime-summary"></div><div class="table-wrap"><table class="table"><thead><tr><th>Runtime</th><th>State</th><th>Ports</th><th>CPU</th><th>Memory</th><th>Storage</th><th>Actions</th></tr></thead>
@@ -20,6 +21,30 @@ export function runtimePanel(root, playground = null, { heading = true, current 
   const source = (row) => row.id ? store.item("playground", row.playground || row.id) : store.state?.platform;
   const wait = () => store.wait(true) || (reading ? "Reading runtimes" : "");
   const cannot = (row) => row.problem || (!row.source ? "Catalog source unavailable" : "");
+
+  function services(row) {
+    const known = Object.entries(store.state?.services || {});
+    const rows = (row.services || []).map((entry) => {
+      const live = known.find(([key, value]) => row.id
+        ? value.runtime?.id === row.id && value.runtime.service === entry.id : key === entry.id)?.[1];
+      const service = { ...entry, ...live, ports: entry.ports }, state = service.state || { key: "absent", label: "Not created" };
+      const containers = (entry.containers || []).map((c) => c.name).join(", ");
+      return `<li class="container cols"><span></span><span class="s-name"><span class="c-name" data-tip="${esc(entry.id)}">${esc(entry.label)}</span>
+        <span class="c-id" data-tip="${esc(containers || "No container")}">${esc(containers || "No container")}</span></span>
+        <span class="s-state">${statusHtml(state.key, state.label)}</span>${serviceCells(service)}
+        <span class="s-uptime">${esc(service.uptime || "")}</span><span class="row-icons"></span></li>`;
+    }).join("");
+    return `<div class="cols stack-head" aria-hidden="true"><span></span><span>Service / container</span><span>State</span><span>Version</span><span>Ports</span><span>Uptime</span><span></span></div>
+      <ul class="containers">${rows || '<li class="empty">No containers or services yet</li>'}</ul>`;
+  }
+
+  function toggle(row) {
+    const key = row.id || "shared";
+    expanded[key] = !expanded[key];
+    remember("runtime-expanded", expanded);
+    render();
+    $(`[data-runtime-row="${model.runtimes.indexOf(row)}"] [data-runtime-toggle]`, root)?.focus();
+  }
 
   function render() {
     if (!model) return;
@@ -33,14 +58,17 @@ export function runtimePanel(root, playground = null, { heading = true, current 
       const button = row.id ? actionButton({ key: `playground:${row.id}`, verb: row.running || row.active ? "stop" : "start",
         label: row.running || row.active ? "Stop" : "Start", cls: "btn", attrs: `data-runtime-act="${row.running || row.active ? "stop" : "start"}" data-busy` }) : "";
       const ports = row.ports || [];
+      const unfolded = !!expanded[row.id || "shared"];
       const open = row.id && row.source ? `<a class="btn" href="#/playgrounds/${esc(row.id)}" aria-label="Open runtime ${esc(row.name)}" data-tip="Guide and consoles">Open runtime</a>` : "";
-      return `<tr data-runtime-row="${index}"><td>${row.id && row.source ? itemLink({ kind: "playground", id: row.id, name: row.name }) : esc(row.name)}
-        <span class="sub">${row.id ? "Independent" + (row.playground_name ? `, ${row.playground_name}` : "") + (!row.source ? ", Source unavailable" : "") : "Shared"}</span></td>
+      return `<tr class="opens" data-runtime-row="${index}"><td><div class="runtime-name"><button class="s-toggle" data-runtime-toggle aria-expanded="${unfolded}" aria-label="Containers of ${esc(row.name)}">${icon("chevron")}</button>
+        <div>${row.id && row.source ? itemLink({ kind: "playground", id: row.id, name: row.name }) : esc(row.name)}
+        <span class="sub">${row.id ? "Independent" + (row.playground_name ? `, ${row.playground_name}` : "") + (!row.source ? ", Source unavailable" : "") : "Shared"}</span></div></div></td>
         <td>${statusHtml(row.problem ? "issue" : row.running ? "running" : "stopped", row.problem ? "Needs attention" : row.state)}</td>
-        <td>${ports.length ? `<button class="btn" data-runtime-ports aria-label="Ports of ${esc(row.name)}" data-tip="Ports by service">${esc(ports[0])}${ports.length > 1 ? ` +${ports.length - 1}` : ""}</button>` : "—"}</td>
+        <td><span class="s-ports" data-tip="${esc(ports.join(", "))}">${ports.length ? `<span>${esc(ports[0])}</span>${ports.length > 1 ? `<span>+${ports.length - 1}</span>` : ""}` : "—"}</span></td>
         <td>${row.cpu_percent === null ? "—" : `${row.cpu_percent}%`}</td><td>${size(row.memory_bytes, true)}</td>
         <td><button class="btn" data-runtime-details aria-label="Storage of ${esc(row.name)}" data-tip="Storage details">${size(total)}</button></td>
-        <td><div class="page-actions">${open}${button}<span class="row-icons"><button class="icon-btn" data-runtime-menu aria-haspopup="true" aria-label="Manage ${esc(row.name)}" data-tip="More">${icon("more")}</button></span></div></td></tr>`;
+        <td><div class="page-actions">${open}${button}<span class="row-icons"><button class="icon-btn" data-runtime-menu aria-haspopup="true" aria-label="Manage ${esc(row.name)}" data-tip="More">${icon("more")}</button></span></div></td></tr>
+        ${unfolded ? `<tr class="runtime-services" data-runtime-services="${esc(row.id || "shared")}"><td colspan="7">${services(row)}</td></tr>` : ""}`;
     }).join("") || '<tr><td colspan="7" class="empty">No independent runtimes yet</td></tr>');
     for (const el of root.querySelectorAll("[data-runtime-act]")) {
       const row = model.runtimes[Number(el.closest("[data-runtime-row]").dataset.runtimeRow)];
@@ -99,12 +127,6 @@ export function runtimePanel(root, playground = null, { heading = true, current 
     router.go(`#/playgrounds/${id}`);
   }
 
-  function ports(row) {
-    const rows = (row.services || []).map((service) => ({ label: service.label,
-      items: service.ports.map((port) => `127.0.0.1:${port}`), note: true }));
-    effectsDialog({ title: `Ports: ${row.name}`, options: [{ value: true, rows }], action: () => "Close" });
-  }
-
   function details(row) {
     const rows = [{ label: "Containers", items: row.containers.map((c) => `${c.name}: ${c.state}`) },
       { label: "Ports", items: row.ports || [] },
@@ -119,12 +141,13 @@ export function runtimePanel(root, playground = null, { heading = true, current 
 
   root.addEventListener("click", (event) => {
     const button = event.target.closest("button");
+    const selected = model?.runtimes[Number(event.target.closest("[data-runtime-row]")?.dataset.runtimeRow)];
+    if (selected && (button?.hasAttribute("data-runtime-toggle") || !event.target.closest("a, button"))) return toggle(selected);
     if (!button || button.getAttribute("aria-disabled") === "true") return;
     if (button.hasAttribute("data-runtime-refresh")) return read(true);
     if (button.hasAttribute("data-runtime-create")) return createRuntime(store.item("playground", playground), current);
     const row = model?.runtimes[Number(button.closest("[data-runtime-row]")?.dataset.runtimeRow)];
     if (!row) return;
-    if (button.hasAttribute("data-runtime-ports")) return ports(row);
     if (button.hasAttribute("data-runtime-details")) return details(row);
     if (button.hasAttribute("data-runtime-act")) return act(row, button.dataset.runtimeAct);
     if (button.hasAttribute("data-runtime-menu")) {
@@ -134,7 +157,6 @@ export function runtimePanel(root, playground = null, { heading = true, current 
         { label: "Source playground", onSelect: () => navigate(row.playground || row.id),
           disabled: !item, reason: item ? "" : "Catalog source unavailable" }] : [
         { label: "Platform settings", disabled: !!blocked || !item, reason: blocked || "", onSelect: () => openSettings(item) }];
-      choices.push({ label: "Ports", onSelect: () => ports(row), disabled: !row.ports?.length, reason: "No assigned ports" });
       if (row.id) choices.push(
         { label: "Restart", disabled: !!blocked || !row.running || !!cannot(row), reason: blocked || cannot(row) || "Start this runtime first", onSelect: () => act(row, "restart") },
         ...runtimeActionEntries(store.item("playground", row.id) || { id: row.id, name: row.name,

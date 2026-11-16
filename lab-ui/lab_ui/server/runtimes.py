@@ -351,14 +351,20 @@ def listing(project, fresh=False, playground=None):
         specs = (prepared.get(row["id"]) or {}).get("services", {}) if row["id"] else project["services"]
         containers = {c["service"]: c for c in row["containers"]}
         row["services"] = []
-        for key in sorted(set(specs) | set(containers)):
+        for key in sorted(set(specs) | set(containers) if row["id"] else set(containers)):
             spec = specs.get(key, {})
             # Docker omits published bindings after Stop. Captured assignments
             # still belong to their service after its containers are removed.
             ports = containers.get(key, {}).get("ports") or (spec.get("ports", []) if row["id"] else [])
-            if ports:
-                row["services"].append({"id": key, "label": spec.get("label") or key,
-                                        "ports": sorted({str(port) for port in ports})})
+            actual = [{name: c[name] for name in ("name", "state")} for c in row["containers"] if c["service"] == key]
+            status = containers.get(key, {}).get("state")
+            display = spec.get("display") or spec
+            row["services"].append({"id": key, "label": spec.get("label") or key,
+                                    "ports": sorted({str(port) for port in ports}), "containers": actual,
+                                    "image": spec.get("image", ""), "tag": display.get("tag", ""), "built": bool(display.get("built")),
+                                    "state": {"key": "absent" if not status else "running" if status == "running" else
+                                              "stopped" if status in ("exited", "created") else "issue",
+                                              "label": status.capitalize() if status else "Not created"}})
         row["ports"] = sorted({port for service in row["services"] for port in service["ports"]})
         row["running"] = sum(c["state"] in runtime_storage.RUNNING for c in row["containers"])
         row["state"] = "Running" if row["running"] else "Stopped" if row["prepared"] else "Not started"
