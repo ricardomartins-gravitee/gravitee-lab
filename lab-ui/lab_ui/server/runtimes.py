@@ -92,7 +92,7 @@ def _overlay(body, project):
                 entry.setdefault("ports", [])
                 entry.update(uptime=model.uptime(rows.get(service_name, {}).get("Status")),
                              running_tag=model.tag(service["image"]) if states.get(service_name, {}).get("running") else None,
-                             label=service["label"], image=service["image"], on=True, behind=False,
+                             label=service["label"], name=f"{service['label']} ({item['name']})", image=service["image"], on=True, behind=False,
                              note="", note_tone="", note_title="", note_target=None, note_file=None,
                              brings=[], recreates=[],
                              container=rows.get(service_name, {}).get("Name") or f"{value['project']}-{service_name}-1",
@@ -360,11 +360,15 @@ def listing(project, fresh=False, playground=None):
             status = containers.get(key, {}).get("state")
             display = spec.get("display") or spec
             row["services"].append({"id": key, "label": spec.get("label") or key,
+                                    "key": independent.service_key(row["id"], key) if row["id"] else key,
+                                    "role": "seed" if key in (prepared.get(row["id"]) or {}).get("oneshots", []) else display.get("role"),
+                                    "on": bool(row["id"]),
                                     "ports": sorted({str(port) for port in ports}), "containers": actual,
                                     "image": spec.get("image", ""), "tag": display.get("tag", ""), "built": bool(display.get("built")),
                                     "state": {"key": "absent" if not status else "running" if status == "running" else
                                               "stopped" if status in ("exited", "created") else "issue",
-                                              "label": status.capitalize() if status else "Not created"}})
+                                              "label": status.capitalize() if status else "Not created",
+                                              "running": status in runtime_storage.RUNNING}})
         row["ports"] = sorted({port for service in row["services"] for port in service["ports"]})
         row["running"] = sum(c["state"] in runtime_storage.RUNNING for c in row["containers"])
         row["state"] = "Running" if row["running"] else "Stopped" if row["prepared"] else "Not started"

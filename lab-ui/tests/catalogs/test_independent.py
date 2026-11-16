@@ -238,6 +238,34 @@ class Independent(Case):
         seed["environment"] = {"APIM_MANAGEMENT_URL": "http://db:8083"}
         self.assertTrue(independent.plan("local/a")["independent"])
 
+    def test_service_actions_resolve_the_selected_runtime_and_start_recreates_only_its_container(self):
+        self.prepare("local/a")
+        self.prepare("local/b")
+        jobs = self.patch(independent, "JOBS")
+        for pid in ("local/a", "local/b"):
+            key = independent.service_key(pid, "db")
+            self.assertEqual(independent.resolve_service(key), (pid, "db"))
+            for operation in ("start", "stop", "restart"):
+                with self.subTest(runtime=pid, operation=operation):
+                    independent.service(*independent.resolve_service(key), operation)
+                    _, steps, _ = self.started(jobs)
+                    worker = Mock()
+                    steps[0](worker)
+                    args = ["up", "-d", "--no-deps", "db"] if operation == "start" else [operation, "db"]
+                    worker.exec.assert_called_once_with(independent.command(pid, *args))
+                    self.assertEqual(jobs.start.call_args.kwargs["key"], "service:" + key)
+            for operation in ("start", "restart"):
+                with self.assertRaisesRegex(ValueError, "Re-seed"):
+                    independent.service(pid, pid[-1] + "-seed", operation)
+        self.assertIsNone(independent.resolve_service("db"))
+        with self.assertRaises(paths.NotFound):
+            independent.resolve_service("runtime-missing--db")
+        value = independent.read("local/a")
+        value["clone_pending"] = True
+        independent._write(independent.folder("local/a") / "runtime.json", value)
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            independent.service("local/a", "db", "start")
+
     def test_required_versions_and_settings_are_checked_without_changing_the_shared_lab(self):
         gathered = self.inputs["local/a"][1]
         gathered["unit"]["requires"] = {"images": {"FIXTURE_VERSION": "2.0.0"}}
