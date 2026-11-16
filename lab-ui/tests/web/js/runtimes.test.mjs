@@ -32,7 +32,7 @@ const privateRow = { id: "local/a", name: "Private A", mode: "independent", sele
   cleanup: { containers: { enabled: true }, data: { enabled: true } } };
 let root, panel;
 async function show(rows = [privateRow], playground = null) {
-  remember("runtime-expanded", {});
+  remember("runtime-expanded", "{}");
   store.state = structuredClone(base);
   store.error = null;
   store.offline = false;
@@ -128,6 +128,14 @@ test("runtime rows expand inline to their own services, containers and ports, re
     root.querySelector("[data-runtime-refresh]").click();
     await flush();
     assert.ok(root.querySelector(selector), "inventory refresh keeps the same runtime expanded");
+    panel.hide();
+    root.remove();
+    root = page.doc.createElement("section");
+    page.doc.body.append(root);
+    panel = runtimePanel(root);
+    panel.show();
+    await flush();
+    assert.ok(root.querySelector(selector), "returning to Containers restores the expanded runtime");
     root.querySelector("[data-runtime-toggle]").click();
     assert.equal(root.querySelector(selector), null);
     close();
