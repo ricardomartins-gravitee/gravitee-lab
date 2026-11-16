@@ -348,8 +348,18 @@ def listing(project, fresh=False, playground=None):
         samples = {}
         problems.append({"file": "Docker stats", "message": str(error)})
     for row in rows:
-        if row["id"] is None:
-            row["ports"] = sorted({port for c in row["containers"] for port in c["ports"]})
+        specs = (prepared.get(row["id"]) or {}).get("services", {}) if row["id"] else project["services"]
+        containers = {c["service"]: c for c in row["containers"]}
+        row["services"] = []
+        for key in sorted(set(specs) | set(containers)):
+            spec = specs.get(key, {})
+            # Docker omits published bindings after Stop. Captured assignments
+            # still belong to their service after its containers are removed.
+            ports = containers.get(key, {}).get("ports") or (spec.get("ports", []) if row["id"] else [])
+            if ports:
+                row["services"].append({"id": key, "label": spec.get("label") or key,
+                                        "ports": sorted({str(port) for port in ports})})
+        row["ports"] = sorted({port for service in row["services"] for port in service["ports"]})
         row["running"] = sum(c["state"] in runtime_storage.RUNNING for c in row["containers"])
         row["state"] = "Running" if row["running"] else "Stopped" if row["prepared"] else "Not started"
         row["volume_bytes"] = sum(usage["volumes"][v["name"]] for v in row["volumes"]) if not row["problem"] and all(
