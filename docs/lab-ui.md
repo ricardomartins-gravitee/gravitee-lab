@@ -98,8 +98,9 @@ kept data whose catalog source is unavailable. It shows CPU, memory and storage.
 volumes, runtime files, ports and captured versions. Clones also show their source image references and exact image IDs. *Refresh storage* reads disk usage again. Images and build caches
 are shown once as machine-wide storage; several runtimes can use the same image layers.
 
-Choose *Open runtime* on its row to open its guide and consoles. The *Ports* column opens its loopback addresses by service;
-the menu offers the same two actions. *Source playground* opens the original Shared playground. Use the menu to restart, Apply or Update it. Source settings apply at first Start;
+Expand a runtime's row to see its services, container names, states, versions and ports inline, as on the shared platform.
+Stopped runtimes and services whose containers were removed keep their captured port assignments visible.
+Choose *Open runtime* on its row to open its guide and consoles. *Source playground* in the menu opens the original Shared playground. Use the menu to restart, Apply or Update it. Source settings apply at first Start;
 Apply applies later saved changes to that runtime. The platform controls in the page header explicitly manage the
 shared platform. A runtime whose source is unavailable can still be stopped and cleaned up.
 

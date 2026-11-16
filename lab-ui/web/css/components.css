@@ -1113,6 +1113,8 @@ dialog .pairs .snippet { flex: 1; }
 .runtime-overview { margin-bottom: var(--sp-4); }
 .runtime-overview .sub { display: block; }
 .runtime-overview td .page-actions { flex-wrap: nowrap; }
+.runtime-name { display: flex; align-items: center; gap: var(--sp-2); }
+.runtime-services > td { padding: 0; }
 .runtime-summary { padding: 0 var(--pad) var(--sp-3); }
 
 /* The playground's inventory stays in its More dialog; Containers retains the full overview. */
