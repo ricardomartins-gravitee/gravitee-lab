@@ -1112,6 +1112,7 @@ dialog .pairs .snippet { flex: 1; }
 /* A runtime keeps its source and captured storage visible after its containers are removed. */
 .runtime-overview { margin-bottom: var(--sp-4); }
 .runtime-overview .sub { display: block; }
+.runtime-overview td .page-actions { flex-wrap: nowrap; }
 .runtime-summary { padding: 0 var(--pad) var(--sp-3); }
 
 /* The playground's inventory stays in its More dialog; Containers retains the full overview. */
