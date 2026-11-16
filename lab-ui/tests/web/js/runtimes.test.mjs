@@ -125,6 +125,15 @@ test("runtime rows expand inline to their own services, containers and ports, re
     assert.doesNotMatch(shown, /32000/);
     assert.equal(root.querySelector('[data-runtime-services="runtime-other"]'), null);
     assert.deepEqual(posts(), []);
+    if (containers[0]?.ports.length) {
+      store.state.services = { captured: { runtime: { id: "runtime-demo", service: "sample-api" },
+        state: { key: "healthy", label: "Healthy", running: true }, image: "snapshot/api:clone", tag: "2.3", running_tag: "clone" } };
+      panel.render(store.state);
+      assert.match(text(root.querySelector(selector)), /Healthy/);
+      assert.match(text(root.querySelector(selector)), /2\.3/);
+      assert.doesNotMatch(text(root.querySelector(selector)), /clone/, "the captured version replaces the internal snapshot tag");
+      store.state.services = {};
+    }
     root.querySelector("[data-runtime-refresh]").click();
     await flush();
     assert.ok(root.querySelector(selector), "inventory refresh keeps the same runtime expanded");
