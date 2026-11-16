@@ -40,7 +40,7 @@ export function runtimePanel(root, playground = null, { heading = true, current 
         <td>${ports.length ? `<button class="btn" data-runtime-ports aria-label="Ports of ${esc(row.name)}" data-tip="Ports by service">${esc(ports[0])}${ports.length > 1 ? ` +${ports.length - 1}` : ""}</button>` : "—"}</td>
         <td>${row.cpu_percent === null ? "—" : `${row.cpu_percent}%`}</td><td>${size(row.memory_bytes, true)}</td>
         <td><button class="btn" data-runtime-details aria-label="Storage of ${esc(row.name)}" data-tip="Storage details">${size(total)}</button></td>
-        <td><span class="row-icons">${open}${button}<button class="icon-btn" data-runtime-menu aria-haspopup="true" aria-label="Manage ${esc(row.name)}" data-tip="More">${icon("more")}</button></span></td></tr>`;
+        <td><div class="page-actions">${open}${button}<span class="row-icons"><button class="icon-btn" data-runtime-menu aria-haspopup="true" aria-label="Manage ${esc(row.name)}" data-tip="More">${icon("more")}</button></span></div></td></tr>`;
     }).join("") || '<tr><td colspan="7" class="empty">No independent runtimes yet</td></tr>');
     for (const el of root.querySelectorAll("[data-runtime-act]")) {
       const row = model.runtimes[Number(el.closest("[data-runtime-row]").dataset.runtimeRow)];
@@ -100,11 +100,8 @@ export function runtimePanel(root, playground = null, { heading = true, current 
   }
 
   function ports(row) {
-    const rows = row.containers.filter((c) => c.ports?.length).map((c) => ({ label: c.service,
-      items: c.ports.map((port) => `127.0.0.1:${port}`), note: true }));
-    const known = new Set(row.containers.flatMap((c) => c.ports || []));
-    const assigned = (row.ports || []).filter((port) => !known.has(port));
-    if (assigned.length) rows.push({ label: "Assigned ports", items: assigned.map((port) => `127.0.0.1:${port}`), note: true });
+    const rows = (row.services || []).map((service) => ({ label: service.label,
+      items: service.ports.map((port) => `127.0.0.1:${port}`), note: true }));
     effectsDialog({ title: `Ports: ${row.name}`, options: [{ value: true, rows }], action: () => "Close" });
   }
 

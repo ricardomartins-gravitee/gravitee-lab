@@ -17,7 +17,7 @@ class RuntimeState(Case):
         self.folder(paths)
         runtime_settings.initialize(["local/source-a", "local/b"])
         self.rid = runtime_settings.create("local/source-a", "A")["id"]
-        self.project = {"playgrounds": {"local/source-a": {"seed": None, "name": "Source A"}, "local/b": {}}, "links": []}
+        self.project = {"playgrounds": {"local/source-a": {"seed": None, "name": "Source A"}, "local/b": {}}, "links": [], "services": {}}
         self.body = {"playgrounds": [{"id": "local/source-a", "name": "Source A"}, {"id": "local/b", "name": "B"}],
                      "services": {}, "problems": []}
 
@@ -75,7 +75,8 @@ class RuntimeState(Case):
         self.assertEqual(commands[0][-2:], ["restart", "db"])
 
     def test_central_inventory_keeps_stopped_and_missing_source_runtimes_and_counts_exclusive_storage(self):
-        records = [(self.rid, {"active": False, "label": "A", "tested": {"versions": {"VERSION": "1"}}, "services": {},
+        records = [(self.rid, {"active": False, "label": "A", "tested": {"versions": {"VERSION": "1"}},
+                              "services": {"db": {"label": "Database", "ports": ["31000"]}},
                               "snapshot": {"images": {"db": "sha256:captured"}, "references": {"db": "store:1"}}}),
                    ("local/orphan", {"active": False, "label": "Orphan", "services": {}})]
         self.patch(runtimes.runtime_storage, "known", return_value=(records, []))
@@ -90,10 +91,18 @@ class RuntimeState(Case):
         self.assertEqual(rows[self.rid]["images"], [{"service": "db", "id": "sha256:captured", "reference": "store:1"}])
         self.assertEqual(rows[self.rid]["volume_bytes"], 200)
         self.assertEqual(rows[self.rid]["local_bytes"], 100)
+        self.assertEqual(rows[self.rid]["services"], [{"id": "db", "label": "Database", "ports": ["31000"]}])
+        self.assertEqual(rows[self.rid]["ports"], ["31000"])
         self.assertTrue(rows["local/orphan"]["cleanup"]["data"]["enabled"])
         self.assertFalse(rows["local/orphan"]["source"])
         self.assertEqual(rows["local/orphan"]["name"], "Orphan")
         self.assertEqual(result["shared_storage"][0]["bytes"], 9000)
+        for state, ports, expected in (("running", ["32000"], ["32000"]), ("exited", [], ["31000"])):
+            with self.subTest(state=state):
+                private["resources"]["containers"] = [{"name": "runtime-db", "service": "db", "state": state, "ports": ports}]
+                row = next(r for r in runtimes.listing(self.project)["runtimes"] if r["id"] == self.rid)
+                self.assertEqual(row["services"], [{"id": "db", "label": "Database", "ports": expected}])
+                self.assertEqual(row["ports"], expected)
 
     def test_missing_source_runtime_can_be_stopped_without_rewriting_catalogs_or_choices(self):
         self.patch(independent, "read", return_value={"id": "local/orphan"})

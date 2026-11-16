@@ -97,11 +97,14 @@ test("Open runtime targets the selected child's guide, while Source playground t
   close();
 });
 
-test("Ports opens only the selected runtime's service addresses and retains ports without containers", async () => {
+test("Ports names each service for running, stopped and removed containers in the selected runtime", async () => {
   const rows = [{ ...privateRow, id: "runtime-demo", playground: "local/a", name: "Demo", running: 1,
-    ports: ["31000", "31001"], containers: [{ name: "demo-api", service: "sample-api", ports: ["31000"] }] },
+    ports: ["31000", "31001"], services: [{ id: "sample-api", label: "Sample API", ports: ["31000"] },
+      { id: "console", label: "Console", ports: ["31001"] }],
+    containers: [{ name: "demo-api", service: "sample-api", ports: ["31000"] }] },
     { ...privateRow, id: "runtime-other", ports: ["32000"] }];
-  for (const fromMenu of [false, true]) {
+  for (const [fromMenu, containers] of [[false, rows[0].containers], [true, [{ ...rows[0].containers[0], ports: [] }]], [false, []]]) {
+    rows[0].containers = containers;
     await show(rows);
     assert.match(text(root.querySelector("[data-runtime-ports]")), /31000 \+1/);
     if (fromMenu) await menu("Ports");
@@ -109,9 +112,10 @@ test("Ports opens only the selected runtime's service addresses and retains port
     await flush();
     assert.match(text(page.ids["choice-title"]), /Ports: Demo/);
     const shown = text(page.ids["choice-list"]);
-    assert.match(shown, /sample-api/);
+    assert.match(shown, /Sample API/);
     assert.match(shown, /127\.0\.0\.1:31000/);
-    assert.match(shown, /Assigned ports/);
+    assert.match(shown, /Console/);
+    assert.doesNotMatch(shown, /Assigned ports/);
     assert.match(shown, /127\.0\.0\.1:31001/);
     assert.doesNotMatch(shown, /32000/);
     assert.deepEqual(posts(), []);
