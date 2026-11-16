@@ -28,6 +28,8 @@ export function runtimePanel(root, playground = null, { heading = true, current 
       const live = known.find(([key, value]) => row.id
         ? value.runtime?.id === row.id && value.runtime.service === entry.id : key === entry.id)?.[1];
       const service = { ...entry, ...live, ports: entry.ports }, state = service.state || { key: "absent", label: "Not created" };
+      // A private image's local snapshot tag is not its captured source version.
+      if (row.id) service.running_tag = null;
       const containers = (entry.containers || []).map((c) => c.name).join(", ");
       return `<li class="container cols"><span></span><span class="s-name"><span class="c-name" data-tip="${esc(entry.id)}">${esc(entry.label)}</span>
         <span class="c-id" data-tip="${esc(containers || "No container")}">${esc(containers || "No container")}</span></span>
