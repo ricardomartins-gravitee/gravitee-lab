@@ -178,7 +178,9 @@ jobs:
       - name: Install Compose
         uses: ./.github/actions/compose
       - name: Verify fresh creation and complete storage cloning through Gravitee
-        run: PYTHONPATH=lab-ui python -m tests.runtime_clone_docker
+        run: |
+          PYTHONPATH=lab-ui python -m tests.runtime_urls_docker
+          PYTHONPATH=lab-ui python -m tests.runtime_clone_docker
         env:
           INDEPENDENT_E2E_ARTIFACTS: ${{ runner.temp }}/runtime-clones
 

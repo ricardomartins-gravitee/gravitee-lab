@@ -685,7 +685,11 @@ inside its verified container, then that store pauses. Stores unpause before wri
 hooks whose image matches the running image. Hook failure aborts the copy and resumes already paused writers.
 Shared and private cloning use the same storage snapshot path. Shared captures the whole project's storage and existing
 services, including other playgrounds' data, as the creation form says before submission. The compiler isolates ports,
-networks and mounts without filtering or rewriting database resources. Exact image IDs are recorded and given private
+networks and mounts without filtering database resources. After the source resumes, `catalogs/runtime_urls.py` runs
+declared `x-gravitee.snapshot.<service>.relocate` commands on copied mounts, without networking or published ports. This
+Compose extension does not change source container hashes or require their recreation. The core MongoDB
+hook translates source-local URL strings using the actual published port map, without replacing documents or BSON values.
+Failure keeps the clone incomplete. No cloned application starts during relocation. Exact image IDs are recorded and given private
 local tags; builds and pulls cannot change the clone at first Start. Incomplete targets keep `clone_pending`, stay stopped
 and refuse Start, Apply and Update; their normal cleanup remains scoped to their own storage.
 
