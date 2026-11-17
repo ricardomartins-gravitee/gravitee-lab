@@ -83,6 +83,46 @@ class Clones(Case):
         file.write_text(json.dumps(config))
         self.assertEqual(compose.config_hashes(["-f", str(file)]), before)
 
+    def test_running_image_uses_its_immutable_id_when_docker_can_resolve_it(self):
+        run = self.patch(compose, "run", return_value=(0, "sha256:running\n", ""))
+        same = self.patch(compose, "same_image")
+        self.assertEqual(runtime_clones._running_image({"Id": "ours", "Image": "sha256:running"}, "app:latest"), "sha256:running")
+        run.assert_called_once_with(["docker", "image", "inspect", "--format", "{{.Id}}", "sha256:running"], timeout=15)
+        same.assert_not_called()
+
+    def test_config_digest_uses_an_immutable_index_only_after_platform_manifest_matches(self):
+        run = self.patch(compose, "run", side_effect=[(1, "", "No such image"), (0, "sha256:index\n", "")])
+        same = self.patch(compose, "same_image", return_value=True)
+        execute = self.patch(runtime_clones, "_execute")
+        image = runtime_clones._running_image({"Id": "ours", "Image": "sha256:config"}, "app:latest")
+        same.assert_called_once_with("ours", "sha256:index", "sha256:config")
+        runtime_clones._pin("runtime-copy", "app", {}, image)
+        execute.assert_called_once_with(["docker", "image", "tag", "sha256:index", independent.name("runtime-copy") + "/app:clone"], timeout=30)
+        self.assertEqual(run.call_args_list[-1].args[0][-1], "app:latest")
+
+    def test_a_moved_tag_or_missing_platform_never_replaces_the_running_image(self):
+        execute = self.patch(runtime_clones, "_execute")
+        same = self.patch(compose, "same_image", return_value=False)
+        for answer in ((0, "sha256:changed\n", ""), (1, "", "No such image"), (0, "", "")):
+            self.patch(compose, "run", side_effect=[(1, "", "No such image"), answer])
+            with self.assertRaisesRegex(ValueError, "exact running image is unavailable"):
+                runtime_clones._running_image({"Id": "ours", "Image": "sha256:config"}, "app:latest")
+        execute.assert_not_called()
+        same.assert_called_once_with("ours", "sha256:changed", "sha256:config")
+
+    def test_legacy_snapshot_metadata_accepts_only_a_matching_running_platform(self):
+        self.patch(compose, "config_json", return_value={"services": {"db": {"image": "store:1", "labels": {
+            "io.gravitee.snapshot.flush": '["flush"]'}}}})
+        self.patch(compose, "run", return_value=(0, "sha256:index\n", ""))
+        same = self.patch(compose, "same_image", return_value=True)
+        inspected = [{"Id": "ours", "Config": {"Labels": {"com.docker.compose.service": "db"}}, "Image": "sha256:config"}]
+        config = {"services": {"db": {}}}
+        runtime_clones._inherit_flushes(config, inspected)
+        self.assertEqual(config["services"]["db"]["labels"]["io.gravitee.snapshot.flush"], '["flush"]')
+        same.return_value = False
+        with self.assertRaisesRegex(ValueError, "different images"):
+            runtime_clones._inherit_flushes({"services": {"db": {}}}, inspected)
+
     def test_relocation_maps_dynamic_source_ports_and_retains_declared_url_aliases(self):
         source = {"services": {"api": {"ports": [{"target": 8083, "published": "0"}]}}}
         destination = {"services": {"api": {"ports": [{"target": 8083, "published": "49002"}]}}}
