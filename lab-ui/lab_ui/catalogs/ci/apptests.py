@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[4]   # lab-ui/lab_ui/catalogs/ci/ is fou
 MAKEFILE = ROOT / "Makefile"
 
 # The flags of a run of tests. `--pull never`: the image is the one built here, never another of the same name
+OWNER_LABEL = "io.gravitee.lab-test"
 HARDENING = ["--pull", "never", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "512",
              "--memory", "2g", "--cpus", "2", "--read-only", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m"]
 PYTHON_TESTS = ["-m", "unittest", "discover", "-s", "tests", "-t", "."]
@@ -131,13 +132,13 @@ def guide_of(app, unit_folder=None) -> Optional[str]:
 
 
 def container_name() -> str:
-    """A name for one run of tests, so that the container can be removed by name: `lab-test-` and 8 hexadecimal digits."""
-    return "lab-test-" + secrets.token_hex(4)
+    """A name for one run of tests, so that the container can be removed by name: `lab-test-` and 32 hexadecimal digits."""
+    return "lab-test-" + secrets.token_hex(16)
 
 
 def python_command(image: str, guide: Optional[str] = None, name: Optional[str] = None) -> List[str]:
     """The `docker run` of the Python tests of an image, as 5.6 words it (`name`: the container's, `--name` right after `--rm`)."""
-    cmd = ["docker", "run", "--rm", *(["--name", name] if name else []), *HARDENING, "-e", "PYTHONDONTWRITEBYTECODE=1"]
+    cmd = ["docker", "run", "--rm", *(["--name", name, "--label", OWNER_LABEL + "=" + name] if name else []), *HARDENING, "-e", "PYTHONDONTWRITEBYTECODE=1"]
     if guide:
         cmd += ["-v", f"{guide}:/guide.md:ro", "-e", "GUIDE=/guide.md"]
     return cmd + ["--entrypoint", "python", image, *PYTHON_TESTS]
@@ -145,7 +146,7 @@ def python_command(image: str, guide: Optional[str] = None, name: Optional[str] 
 
 def node_command(app: str, node: str, name: Optional[str] = None) -> List[str]:
     """The `docker run` of the JavaScript tests of an app in the Node image, the app mounted read-only."""
-    return ["docker", "run", "--rm", *(["--name", name] if name else []), *HARDENING, "-v", f"{app}:/app:ro", "-w", "/app", node,
+    return ["docker", "run", "--rm", *(["--name", name, "--label", OWNER_LABEL + "=" + name] if name else []), *HARDENING, "-v", f"{app}:/app:ro", "-w", "/app", node,
             *NODE_TESTS]
 
 
@@ -176,7 +177,12 @@ def ran_none(output: str) -> bool:
 
 def stopped(run: Runner, name: str) -> None:
     """Removes the container of a run that passed its time limit: the process of `docker run` was ended, the container was not."""
-    run(["docker", "rm", "-f", name], 60, None)
+    code, out, _ = run(["docker", "container", "ls", "-aq", "--no-trunc", "--filter", "name=^/" + name + "$",
+                        "--filter", "label=" + OWNER_LABEL + "=" + name], 60, None)
+    if code:
+        raise Missing("Docker could not verify ownership of the timed-out test container; cleanup was refused")
+    for cid in out.split():
+        run(["docker", "rm", "-f", cid], 60, None)
 
 
 def run_python(image: str, run: Runner, guide: Optional[str] = None) -> Tuple[str, int, str]:

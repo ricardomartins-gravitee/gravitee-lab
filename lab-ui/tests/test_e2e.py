@@ -188,9 +188,9 @@ class Machine(Case):
         return e2e.clean_machine(), [call.args[0] for call in ran.call_args_list]
 
     def test_a_machine_with_no_lab_is_free(self):
-        said, calls = self.asked((0, "", ""), (0, "\n", ""))
+        said, calls = self.asked((0, "", ""), (0, "\n", ""), (0, "", ""))
         self.assertIsNone(said)
-        self.assertEqual([command[:3] for command in calls], [["docker", "ps", "-aq"], ["docker", "volume", "ls"]])
+        self.assertEqual([command[:3] for command in calls], [["docker", "ps", "-aq"], ["docker", "volume", "ls"], ["docker", "network", "ls"]])
         self.assertIn("label=com.docker.compose.project=gravitee", calls[0])
 
     def test_containers_or_volumes_a_person_left_are_not_run_over(self):
@@ -203,6 +203,62 @@ class Machine(Case):
     def test_docker_that_does_not_answer_is_said(self):
         said, _ = self.asked((1, "", "Cannot connect\nIs the docker daemon running?"))
         self.assertEqual(said, "Docker does not answer: Is the docker daemon running?")
+
+    def test_explicit_names_of_another_project_are_not_adopted_or_removed(self):
+        self.patch(compose, "project_name", return_value="gravitee")
+        self.patch(compose, "all_files", return_value=["-f", "fixture.yml"])
+        for kind, row in (("volumes", {"name": "someones-redis"}), ("networks", {"name": "someones-network"}),
+                          ("services", {"container_name": "someones-container"})):
+            self.patch(compose, "config_json", return_value={kind: {"data": row}})
+            ran = self.patch(compose, "run", side_effect=[(0, "", "")] * 3 + [(0, next(iter(row.values())), "")])
+            self.assertIn("would reuse", e2e.clean_machine(["fixture.yml"]))
+            self.assertFalse(any("down" in call.args[0] or "up" in call.args[0] for call in ran.call_args_list))
+
+    def test_external_resources_and_inspection_errors_refuse_before_start(self):
+        self.patch(compose, "project_name", return_value="gravitee")
+        self.patch(compose, "all_files", return_value=[])
+        for row in ({"external": True}, {"driver_opts": {"device": "/existing-lab"}}):
+            self.patch(compose, "run", return_value=(0, "", ""))
+            self.patch(compose, "config_json", return_value={"volumes": {"data": row}})
+            self.assertIn("cannot use", e2e.clean_machine(["fixture.yml"]))
+        self.patch(compose, "config_json", side_effect=compose.ComposeError("unreadable"))
+        self.assertIn("could not be checked", e2e.clean_machine(["fixture.yml"]))
+
+    def test_cleanup_refuses_containers_of_another_lab_even_with_the_same_project_label(self):
+        self.patch(compose, "project_name", return_value="gravitee")
+        for directory in ("/another-lab", None):
+            labels = {"com.docker.compose.project": "gravitee", "com.docker.compose.project.working_dir": directory}
+            shell = mock.Mock(side_effect=[(0, "cid", ""), (0, json.dumps([{"Id": "cid", "Config": {"Labels": labels}}]), "")])
+            run = e2e.Run(None, "playground", "shop", shell=shell)
+            self.assertIn("refused", run.stop())
+            self.assertFalse(any("down" in call.args[0] for call in shell.call_args_list))
+        for answers in ([(1, "", "unavailable")], [(0, "cid", ""), (0, "invalid json", "")]):
+            shell = mock.Mock(side_effect=answers)
+            self.assertIsNotNone(e2e.Run(None, "playground", "shop", shell=shell).stop())
+            self.assertFalse(any("down" in call.args[0] for call in shell.call_args_list))
+
+    def test_cleanup_refuses_foreign_named_storage_and_network_members(self):
+        self.patch(compose, "project_name", return_value="gravitee")
+        for kind in ("volume", "network"):
+            self.patch(compose, "config_json", return_value={kind + "s": {"data": {"name": "explicit-name"}}})
+            answers = [(0, "", "")]
+            if kind == "network":
+                answers.append((0, "", ""))
+            answers += [(0, "explicit-name", ""), (0, json.dumps([{"Labels": {"com.docker.compose.project": "another-lab"}}]), "")]
+            shell = mock.Mock(side_effect=answers)
+            self.assertIn("refused", e2e.Run(None, "playground", "shop", shell=shell).stop())
+            self.assertFalse(any("down" in call.args[0] for call in shell.call_args_list))
+
+    def test_existing_writable_bind_data_is_refused(self):
+        self.folder()
+        (self.root / "user-data").write_text("preserve")
+        self.patch(compose, "project_name", return_value="gravitee")
+        self.patch(compose, "all_files", return_value=[])
+        self.patch(compose, "run", return_value=(0, "", ""))
+        self.patch(compose, "config_json", return_value={"services": {"db": {"volumes": [
+            {"type": "bind", "source": str(self.root), "target": "/data"}]}}})
+        self.assertIn("existing data", e2e.clean_machine(["fixture.yml"]))
+        self.assertEqual((self.root / "user-data").read_text(), "preserve")
 
 
 class Starting(Case):
@@ -400,6 +456,7 @@ class Removing(Case):
         calls = []
         self.patch(compose, "project_name", lambda: "gravitee")
         run = attempt(FakeLab(), shell=lambda command, timeout=0: calls.append(command) or (0, "", ""))
+        self.patch(e2e, "cleanup_machine", return_value=None)
         self.assertIsNone(run.stop())
         self.assertEqual(calls, [["docker", "compose", "--progress", "plain", "-p", "gravitee", "down", "--volumes", "--remove-orphans",
                                   "--timeout", "30"]])
@@ -407,6 +464,7 @@ class Removing(Case):
     def test_a_removal_that_fails_says_so(self):
         self.patch(compose, "project_name", lambda: "gravitee")
         run = attempt(FakeLab(), shell=lambda command, timeout=0: (1, "", "network in use\nremoving failed"))
+        self.patch(e2e, "cleanup_machine", return_value=None)
         self.assertEqual(run.stop(), "removing failed")
 
 
@@ -521,7 +579,7 @@ class Running(Case):
     def setUp(self):
         self.folder(paths, files={paths.DEFAULT_FILE: json.dumps({"schema": 1, "catalogs": [{"id": "base"}]})})
         self.said = []
-        self.built = {"playgrounds": {"shop": {"name": "Shop", "tested": [{"APIM_VERSION": "4.13.0"}]}}, "addons": {}, "setups": {},
+        self.built = {"playgrounds": {"shop": {"name": "Shop", "file": "playgrounds/shop/compose.yml", "tested": [{"APIM_VERSION": "4.13.0"}]}}, "addons": {}, "setups": {},
                       "services": {"gateway": {"raw_image": "gateway:${APIM_VERSION:-4.13.0}"}}}
         self.patch(project, "load", lambda: self.built)
         self.patch(project, "forget")
@@ -556,8 +614,14 @@ class Running(Case):
         forget.assert_called_once_with("shop")
         forget.reset_mock()
         self.stub_run.return_value.stop.side_effect = lambda: "docker compose down failed"   # still there: still recorded
-        self.go()
+        self.assertEqual(self.go(), e2e.FAILED)
         forget.assert_not_called()
+
+    def test_cleanup_only_forgets_the_playground_this_run_seeded(self):
+        self.built["playgrounds"]["other"] = {"name": "Other", "file": "playgrounds/other/compose.yml"}
+        forget = self.patch(e2e.playgrounds, "forget", return_value=True)
+        self.assertEqual(self.go(), e2e.OK)
+        forget.assert_called_once_with("shop")
 
     def test_a_failure_is_one_and_reads_the_logs_before_the_lab_goes(self):
         self.stub_run.return_value.settle.side_effect = e2e.Failed("api in an issue")
