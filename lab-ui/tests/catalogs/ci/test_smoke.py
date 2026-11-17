@@ -328,7 +328,7 @@ class Stage(Case):
     def test_a_down_that_fails_is_said_and_is_no_verdict(self):
         self.fake.when(*PS, stdout=ps_lines("bakery-mcp"))
         self.fake.when(*DOWN, code=1, stderr="Error response from daemon: network has active endpoints")
-        self.assertEqual(self.run_stage(unit(services={"bakery-mcp": service()})), 0)
+        self.assertEqual(self.run_stage(unit(services={"bakery-mcp": service()})), 2)
         self.assertIn("could not remove its project catalog-smoke-playground-bank: Error response from daemon", self.err.getvalue())
 
     def test_an_image_that_is_not_here_is_no_verdict_on_the_unit(self):
@@ -381,7 +381,7 @@ class Stage(Case):
         self.assertIn("::error file=addons/bad/compose.yml,title=T10::", self.out.getvalue())
         self.assertEqual(self.fake.calls(), [])
 
-    def test_the_bind_folders_a_unit_keeps_its_state_in_are_made_before_it_starts(self):
+    def test_the_smoke_does_not_make_state_in_the_original_catalog(self):
         folder = self.catalog / "playgrounds" / "bank"
         folder.mkdir(parents=True)
         mounted = {"bakery-mcp": service(volumes=[
@@ -390,9 +390,7 @@ class Stage(Case):
             {"type": "bind", "source": "/etc/hosts", "target": "/etc/hosts"}])}
         self.fake.when(*PS, stdout=ps_lines("bakery-mcp"))
         self.assertEqual(self.run_stage(unit(services=mounted, folder=str(folder))), 0)
-        self.assertTrue((folder / ".state" / "mcp").is_dir())
-        self.assertEqual(oct((folder / ".state" / "mcp").stat().st_mode & 0o777), "0o777")
-        self.assertEqual(oct((folder / ".state").stat().st_mode & 0o777), "0o777")
+        self.assertFalse((folder / ".state").exists())
         self.assertFalse((folder / "seed").exists(), "only the state is made: the rest is the unit's own")
 
     def test_a_unit_that_names_a_great_many_state_folders_has_a_hundred_made_and_costs_one_pass(self):
@@ -521,7 +519,7 @@ class Real(Case):
         self.assertEqual(len(up), 1)
         self.assertEqual(up[0][up[0].index("-p") + 1], "catalog-smoke-addon-echo")
         self.assertEqual(up[0][-1], "fixture-echo")
-        self.assertEqual(up[0][up[0].index("-f") + 1], "docker-compose.yml")
+        self.assertTrue(up[0][up[0].index("-f") + 1].endswith("smoke-addon-echo.json"))
         # the project the services started in is the temporary one of this run, and it is gone
         calls = [call for call in self.fake.calls() if call.argv[:2] == ["compose", "--progress"]
                  and {"up", "ps", "down", "logs"} & set(call.argv)]
@@ -534,6 +532,31 @@ class Real(Case):
         self.assertEqual((registry.entries(), registry.read_lock(), sorted(os.listdir(Path(paths.ROOT) / paths.CATALOGS_DIR))),
                          before, "nothing is linked into the Lab")
 
+    def test_existing_catalog_state_is_replaced_by_disposable_storage(self):
+        original = Path(self.folder) / "addons/echo/.state"
+        original.mkdir()
+        (original / "sentinel").write_text("user data")
+        selected = unit(kind="addon", name="echo", folder=str(original.parent), services={"web": service()})
+        config = {"name": "catalog-smoke-addon-echo", "services": {"web": service(volumes=[
+            {"type": "bind", "source": str(original), "target": "/data"}])}}
+        with mock.patch.object(compose, "config_json", return_value=config):
+            with smoke.project_session(self.folder) as opened:
+                file = opened.files(selected)[1]
+                actual = json.loads(Path(file).read_text())["services"]["web"]["volumes"][0]["source"]
+                self.assertIn(Path(opened.root), Path(actual).parents)
+                self.assertNotEqual(Path(actual), original)
+                (Path(actual) / "sentinel").write_text("test data")
+                self.assertEqual((original / "sentinel").read_text(), "user data")
+                read = mock.Mock(return_value="")
+                opened.guard(selected, config["name"], read, True)
+                # A foreign resolved name is refused before any Docker request or cleanup.
+                config["volumes"] = {"redis": {"name": "gravitee_data-redis"}}
+                Path(file).write_text(json.dumps(config))
+                read.reset_mock()
+                with self.assertRaises(ci.Unavailable):
+                    opened.guard(selected, config["name"], read, False)
+                read.assert_not_called()
+
     def test_the_file_the_services_start_from_includes_the_unit_where_the_lab_reads_it(self):
         seen = {}
 
@@ -545,8 +568,8 @@ class Real(Case):
                 seen["cwd"] = cwd
             return 0, ps_lines("fixture-echo") if "ps" in argv else "", ""
         smoke.main([self.folder, "--units", '["addon:echo"]'], self.out, self.err, sleep=lambda seconds: None, runner=look)
-        self.assertEqual(seen["files"][0], "docker-compose.yml")
-        self.assertIn("/.lab/catalogs/fixture/addons/echo/compose.yml", seen["text"])
+        self.assertTrue(seen["files"][0].endswith("smoke-addon-echo.json"))
+        self.assertIn("fixture-echo", json.loads(seen["text"])["services"])
         self.assertTrue(str(seen["cwd"]).startswith(str(Path(tempfile.gettempdir()).resolve())) or "gravitee-lab-check-" in str(seen["cwd"]))
 
 

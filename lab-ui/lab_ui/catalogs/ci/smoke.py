@@ -41,10 +41,11 @@ import json
 import os
 import re
 import time
+from pathlib import Path
 from typing import Callable, Dict, FrozenSet, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 from ...library import check
-from ...docker import compose
+from ...docker import compose, testlab
 from ... import paths
 from .. import report
 from ..report import Problem
@@ -265,6 +266,7 @@ class Session(NamedTuple):
     unit as the Lab does."""
     root: str
     files: Callable
+    guard: Optional[Callable] = None
 
 
 @contextlib.contextmanager
@@ -284,9 +286,33 @@ def project_session(folder: str):
     except (registry.CatalogError, check.Unavailable) as error:
         raise Unavailable(str(getattr(error, "message", None) or error)) from None
     with check.temporary_link(folder, ns, needs) as linked:
+        configs = {}
         def files(unit: Loaded) -> List[str]:
-            return compose.all_files([paths.CATALOG_FILES[unit.kind].format(ns=ns, name=unit.name)])
-        yield Session(str(linked.root), files)
+            if unit.key not in configs:
+                value = compose.config_json(["-p", project_name(unit), *compose.all_files([
+                    paths.CATALOG_FILES[unit.kind].format(ns=ns, name=unit.name)])], environ=compose.build_environment())
+                selected = {name for wave in select(unit).waves for name in wave}
+                value["services"] = {name: service for name, service in value["services"].items() if name in selected}
+                for service_name, service in value["services"].items():
+                    service.pop("container_name", None)
+                    for index, mount in enumerate(service.get("volumes", [])):
+                        if mount.get("type") == "bind" and not mount.get("read_only"):
+                            # A smoke starts fresh; never give it the catalog's existing .state.
+                            rest = f".state/{unit.kind}-{unit.name}/{service_name}-{index}"
+                            make_state(unit._replace(folder=str(linked.root)), [rest])
+                            mount["source"] = str(Path(linked.root) / rest)
+                target = Path(linked.root) / ("smoke-" + unit.kind + "-" + unit.name + ".json")
+                paths.write_atomic(target, json.dumps(value))
+                configs[unit.key] = value, target
+            return ["-f", str(configs[unit.key][1])]
+
+        def guard(unit, project, run, fresh):
+            files(unit)
+            try:
+                testlab.resources(json.loads(configs[unit.key][1].read_text()), project, (linked.root, folder), run, fresh=fresh)
+            except AssertionError as error:
+                raise Unavailable(str(error)) from None
+        yield Session(str(linked.root), files, guard)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -340,9 +366,19 @@ class Docker:
 
     def __init__(self, project: str, session: Session, runner: Optional[Callable]):
         self.project, self.session, self.runner = project, session, runner
+        self.prepared = False
 
     def compose(self, unit: Loaded, *words: str, timeout: float = 120) -> Tuple[int, str, str]:
-        return run_docker([*compose.COMPOSE, "-p", self.project, *self.session.files(unit), *words], timeout=timeout,
+        files = self.session.files(unit)
+        if self.session.guard:
+            def read(command):
+                rc, out, err = run_docker(command, timeout=60, cwd=self.session.root, runner=self.runner)
+                if rc:
+                    raise Unavailable("Docker could not verify test ownership: " + (err or out).strip())
+                return out
+            self.session.guard(unit, self.project, read, not self.prepared)
+            self.prepared = True
+        return run_docker([*compose.COMPOSE, "-p", self.project, *files, *words], timeout=timeout,
                           cwd=self.session.root, runner=self.runner)
 
     def ps(self, unit: Loaded) -> List[dict]:
@@ -355,6 +391,8 @@ class Docker:
 
     def down(self, unit: Loaded) -> str:
         """Removes the project with its volumes and orphans. Answers "" or why it could not."""
+        if self.session.guard and not self.prepared:
+            return ""
         code, out, said = self.compose(unit, "down", "-v", "--remove-orphans", timeout=300)
         return "" if code == 0 else " ".join(report.printable(line) for line in tail(said or out, 2))
 
@@ -474,12 +512,11 @@ def main(argv, out, err, **seams) -> int:
             with session(root) as opened:
                 docker = Docker(project, opened, runner)
                 try:
-                    make_state(unit, state_folders(unit, [name for wave in selection.waves for name in wave]))
                     result = start_unit(unit, selection, docker, sleep)
                 finally:
                     stuck = docker.down(unit)   # whatever happened, nothing is left running
                     if stuck:
-                        print(f"The smoke of {report.printable(unit.key)} could not remove its project {project}: {stuck}", file=err)
+                        raise Unavailable(f"The smoke of {report.printable(unit.key)} could not remove its project {project}: {stuck}")
         except check.ComposeGone:
             raise Unavailable("Docker Compose 5 was not found: " + compose.NO_COMPOSE) from None
         spent = time.monotonic() - started_at
