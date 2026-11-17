@@ -118,7 +118,8 @@ def _inherit_flushes(config, inspected):
         captured = config.get("x-gravitee", {}).get("snapshot", {}).get(key, {}).get("relocate")
         if missing or relocate is not None and captured is None:
             rc, image, _ = compose.run(["docker", "image", "inspect", "--format", "{{.Id}}", candidate["image"]], timeout=15)
-            if rc or image.strip() != container["Image"]:
+            if rc or not image.strip() or not (image.strip() == container["Image"] or container.get("Id")
+                    and compose.same_image(container["Id"], image.strip(), container["Image"])):
                 raise ValueError("Apply this runtime’s settings before cloning: its snapshot metadata and current settings use different images")
             labels.update(missing)
             if relocate is not None and captured is None:
@@ -160,6 +161,21 @@ def _volume(source, target, key):
     _execute(["docker", "volume", "create", "--label", storage.PROJECT + "=" + independent.name(target),
               "--label", "com.docker.compose.volume=" + key, destination], timeout=30)
     _execute(storage.copy_command(source, destination))
+
+
+def _running_image(container, reference):
+    """A locally taggable immutable image containing exactly the container's running platform."""
+    running = container["Image"]
+    rc, out, _ = compose.run(["docker", "image", "inspect", "--format", "{{.Id}}", running], timeout=15)
+    if rc == 0 and out.strip():
+        return out.strip()
+    # Containerd may report a config digest that image tagging cannot resolve. Compare
+    # the running platform manifest against an immutable index, never pin a moving tag.
+    rc, out, _ = compose.run(["docker", "image", "inspect", "--format", "{{.Id}}", reference], timeout=15)
+    image = out.strip()
+    if rc or not image or not container.get("Id") or not compose.same_image(container["Id"], image, running):
+        raise ValueError("The source's exact running image is unavailable; update this runtime before cloning")
+    return image
 
 
 def _pin(target, key, service, image=None):
@@ -265,7 +281,10 @@ def _snapshot(job, project, source, target, config):
                 if mount["type"] == "bind" and not mount.get("read_only")]
     if storage.bind_writers(writable) - {row["id"] for row in rows["containers"]}:
         raise ValueError("A runtime file is writable by another container; its clone cannot be isolated safely")
-    actual = {row["Config"]["Labels"]["com.docker.compose.service"]: row["Image"] for row in inspected}
+    actual = {}
+    for row in inspected:
+        key = row["Config"]["Labels"]["com.docker.compose.service"]
+        actual[key] = _running_image(row, config["services"][key]["image"])
     for key, service in config["services"].items():
         if key not in actual:
             actual[key] = storage.inspect("image", [service["image"]])[0]["Id"]
