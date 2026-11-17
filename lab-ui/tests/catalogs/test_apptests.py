@@ -36,15 +36,16 @@ FAILED (failures=2, errors=1, skipped=1)
 NODE_FAILED = ".XX.\n\nFailed tests:\n\n✖ fails one (2.6ms)\n  AssertionError: 1 == 2\n      at X\n✖ fails two (0.1ms)\n  AssertionError: 1 == 3\n"
 
 
-NAME = re.compile(r"lab-test-[0-9a-f]{8}")
+NAME = re.compile(r"lab-test-[0-9a-f]{32}")
 
 
 def unnamed(command):
-    """A `docker run` of a test without its `--name lab-test-<8 hexadecimal digits>`, the one flag the runs add to the set of 5.6;
+    """A `docker run` of a test without its `--name lab-test-<32 hexadecimal digits>`, the one flag the runs add to the set of 5.6;
     the name is checked to be one."""
     at = command.index("--name")
     assert NAME.fullmatch(command[at + 1]), command[at + 1]
-    return command[:at] + command[at + 2:]
+    assert command[at + 2:at + 4] == ["--label", apptests.OWNER_LABEL + "=" + command[at + 1]]
+    return command[:at] + command[at + 4:]
 
 
 class Commands(Case):
@@ -54,7 +55,8 @@ class Commands(Case):
                                (apptests.node_command("/a", NODE, "lab-test-0123abcd"), apptests.node_command("/a", NODE))):
             self.assertEqual(command[:4], ["docker", "run", "--rm", "--name"])
             self.assertEqual(command[4], "lab-test-0123abcd")
-            self.assertEqual(command[:3] + command[5:], plain)
+            self.assertEqual(command[5:7], ["--label", apptests.OWNER_LABEL + "=lab-test-0123abcd"])
+            self.assertEqual(command[:3] + command[7:], plain)
         names = {apptests.container_name() for _ in range(50)}
         self.assertEqual(len(names), 50)
         for each in names:
@@ -394,6 +396,7 @@ class Stage(Disk):
         context = self.with_tests("web", js=True)
         self.patch(apptests, "PYTHON_TIMEOUT", 1)
         self.patch(apptests, "NODE_TIMEOUT", 1)
+        self.fake.when("container", "ls", stdout="owned-cid\n")
         self.fake.when("run", sleep=30)   # (the process group is ended at the limit, the container would not be)
         code = self.stage({"bakery-web": self.service(context=context)}, "--ci")
         self.assertEqual(code, 1)
@@ -401,10 +404,25 @@ class Stage(Disk):
         runs = self.runs()
         self.assertEqual(len(runs), 2)
         removed = self.fake.commands("rm", "-f")
-        self.assertEqual([call[2:] for call in removed], [[option(call, "--name")] for call in runs])
-        self.assertEqual(len({call[2] for call in removed}), 2)
+        self.assertEqual([call[2:] for call in removed], [["owned-cid"], ["owned-cid"]])
+        checks = self.fake.commands("container", "ls")
+        self.assertEqual(len(checks), 2)
+        for check, call in zip(checks, runs):
+            self.assertIn("label=" + apptests.OWNER_LABEL + "=" + option(call, "--name"), check)
+            self.assertIn("name=^/" + option(call, "--name") + "$", check)
         for call in runs:
             unnamed(call)   # (the name is one, and the rest is the flag set)
+
+    def test_a_timed_out_name_without_the_test_ownership_label_is_never_removed(self):
+        calls = []
+        def run(argv, timeout, cwd):
+            calls.append(argv)
+            return 0, "", ""
+        apptests.stopped(run, "lab-test-" + "a" * 32)
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("rm", calls[0])
+        with self.assertRaises(apptests.Missing):
+            apptests.stopped(lambda *args: (1, "", "unavailable"), "lab-test-" + "a" * 32)
 
     def test_lines_of_megabytes_in_a_failed_test_leave_a_summary_and_an_output_of_a_few_kilobytes(self):
         summary = os.path.join(self.make("summary"), "summary.md")

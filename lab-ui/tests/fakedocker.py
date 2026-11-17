@@ -6,7 +6,7 @@
     fake.calls()                                                    # every call: Call(argv, cwd, env) in order
     fake.commands("buildx", "build")                                # the argv of the calls that hold these words
 
-`docker compose ...` is passed to the real Docker when this machine has one (it reads files and needs no daemon), so a test can
+`docker compose config` and `version` alone are passed to real Docker when installed (no daemon), so a test can
 read a catalog with Compose and fake the builds and the runs. Every call is recorded (the arguments, the folder it ran in and the NAMES of the variables it had, never a value), so a test can
 prove what a stage ran and what it kept from it. A rule answers with an exit code, standard output and errors, and may wait
 (`sleep`, to try a time limit) or hand out a list of answers one call after the other (`answers`; the last one repeats). The
@@ -89,7 +89,18 @@ words = [a for a in argv if not a.startswith("-")]
 first = words[0] if words else ""
 second = words[1] if len(words) > 1 else ""
 real = load("real.json", None)
-if first == "compose" and real:   # Compose is the one thing it does not play: the real one reads the files (no daemon is needed)
+if first == "compose" and real:
+    # Only file reads may reach real Compose, never a daemon command or a config output file.
+    options = {"-f", "--file", "-p", "--project-name", "--project-directory", "--env-file", "--progress", "--profile", "--ansi"}
+    i = argv.index("compose") + 1
+    while i < len(argv) and argv[i].startswith("-"):
+        option_name = argv[i].split("=", 1)[0]
+        if option_name not in options:
+            say({"code": 2, "stderr": "Fake Docker refuses an unknown Compose option\n"})
+        i += 1 if "=" in argv[i] else 2
+    if (i >= len(argv) or argv[i] not in ("config", "version")
+            or any(word.startswith(("-o", "--output")) for word in argv[i + 1:])):
+        say({"code": 2, "stderr": "Fake Docker refuses to forward a mutating Compose command\n"})
     os.execv(real, [real] + argv)
 if first == "version":
     say({"stdout": "27.0.0\n"})

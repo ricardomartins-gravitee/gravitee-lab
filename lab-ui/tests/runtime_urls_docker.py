@@ -23,14 +23,40 @@ class RuntimeUrlsDocker(unittest.TestCase):
             root = Path(temp)
             shutil.copytree(Path(__file__).resolve().parents[1] / "clone", root / "lab-ui/clone")
             name = "lab-clone-urls-" + uuid.uuid4().hex[:12]
-            target = "runtime-copy"
+            target = "runtime-" + uuid.uuid4().hex
             project = independent.name(target)
             volumes = [name + "-source", project + "_data"]
             containers = []
+            owned_volumes = {}
+
+            def run(command):
+                return runtime_clones._execute(command)
+
+            def claim(volume, owner):
+                names = run(["docker", "volume", "ls", "--format", "{{.Name}}"]).split()
+                self.assertNotIn(volume, names, "A URL test volume already exists; it must not be reused or removed")
+                owned_volumes[volume] = owner
+
+            def cleanup():
+                # Never remove a planned name whose creation was refused, or one with changed ownership.
+                for container in containers:
+                    row = storage.inspect("container", [container])[0]
+                    self.assertEqual(row["Config"]["Labels"].get(storage.PROJECT), name)
+                names = run(["docker", "volume", "ls", "--format", "{{.Name}}"]).split()
+                for volume, owner in owned_volumes.items():
+                    if volume in names:
+                        row = storage.inspect("volume", [volume])[0]
+                        self.assertEqual((row.get("Labels") or {}).get(storage.PROJECT), owner)
+                for container in containers:
+                    run(["docker", "rm", "--force", "--volumes", container])
+                for volume in owned_volumes:
+                    if volume in names:
+                        run(["docker", "volume", "rm", volume])
             try:
-                runtime_clones._execute(["docker", "volume", "create", volumes[0]])
+                claim(volumes[0], name)
+                runtime_clones._execute(["docker", "volume", "create", "--label", storage.PROJECT + "=" + name, volumes[0]])
                 cid = runtime_clones._execute(["docker", "run", "-d", "--network", "none", "--name", name,
-                    "--memory", "512m", "--env", "GLIBC_TUNABLES=glibc.pthread.rseq=1",
+                    "--label", storage.PROJECT + "=" + name, "--memory", "512m", "--env", "GLIBC_TUNABLES=glibc.pthread.rseq=1",
                     "--mount", "type=volume,source=" + volumes[0] + ",target=/data/db", "mongo:8.0.34",
                     "mongod", "--bind_ip", "127.0.0.1", "--wiredTigerCacheSizeGB", "0.25"])
                 containers.append(cid)
@@ -51,6 +77,7 @@ class RuntimeUrlsDocker(unittest.TestCase):
                       'serial:NumberLong("9223372036854775806"), date:ISODate("2026-01-01T00:00:00Z"), '
                       'key:BinData(0,"b3BhcXVlLWNyZWRlbnRpYWw=")}); db.adminCommand({fsync:1})')
                 original = mongo('print(EJSON.stringify(db.getSiblingDB("copied").apps.findOne(),null,0,{relaxed:false}))')
+                claim(volumes[1], project)
                 runtime_clones._paused([cid], lambda: runtime_clones._volume(volumes[0], target, "data"), {
                     cid: ["mongosh", "--quiet", "--eval", "db.adminCommand({fsync:1})"]})
                 image = storage.inspect("container", [cid])[0]["Image"]
@@ -60,7 +87,7 @@ class RuntimeUrlsDocker(unittest.TestCase):
                     "volumes": [{"type": "volume", "source": "data", "target": "/data/db"}]}}}
                 runtime_urls.relocate(config, target, {"18083": 28083, "18082": 28082}, runtime_clones._execute)
                 self.assertEqual(mongo('print(EJSON.stringify(db.getSiblingDB("copied").apps.findOne(),null,0,{relaxed:false}))'), original)
-                copied = runtime_clones._execute(["docker", "run", "-d", "--network", "none", "--memory", "512m",
+                copied = runtime_clones._execute(["docker", "run", "-d", "--network", "none", "--label", storage.PROJECT + "=" + name, "--memory", "512m",
                     "--env", "GLIBC_TUNABLES=glibc.pthread.rseq=1", "--mount", "type=volume,source=" + volumes[1] + ",target=/data/db",
                     image, "mongod", "--bind_ip", "127.0.0.1", "--wiredTigerCacheSizeGB", "0.25"])
                 containers.append(copied)
@@ -78,10 +105,7 @@ class RuntimeUrlsDocker(unittest.TestCase):
                 self.assertEqual(json.loads(out), expected)
                 self.assertEqual(storage.inspect("container", [cid])[0]["State"]["Paused"], False)
             finally:
-                for container in containers:
-                    compose.run(["docker", "rm", "--force", "--volumes", container], timeout=30)
-                for volume in volumes:
-                    compose.run(["docker", "volume", "rm", volume], timeout=30)
+                cleanup()
 
 
 if __name__ == "__main__":

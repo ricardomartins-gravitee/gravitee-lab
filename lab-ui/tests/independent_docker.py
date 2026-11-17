@@ -18,8 +18,11 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
-from lab_ui.docker import compose, storage
+from lab_ui import paths
+from lab_ui.catalogs import independent
+from lab_ui.docker import compose, storage, testlab
 
 SOURCE = Path(__file__).resolve().parents[2]
 ENVIRONMENT = "/management/v2/organizations/DEFAULT/environments/DEFAULT"
@@ -41,14 +44,13 @@ class IndependentDocker(unittest.TestCase):
         self.log = self.root / "lab.log"
         self.log.touch()
         self.make_lab()
-        # Resolved Compose files carry concrete names; refuse another lab's resources before starting or cleaning up.
-        resolved = json.loads(self.command([*compose.COMPOSE, "config", "--format", "json"]))
-        for kind in ("volumes", "networks"):
-            for resource in resolved.get(kind, {}).values():
-                self.assertFalse(resource.get("external"), "An isolated fixture cannot use external resources")
-                self.assertTrue(resource["name"].startswith(self.name + "_"),
-                                "An isolated fixture must use its own volume and network names")
+        # No cleanup is registered until all fixture inputs and existing names are checked.
+        self.check_compose(list(compose.COMPOSE), fresh=True)
+        for file in self.linked.glob("playgrounds/*/compose.yml"):
+            self.check_compose([*compose.COMPOSE, "-f", "docker-compose.yml", "-f", str(file)], fresh=True)
         self.addCleanup(self.cleanup_lab)
+        if (self.root / "seeder").is_dir():
+            self.command(["docker", "build", "-t", self.seed_image, "seeder"], timeout=600)
         print("Starting isolated Gravitee lab " + self.name, flush=True)
         self.command([*compose.COMPOSE, "up", "-d", "--wait", "redis"], timeout=120)
         self.command([*compose.COMPOSE, "exec", "-T", "redis", "redis-cli", "SET", "shared-sentinel", "keep-original"])
@@ -61,7 +63,32 @@ class IndependentDocker(unittest.TestCase):
                                         cwd=self.root, env=self.env, stdout=self.output, stderr=subprocess.STDOUT)
         self.until(lambda: self.request(self.lab + "/api/state")[0] == 200, "Lab HTTP server", timeout=120)
 
+    def check_compose(self, command, fresh=False):
+        value = json.loads(self.raw_command([*command, "config", "--format", "json"]))
+        project = value.get("name")
+        if project != self.name:
+            matched = False
+            for file in self.root.glob(".lab/runtimes/*/runtime.json"):
+                record = json.loads(file.read_text())
+                with patch.object(paths, "ROOT", self.root):
+                    expected = independent.name(record["id"])
+                    folder = independent.folder(record["id"])
+                if record.get("project") == project == expected and file.parent == folder:
+                    matched = True
+                    break
+            self.assertTrue(matched, "The Compose project is not a runtime of this fixture")
+        testlab.resources(value, project, (self.root, self.linked), self.raw_command, fresh=fresh)
+
     def command(self, command, timeout=120):
+        if command[:len(compose.COMPOSE)] == list(compose.COMPOSE):
+            verbs = {"up", "down", "start", "stop", "restart", "exec", "run", "rm", "build", "wait", "ps", "logs"}
+            index = next((i for i, word in enumerate(command[len(compose.COMPOSE):], len(compose.COMPOSE))
+                          if word in verbs), None)
+            if index is not None:
+                self.check_compose(command[:index])
+        return self.raw_command(command, timeout)
+
+    def raw_command(self, command, timeout=120):
         done = subprocess.run(command, cwd=self.root, env=self.env, stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout)
         self.assertEqual(done.returncode, 0, " ".join(command) + "\n" + done.stdout[-12000:])
@@ -109,7 +136,6 @@ class IndependentDocker(unittest.TestCase):
         (self.root / "certs/mtls").mkdir(parents=True)
         shutil.copy2(SOURCE / "certs/mtls/generate.sh", self.root / "certs/mtls/generate.sh")
         self.command(["sh", "certs/mtls/generate.sh"])
-        self.command(["docker", "build", "-t", self.seed_image, "seeder"], timeout=600)
         for letter in ("a", "b"):
             self.make_playground(letter)
         concurrent = self.root / ".lab/catalogs/local/playgrounds/concurrent"
@@ -375,6 +401,12 @@ class IndependentDocker(unittest.TestCase):
             self.process.terminate()
             self.process.wait(timeout=30)
             self.output.close()
+        self.check_compose(list(compose.COMPOSE))
+        image_prefixes = {self.name + "/"}
+        for file in self.root.glob(".lab/runtimes/*/runtime.json"):
+            value = json.loads(file.read_text())
+            self.check_compose([*compose.COMPOSE, "-f", str(file.parent / "compose.json"), "-p", value["project"]])
+            image_prefixes.add(value["project"] + "/")
         for file in self.root.glob(".lab/runtimes/*/runtime.json"):
             value = json.loads(file.read_text())
             cmd = [*compose.COMPOSE, "-f", str(file.parent / "compose.json"), "-p", value["project"]]
@@ -396,8 +428,11 @@ class IndependentDocker(unittest.TestCase):
                       "--mount", f"type=bind,source={self.linked},target=/catalog",
                       "--entrypoint", "chown", storage.FILES_IMAGE,
                       "-Rh", f"{os.getuid()}:{os.getgid()}", "/lab", "/catalog"])
-        subprocess.run(["docker", "image", "rm", self.seed_image], cwd=self.root, env=self.env,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+        tags = self.raw_command(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"])
+        for tag in sorted(set(tags.split())):
+            if tag == self.seed_image or any(tag.startswith(prefix) for prefix in image_prefixes):
+                self.raw_command(["docker", "image", "rm", "--no-prune", tag], timeout=30)
+
 
     def test_private_data_consumers_links_and_shared_platform_survive_apply_and_update(self):
         self.instances = {}

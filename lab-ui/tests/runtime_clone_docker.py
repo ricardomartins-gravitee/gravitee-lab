@@ -30,11 +30,6 @@ class RuntimeCloneDocker(independent_docker.IndependentDocker):
         file.write_text(json.dumps(value))
 
     def cleanup_lab(self):
-        images = {self.name + "/backend:local"}
-        for file in self.root.glob(".lab/runtimes/*/runtime.json"):
-            value = json.loads(file.read_text())
-            images.update(service["image"] for service in value.get("services", {}).values()
-                          if service.get("image", "").startswith(value["project"] + "/"))
         destination = os.getenv("INDEPENDENT_E2E_ARTIFACTS")
         if destination:
             folder = Path(destination)
@@ -44,9 +39,6 @@ class RuntimeCloneDocker(independent_docker.IndependentDocker):
                 shutil.copyfile(file, target)
                 target.chmod(0o600)
         super().cleanup_lab()
-        # Only this disposable lab's private aliases; keep shared image layers and build caches.
-        for tag in images:
-            compose.run(["docker", "image", "rm", "--no-prune", tag], timeout=30)
 
     def runtime_command(self, letter):
         return list(compose.COMPOSE) if letter == "shared" else super().runtime_command(letter)

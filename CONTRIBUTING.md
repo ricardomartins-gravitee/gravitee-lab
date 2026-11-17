@@ -77,6 +77,15 @@ To include Gamma, set `RUNTIME_CLONE_TEST_LICENSE` privately to a license with G
 commit or test artifact. These workflows verify complete Shared and private storage copies, working keys and credentials,
 source preservation, and linked catalogs.
 
+Docker test isolation is checked before startup and again before cleanup. The runtime fixtures require their own
+project, local volume and network names, and mounts inside their temporary Lab and catalog folders. Existing resource
+names, foreign ownership and failed inspections stop the workflow; they never authorize cleanup. Catalog smoke tests
+use disposable writable mounts instead of the catalog's existing state. App-test timeouts remove only container IDs
+with the matching test ownership label. Cleanup failures fail the workflow.
+
+Run the refusal cases without a Docker daemon with `python3 lab-ui/tests/run.py tests.test_dockersafety tests.test_e2e`.
+The real Docker workflows run in CI on disposable runners. Do not use one-off scripts against an installed Lab to verify isolation.
+
 ## Add an add-on, a setup or a playground
 
 Items do not live in this repository: they live in catalogs. The ones the Lab shows by default are in the

@@ -24,6 +24,7 @@ import json
 import os
 import re
 import secrets
+from pathlib import Path
 import threading
 import time
 from http.server import ThreadingHTTPServer
@@ -147,18 +148,96 @@ def keep_on_file():
     return restore
 
 
-def clean_machine():
+def clean_machine(files=None, environ=None):
     """What a machine that is free for a run holds of the lab: nothing. Containers and volumes of the project, whatever their
     state, are what a person left, and the run removes everything it made at its end: it will not remove theirs. Returns
     the reason it is not free, or None."""
     name = compose.project_name()
-    for what, command in (("containers", ["docker", "ps", "-aq"]), ("volumes", ["docker", "volume", "ls", "-q"])):
+    for what, command in (("containers", ["docker", "ps", "-aq"]), ("volumes", ["docker", "volume", "ls", "-q"]),
+                          ("networks", ["docker", "network", "ls", "-q"])):
         rc, out, err = compose.run([*command, "--filter", f"label=com.docker.compose.project={name}"], timeout=30)
         if rc != 0:
             return f"Docker does not answer: {(err or out).strip().splitlines()[-1] if (err or out).strip() else 'no reason given'}"
         if out.strip():
             return (f"This machine already has {what} of the lab ({name}): a run starts from nothing and removes what it made, "
                     "so that it does not touch yours. Run it in CI, or remove the lab first (make reset)")
+    if files is not None:
+        try:
+            resolved = compose.config_json(compose.all_files(files), environ=environ)
+        except compose.ComposeError as error:
+            return "The test's Compose files could not be checked: " + str(error)
+        if resolved.get("name", name) != name:
+            return "The test project name does not match the Lab; nothing was started or removed"
+        for kind in ("volumes", "networks"):
+            for row in resolved.get(kind, {}).values():
+                if row.get("external") or row.get("driver_opts"):
+                    return "An end-to-end test cannot use external or host-backed volumes or networks"
+        for service in resolved.get("services", {}).values():
+            if service.get("privileged") or service.get("network_mode") == "host" or service.get("volumes_from"):
+                return "An end-to-end test cannot share host or foreign container access"
+            for mount in service.get("volumes", []):
+                if mount.get("type") == "bind" and not mount.get("read_only"):
+                    source = Path(mount["source"])
+                    if source.exists() and (not source.is_dir() or any(source.iterdir())):
+                        return "An end-to-end test cannot use existing data in a writable host mount"
+        # Explicit names can belong to another project or have no Compose labels at all.
+        expected = {"volume": {row["name"] for row in resolved.get("volumes", {}).values()},
+                    "network": {row["name"] for row in resolved.get("networks", {}).values()},
+                    "container": {row["container_name"] for row in resolved.get("services", {}).values() if row.get("container_name")}}
+        for kind, names in expected.items():
+            if not names:
+                continue
+            rc, out, err = compose.run(["docker", kind, "ls", *(["-a"] if kind == "container" else []),
+                                       "--format", "{{.Names}}" if kind == "container" else "{{.Name}}"], timeout=30)
+            if rc:
+                return "Docker could not check existing " + kind + " names: " + (err or out).strip()
+            if names & set(out.split()):
+                return "An end-to-end test would reuse an existing " + kind + "; nothing was started or removed"
+    return None
+
+
+def cleanup_machine(shell):
+    """Refuse cleanup when a project's containers came from another Lab folder."""
+    name = compose.project_name()
+    rc, out, err = shell(["docker", "container", "ls", "-aq", "--no-trunc", "--filter",
+                          f"label=com.docker.compose.project={name}"], timeout=30)
+    if rc:
+        return "Docker could not verify cleanup ownership: " + (err or out).strip()
+    ids = out.split()
+    if ids:
+        rc, out, err = shell(["docker", "container", "inspect", *ids], timeout=30)
+        if rc:
+            return "Docker could not verify cleanup ownership: " + (err or out).strip()
+        try:
+            rows = json.loads(out)
+            if {row["Id"] for row in rows} != set(ids):
+                return "Docker returned incomplete cleanup ownership information"
+            for row in rows:
+                labels = row["Config"].get("Labels") or {}
+                directory = labels.get("com.docker.compose.project.working_dir")
+                if (labels.get("com.docker.compose.project") != name or not directory
+                        or Path(directory).resolve() != ROOT.resolve()):
+                    return "Cleanup refused: this project contains containers from another Lab folder"
+        except (KeyError, TypeError, ValueError):
+            return "Docker returned invalid cleanup ownership information"
+    try:
+        resolved = compose.config_json(["-f", compose.CORE_FILE, "-f", ON_FILE])
+        for kind in ("volume", "network"):
+            expected = {row["name"] for row in resolved.get(kind + "s", {}).values()}
+            rc, out, err = shell(["docker", kind, "ls", "--format", "{{.Name}}"], timeout=30)
+            if rc:
+                return "Docker could not verify cleanup resource names: " + (err or out).strip()
+            for resource in sorted(expected & set(out.split())):
+                rc, out, err = shell(["docker", kind, "inspect", resource], timeout=30)
+                if rc:
+                    return "Docker could not verify cleanup ownership: " + (err or out).strip()
+                rows = json.loads(out)
+                if len(rows) != 1 or (rows[0].get("Labels") or {}).get("com.docker.compose.project") != name:
+                    return "Cleanup refused: a declared " + kind + " belongs to another project"
+                if kind == "network" and set(rows[0].get("Containers") or {}) - set(ids):
+                    return "Cleanup refused: a declared network has foreign containers"
+    except (compose.ComposeError, KeyError, TypeError, ValueError):
+        return "Docker returned invalid cleanup resource information"
     return None
 
 
@@ -358,6 +437,9 @@ class Run:
 
     def stop(self):
         """Removes what the run made: containers, networks and volumes of the project, which a free machine held none of."""
+        problem = cleanup_machine(self.shell)
+        if problem:
+            return problem
         rc, _, err = self.shell([*compose.by_name(), "down", "--volumes", "--remove-orphans", "--timeout", "30"], timeout=600)
         return None if rc == 0 else (err.strip().splitlines() or ["docker compose down failed"])[-1]
 
@@ -469,7 +551,7 @@ def run(text, tested=None, out=print, given=None):
         with data(out, os.environ.get("GITHUB_ACTIONS") == "true"):
             out(" ".join(str(error).split()))
         return CANNOT
-    busy = clean_machine()
+    busy = clean_machine([built[f"{kind}s"][uid]["file"]], {**compose.environment(), **used})
     if busy:
         out(f"Not tried: {busy}")
         return CANNOT
@@ -508,11 +590,12 @@ def _tried(lab, built, kind, uid, used, out):
         removal = attempt.stop()
         lab.close()
         restore()
-        # What the seeds recorded is gone with the volumes, as after a Reset: no page lists what is no longer there
-        kept = [] if removal else [pid for pid in built["playgrounds"] if not playgrounds.forget(pid)]
-    report(attempt, outcome, used, message, logs, out)
+        # Only the tried playground seeded here; another catalog record may predate this run.
+        kept = [uid] if not removal and kind == "playground" and not playgrounds.forget(uid) else []
     if removal:
-        out(f"The lab could not be removed: {removal}")
+        outcome = FAILED
+        message = (message + "; " if message else "") + "The lab could not be removed: " + removal
+    report(attempt, outcome, used, message, logs, out)
     for pid in kept:
         out(f"What {built['playgrounds'][pid]['name']} recorded could not be emptied: its state folder leads out of its folder")
     return outcome
