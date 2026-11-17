@@ -32,7 +32,8 @@ ROOT = Path(__file__).resolve().parents[4]   # lab-ui/lab_ui/catalogs/ci/ is fou
 MAKEFILE = ROOT / "Makefile"
 
 # The flags of a run of tests. `--pull never`: the image is the one built here, never another of the same name
-OWNER_LABEL = "io.gravitee.lab-test"
+# Private test ownership is not part of the catalog label contract.
+OWNER_LABEL = "gravitee-lab.test-owner"
 HARDENING = ["--pull", "never", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "512",
              "--memory", "2g", "--cpus", "2", "--read-only", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m"]
 PYTHON_TESTS = ["-m", "unittest", "discover", "-s", "tests", "-t", "."]
