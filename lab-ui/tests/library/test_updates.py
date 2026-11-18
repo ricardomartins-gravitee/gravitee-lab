@@ -74,6 +74,20 @@ class Versions(Case):
         self.assertEqual(lab["run"], updates.RUN)
         self.at("v1.1.0")
         self.assertEqual((updates.describe()["version"], updates.describe()["update"]), ("1.1.0", False))
+        previous = "1.1.0"
+        for tag in ("v1.20.15", "v1.20.15-rev.1", "v1.20.15-rev.2", "v1.20.15-rev.9", "v1.20.15-rev.10", "v1.20.16",
+                    "v1.20.16-rev.1"):
+            with self.subTest(tag=tag):
+                self.commit(self.source, tag)
+                git(self.source, "tag", tag)
+                git(self.source, "push", "-q", str(self.remote), "HEAD:refs/heads/main", "--tags")
+                lab = updates.check()
+                self.assertEqual((lab["version"], lab["latest"], lab["update"]), (previous, tag[1:], True))
+                self.at(tag)
+                self.assertEqual((updates.describe()["version"], updates.describe()["update"]), (tag[1:], False))
+                shown = updates.releases()["versions"]
+                self.assertEqual((shown[0]["version"], shown[0]["current"], shown[1]["version"]), (tag[1:], True, previous))
+                previous = tag[1:]
 
     def test_while_a_newer_version_waits_the_state_runs_no_git_between_two_reads_of_the_repository(self):
         self.at("v1.0.0")
@@ -183,6 +197,16 @@ class Versions(Case):
         if shutil.which("make"):   # this Lab has no Makefile: what init could not make is said, and the Lab UI starts again anyway
             self.assertTrue(any(line.startswith("make init failed") for line in job.lines), job.lines)
         self.assertEqual(started, [True])
+        self.commit(self.source, "Fork revision")
+        git(self.source, "tag", "v1.1.0-rev.1")
+        git(self.source, "push", "-q", str(self.remote), "HEAD:refs/heads/main", "--tags")
+        updates.check()
+        job = self.finished(updates.update("1.1.0-rev.1"))
+        self.assertTrue(job.ok, job.lines)
+        self.assertEqual(job.title, "Update Gravitee Lab to 1.1.0-rev.1")
+        self.assertEqual(git(self.lab, "rev-parse", "HEAD"), git(self.lab, "rev-parse", "v1.1.0-rev.1"))
+        self.assertEqual(updates.describe()["version"], "1.1.0-rev.1")
+        self.assertEqual(started, [True, True])
 
     def finished(self, job):
         for _ in range(1200):   # a real git on a loaded machine: it costs nothing once the job ends
@@ -229,9 +253,11 @@ class Versions(Case):
 
     def test_a_tag_of_another_form_hides_no_version_and_a_moved_tag_fails_no_check(self):
         self.at("v1.1.0")
-        git(self.lab, "tag", "v1.2.0-rc1")
-        updates.forget()
-        self.assertEqual(updates.describe()["version"], "1.1.0", "v1.2.0-rc1 is no version: the Lab is still 1.1.0")
+        for tag in ("v1.2.0-rc1", "v1.20.15-rc.1", "v1.20.15-rev.0", "v1.20.15-rev.01"):
+            with self.subTest(tag=tag):
+                git(self.lab, "tag", tag)
+                updates.forget()
+                self.assertEqual(updates.describe()["version"], "1.1.0", f"{tag} is no version: the Lab is still 1.1.0")
         self.assertIsNone(updates.check()["error"])
         # The origin moves v1.1.0 (it should not happen): the check takes the tag as the origin says, and goes on working
         self.commit(self.source, "After 1.1.0 (#21)")

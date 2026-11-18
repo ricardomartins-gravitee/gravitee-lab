@@ -18,8 +18,8 @@ git grep -l 'gravitee-io-labs/gravitee-lab' -- . ':!NOTICE' | xargs sed -i.bak '
 find . -name '*.bak' -not -path './.git/*' -delete
 ```
 
-A catalog pins the Lab by the commit of a release (`lab.ref` in its `.github/standard.json`, a commit that a tag `vX.Y.Z` on `main`
-names: SD11), and its CI fetches that commit. When the history of this repository is rewritten or the repository is moved, the
+A catalog pins the Lab by the commit of a release (`lab.ref` in its `.github/standard.json`, a commit that a tag `vX.Y.Z` or
+`vX.Y.Z-rev.N` on `main` names: SD11), and its CI fetches that commit. When the history of this repository is rewritten or the repository is moved, the
 pins point at nothing: move them to a release of the new history, `python3 lab-ui/catalog.py upgrade --fleet OWNER --lab-ref COMMIT`,
 which opens a pull request on each catalog of the owner.
 
@@ -89,9 +89,16 @@ changed (`latest`, `amp-demo-latest`), a product release that changed an API a s
 
 ## Publishing a version
 
-Every merge to `main` is a version: the *Release* workflow tags the merge `vX.Y.Z` and publishes its release on GitHub, with the
-pull requests merged since the version before. The Lab UI of every clone sees it at its next check and offers the update. Name
+Upstream, every merge to `main` is a version: the *Release* workflow tags the merge `vX.Y.Z` and publishes its release on GitHub,
+with the pull requests merged since the version before. The Lab UI of every clone sees it at its next check and offers the update. Name
 each pull request for the people who read it there: its title is a line of what the version changes.
+
+The *Release* workflow does not run on a fork. A fork uses the upstream tag alone, such as `v1.20.15`, only when its release
+commit is the same commit as that upstream release. With fork-only commits, use `v1.20.15-rev.1`, then `v1.20.15-rev.2`.
+After merging a newer upstream release, use its bare tag if no fork-only commits remain, or start again at `v1.20.16-rev.1`
+if they do. Keep the upstream tag on its original commit: do not move it to a fork commit. Revisions start at 1, have no
+leading zeros or spaces, and sort after their parent and before the next upstream release: `v1.20.15-rev.9` is before
+`v1.20.16`. An untagged fork commit is not a release. Catalog releases keep their own `vX.Y.Z` format.
 
 Before merging, give the pull request the label of the number it raises:
 
@@ -110,8 +117,9 @@ something*, which comes first so that what needs people to act is never missed. 
 
 When several pull requests are merged while a release is still running, the next release counts them all and raises the highest
 number their labels ask for. A run that runs again does no harm: a commit that a version holds makes no second one, and
-the release of a tag that has none is made then. Only the tags `vX.Y.Z` are versions; a tag of another form (`v1.6.0-rc1`) is left alone. A tag is never moved once pushed: a clone that updated to it keeps it, and the Lab UI offers only
-the tags that are on `main`.
+the release of a tag that has none is made then. The upstream workflow numbers only `vX.Y.Z`; the Lab also recognizes fork
+releases `vX.Y.Z-rev.N`. A tag of another form (`v1.6.0-rc1`) is left alone. A tag is never moved once pushed: a clone that
+updated to it keeps it, and the Lab UI offers only the tags that are on `main`.
 
 The workflow pushes the tag with a deploy key, since the token of a workflow cannot be let past a ruleset. Set it up once:
 
@@ -123,6 +131,30 @@ The workflow pushes the tag with a deploy key, since the token of a workflow can
 3. **The labels** `major`, `minor` and `catalog-format`.
 
 To replace the key, make a new one, set the secret again and delete the old deploy key: nothing else changes.
+
+### Releasing a fork
+
+Use the **Fork release** workflow on the fork's `main`. It is separate from the upstream **Release** workflow and never runs
+on a merge by itself. Start with **Publish the previewed release** off: the run's summary shows the proposed tag, upstream
+parent, exact commit and release notes. This preview writes no tag or GitHub release.
+
+The workflow reads the fork's parent repository from GitHub and fetches its tags into a separate namespace. It selects the
+newest upstream release on upstream `main` that the fork contains. That exact commit uses the bare upstream tag. Any fork
+changes use `-rev.N`, starting at 1 for each parent, one number per release. A retry of a tagged commit reuses that tag; an
+existing number is never reused for another commit. A bare fork tag that does not match its upstream commit stops the run.
+
+After reviewing the preview and waiting for CI to pass, run it again with **Publish the previewed release** on and paste the
+full commit SHA from the preview into **Full main commit SHA**. Publishing refuses if `main` moved or a tag names another
+commit. It creates an annotated tag and a normal GitHub release, even though the revision suffix resembles a prerelease.
+If a run stops after tagging, run it again for the same commit to finish its release.
+
+Only the publishing job enters the `publish` environment and requests `contents: write`; it uses GitHub's workflow token,
+not the upstream workflow's deploy key. Existing environment and tag protections still apply: a ruleset that refuses that
+token will refuse publication. The workflow never bypasses protections or moves or deletes a tag.
+
+An older Lab UI recognizes only bare upstream tags. After this change reaches the fork's `main`, update an existing fork
+clone with Git and restart its Lab UI once; it then discovers revision tags through the usual update check. This changes no
+running containers or data. A fresh clone of a fork release already has that support.
 
 ## Pins to review by hand
 

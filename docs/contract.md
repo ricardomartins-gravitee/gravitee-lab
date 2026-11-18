@@ -20,8 +20,8 @@ page that a catalog uses say which Lab reads it.
 
 The Lab finds the newest version it reads by reading the files of each version, newest first, as it reads a catalog it adds
 (`manifest.offer`, `understood`): its releases when it makes releases, else the commits before each change of its units, up to 20 versions, none started after about ten seconds, each once. When none of those is one it reads, the Lab says so and how many it read. A catalog's CI checks it with a released Lab: the commit
-that `.github/standard.json` pins is the commit of a release `vX.Y.Z`. So a catalog that passes its CI is read by that release
-and every later one, and updating to the latest release is always enough for what a catalog publishes. The release notes of
+that `.github/standard.json` pins is the commit of a release `vX.Y.Z` or `vX.Y.Z-rev.N`. So a catalog that passes its CI is read
+by that release and every later one, and updating to the latest release is always enough for what a catalog publishes. The release notes of
 the Lab list, under *For catalogs*, what each release adds that a catalog can use (the label `catalog-format`,
 [Publishing a version](maintaining.md#publishing-a-version)).
 
