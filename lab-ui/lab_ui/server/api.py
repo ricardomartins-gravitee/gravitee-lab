@@ -722,7 +722,9 @@ ROUTES = [(method, re.compile(pattern), handler) for method, pattern, handler in
     ("GET", "/(css|js|img)/(.+)", static),
     ("GET", "/favicon.ico", lambda r: r.answer(204)),   # the page carries its own icon
     ("GET", "/api/state", state),
-    ("GET", "/api/runtimes", lambda r: runtimes.listing(project.load(), fresh=r.query.get("refresh") == "1", playground=r.query.get("playground"))),
+    ("GET", "/api/runtimes", lambda r: runtimes.listing(project.load(), fresh=r.query.get("refresh") == "1",
+        playground=r.query.get("playground"), available=not _containers()[1])),
+    ("POST", f"/api/runtimes/{UNIT}/groups/{ID}/{DO}", lambda r, pid, gid, op: runtimes.group_action(project.load(), pid, gid, op)),
     ("POST", f"/api/runtimes/{UNIT}/(start|stop|restart|apply|update)", lambda r, pid, op: runtimes.managed_action(project.load(), pid, op)),
     ("GET", f"/api/runtimes/{UNIT}/check", lambda r, pid: runtimes.check(project.load(), pid, operation=r.query.get("action", "start"))),
     ("POST", f"/api/runtimes/{UNIT}/cleanup", lambda r, pid: runtimes.cleanup(pid, r.body)),

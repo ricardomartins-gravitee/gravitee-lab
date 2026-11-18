@@ -869,7 +869,7 @@ export const serviceVersion = (service) => (service.built ? "local build" : bare
 // Shared and private containers offer the same lifecycle controls; seeds run through Re-seed.
 export function containerActions(name, service, { attribute = "data-act" } = {}) {
   const st = service.state, key = `service:${name}`, seed = service.role === "seed";
-  const actions = [st.key !== "absent" && "logs", !seed && (st.running || showing(key, "restart")) && "restart",
+  const actions = [!["absent", "unknown"].includes(st.key) && "logs", !seed && (st.running || showing(key, "restart")) && "restart",
     st.running ? "stop" : !seed && service.on && st.key !== "done" && "start"];
   return actions.map((act) => {
     if (!act) return GAP;

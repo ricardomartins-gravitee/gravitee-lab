@@ -718,6 +718,30 @@ def service(pid, service_name, operation):
                       [run], key=f"service:{service_key(pid, service_name)}", verb=operation)
 
 
+def service_group(pid, names, operation, gid, label):
+    """Group controls use only captured services of the explicit private runtime."""
+    value = read(pid)
+    if not value or not names or any(name not in value["services"] for name in names):
+        raise paths.NotFound("No such independent services")
+    if operation not in ("start", "stop", "restart"):
+        raise ValueError("Choose Start, Stop or Restart")
+    if operation != "stop" and value.get("clone_pending"):
+        raise ValueError("This clone is incomplete; delete it and create a new runtime")
+    def run(job):
+        chosen = [name for name in names if operation == "stop" or name not in value["oneshots"]]
+        if operation == "restart":
+            rows = containers(pid)
+            chosen = [name for name in chosen if rows.get(name, {}).get("State") == "running"]
+        if not chosen:
+            return
+        if operation == "start":
+            value["active"] = True
+            _write(folder(pid) / "runtime.json", value)
+        args = ["up", "-d", "--no-deps"] if operation == "start" else [operation]
+        job.exec(command(pid, *args, *chosen))
+    return JOBS.start(f"{operation.capitalize()} {label} ({_label(pid)})", [run], key=f"group:{gid}", verb=operation)
+
+
 def service_key(pid, service_name):
     return "runtime-" + hashlib.sha256(pid.encode()).hexdigest()[:16] + "--" + service_name
 

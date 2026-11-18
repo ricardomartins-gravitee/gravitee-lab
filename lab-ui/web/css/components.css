@@ -1113,9 +1113,7 @@ dialog .pairs .snippet { flex: 1; }
 .runtime-overview { margin-bottom: var(--sp-4); }
 .runtime-overview .sub { display: block; }
 .runtime-overview td .page-actions { flex-wrap: nowrap; }
-.runtime-name { display: flex; align-items: center; gap: var(--sp-2); }
-.runtime-services { --version-width: 116px; }
-.runtime-services > td { padding: 0; }
+.runtime-name { min-width: 0; }
 .runtime-summary { padding: 0 var(--pad) var(--sp-3); }
 
 /* The playground's inventory stays in its More dialog; Containers retains the full overview. */
@@ -1125,3 +1123,13 @@ dialog .pairs .snippet { flex: 1; }
 .runtime-dialog .runtime-overview { border: 0; margin: 0; }
 .runtime-dialog .card-head { justify-content: flex-end; }
 .runtime-summary:empty { display: none; }
+@container (max-width: 640px) {
+  .runtime-overview :is(table, tbody) { display: block; width: 100%; }
+  .runtime-overview thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .runtime-overview tr[data-runtime-row] { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: var(--sp-3) var(--pad); border-top: 1px solid var(--border); }
+  .runtime-overview tr[data-runtime-row] > td { border: 0; padding: var(--sp-1) 0; }
+  .runtime-overview tr[data-runtime-row] > td:is(:first-child, :last-child) { grid-column: 1 / -1; }
+  .runtime-overview td .page-actions { flex-wrap: wrap; }
+  .runtime-overview tr:not([data-runtime-row]), .runtime-overview tr:not([data-runtime-row]) > td { display: block; }
+  .runtime-overview .card-head h3 { min-width: 0; overflow-wrap: anywhere; }
+}

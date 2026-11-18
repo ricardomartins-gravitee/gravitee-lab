@@ -46,6 +46,96 @@ def _states(rows, value, job=None):
             for key in value["services"] for row in [rows.get(key, {})]}
 
 
+def _groups(project, pid, value, services):
+    """Partition captured services, never another runtime's current containers."""
+    remaining = set(value["services"])
+    result = []
+    for group in [*project.get("groups", []), {"id": "other-services", "name": "Other services", "services": sorted(remaining)}]:
+        names = [name for name in group["services"] if name in remaining]
+        if not names:
+            continue
+        remaining.difference_update(names)
+        keys = [independent.service_key(pid, name) for name in names]
+        folded = [services[independent.service_key(pid, name)]["state"] for name in names
+                  if not (value.get("initialized") and name in value["oneshots"]
+                          and services[independent.service_key(pid, name)]["state"]["key"] == "absent")]
+        state = model.fold(folded, value.get("active", False), None)
+        if all(services[key]["state"]["key"] == "unknown" for key in keys):
+            state = {"key": "unknown", "label": "Unavailable", "running": False}
+        result.append({"id": independent.service_key(pid, group["id"]), "name": group["name"], "services": keys,
+                       "state": state,
+                       "product": None, "version": "", "note": "", "brings": [], "recreates": [], "runtime": pid})
+    return result
+
+
+def _service_entries(pid, value, rows, available=True, job=None, fallback=None):
+    states = _states(rows, value, job)
+    result = {}
+    for name, spec in value["services"].items():
+        key = independent.service_key(pid, name)
+        display = spec.get("display") or (fallback or {}).get(name) or {}
+        entry = {field: display.get(field) for field in model.SERVICE_KEYS}
+        label = runtime_settings.instances().get(pid, {}).get("name", pid)
+        entry.update(label=spec["label"], name=f"{spec['label']} ({label})", image=spec["image"], on=True, behind=False,
+                     running_tag=None, uptime=model.uptime(rows.get(name, {}).get("Status")) if available else "",
+                     container=rows.get(name, {}).get("Name") or f"{value['project']}-{name}-1",
+                     state=states[name] if available else {"key": "unknown", "label": "Unavailable", "running": False},
+                     ports=spec.get("ports", []), targets=spec.get("targets", {}),
+                     note="", note_tone="", note_title="", note_target=None, note_file=None, brings=[], recreates=[],
+                     owner={"kind": "playground", "id": pid, "name": label},
+                     runtime={"id": pid, "service": name})
+        if name in value["oneshots"]:
+            entry["role"] = "seed"
+        result[key] = independent.rewrite(entry, value["ports"])
+    return result
+
+
+def _scopes(body, project, instances):
+    """Container inspection uses saved definitions even with Docker or the source catalog unavailable."""
+    available = not body.get("docker", {}).get("error")
+    body["runtime_scopes"] = {}
+    for pid, instance in instances.items():
+        scope = {"id": pid, "name": instance["name"], "playground": instance["playground"],
+                 "playground_name": project["playgrounds"].get(instance["playground"], {}).get("name") or instance["playground"],
+                 "source": instance["playground"] in project["playgrounds"], "prepared": False,
+                 "initialized": False, "running": False, "active": False, "services": [], "groups": [], "problem": None}
+        body["runtime_scopes"][pid] = scope
+        try:
+            value = independent.read(pid)
+            if not value:
+                continue
+            runtime, rows = _snapshot(pid) if available else (independent.describe(pid, rows={}), {})
+            entries = _service_entries(pid, value, rows, available, body.get("job"), body["services"])
+            body["services"].update(entries)
+            scope.update(prepared=True, initialized=bool(value.get("initialized")), running=runtime["running"],
+                         active=runtime["on"], services=list(entries), groups=_groups(project, pid, value, entries),
+                         problem="This clone is incomplete; delete it and create a new runtime" if value.get("clone_pending") else None)
+            existing = {link["service"] for link in body.get("links", [])}
+            for link in project.get("links", []):
+                if link["service"] not in value["services"]:
+                    continue
+                key = independent.service_key(pid, link["service"])
+                if key not in existing:
+                    copied = independent.rewrite(link, value["ports"])
+                    body.setdefault("links", []).append({**copied, "service": key, "section": instance["name"],
+                        "port": value["ports"].get(str(link.get("port")), link.get("port")), "up": entries[key]["state"]["running"]})
+        except (OSError, ValueError, KeyError, compose.ComposeError) as error:
+            scope["problem"] = str(error)
+    return body
+
+
+def group_action(project, pid, gid, operation):
+    value = independent.read(pid)
+    if not selected(pid) or not value:
+        raise paths.NotFound("No such runtime group")
+    entries = _service_entries(pid, value, {})
+    group = next((group for group in _groups(project, pid, value, entries) if group["id"] == gid), None)
+    if group is None:
+        raise paths.NotFound("No such runtime group")
+    names = [name for name in value["services"] if independent.service_key(pid, name) in group["services"]]
+    return independent.service_group(pid, names, operation, gid, group["name"])
+
+
 def _overlay(body, project):
     for item in body.get("playgrounds", []):
         pid = item["id"]
@@ -57,7 +147,7 @@ def _overlay(body, project):
         if mode != "independent":
             continue
         value = independent.read(pid)
-        runtime, rows = _snapshot(pid)
+        runtime, rows = _snapshot(pid) if not body.get("docker", {}).get("error") else (independent.describe(pid, rows={}), {})
         item["runtime"].update(runtime)
         running, active = runtime["running"], runtime["on"]
         states = _states(rows, value, body.get("job")) if value else {}
@@ -81,30 +171,14 @@ def _overlay(body, project):
                           if project["playgrounds"][pid].get("seed") else None},
                     reseed={"enabled": running and not reason, "reason": reason or (None if running else "Start it first")}
                            if project["playgrounds"][pid].get("seed") else None)
+        if body.get("docker", {}).get("error"):
+            item["state"] = {"key": "unknown", "label": "Unavailable", "running": False}
         if active:
             item["held"] = {**(item.get("held") or {}), "delete": "Stop this independent playground first"}
         if value:
-            own = []
-            for service_name, service in value["services"].items():
-                key = independent.service_key(pid, service_name)
-                display = service.get("display") or body["services"].get(service_name) or {}
-                entry = copy.deepcopy({key: display.get(key) for key in model.SERVICE_KEYS})
-                entry.setdefault("ports", [])
-                entry.update(uptime=model.uptime(rows.get(service_name, {}).get("Status")),
-                             running_tag=model.tag(service["image"]) if states.get(service_name, {}).get("running") else None,
-                             label=service["label"], name=f"{service['label']} ({item['name']})", image=service["image"], on=True, behind=False,
-                             note="", note_tone="", note_title="", note_target=None, note_file=None,
-                             brings=[], recreates=[],
-                             container=rows.get(service_name, {}).get("Name") or f"{value['project']}-{service_name}-1",
-                             state=states.get(service_name) or model.service_state(None, False, False),
-                             owner={"kind": "playground", "id": pid, "name": item["name"]},
-                             runtime={"id": pid, "service": service_name})
-                entry["ports"] = service.get("ports", [str(value["ports"].get(str(port), port)) for port in entry.get("ports", [])])
-                entry["targets"] = {str(value["ports"].get(str(port), port)): target
-                                    for port, target in service.get("targets", entry.get("targets", {})).items()}
-                entry = independent.rewrite(entry, value["ports"])
-                body["services"][key] = entry
-                own.append(key)
+            entries = _service_entries(pid, value, rows, not body.get("docker", {}).get("error"), body.get("job"), body["services"])
+            body["services"].update(entries)
+            own = list(entries)
             item["services"] = own
             item["apps"] = [independent.service_key(pid, key) for key in value["services"] if key not in value["oneshots"]]
             item["links"] = [independent.rewrite(link, value["ports"]) for link in project["links"]
@@ -281,10 +355,10 @@ def overlay(body, project):
             item["runtime"] = {"mode": "independent", "error": str(error)}
             item["action"] = {"do": "start", "label": "Start", "enabled": False, "reason": str(error), "dialog": None}
             item["reseed"] = None
-    return body
+    return _scopes(body, project, instances)
 
 
-def listing(project, fresh=False, playground=None):
+def listing(project, fresh=False, playground=None, available=True):
     """The Containers page's central inventory, including stopped and unavailable-source runtimes."""
     if playground is not None:
         layers.lookup(project, "playground", playground)
@@ -295,11 +369,11 @@ def listing(project, fresh=False, playground=None):
     if playground is not None:
         ids = {rid for rid in ids if runtime_settings.source(rid) == playground}
     try:
-        usage = storage.usage(fresh=fresh)
+        usage = storage.usage(fresh=fresh) if available else {"volumes": {}, "shared": []}
     except (OSError, ValueError, compose.ComposeError) as error:
         usage = {"volumes": {}, "shared": []}
         problems.append({"file": "Docker storage", "message": str(error)})
-    shared = storage.resources(compose.project_name()) if playground is None else {"containers": [], "volumes": []}
+    shared = storage.resources(compose.project_name()) if playground is None and available else {"containers": [], "volumes": []}
     rows = [{"id": None, "name": "Shared platform", "mode": "shared", "prepared": True,
              "containers": shared["containers"], "volumes": shared["volumes"], "ports": [],
              "local_bytes": None, "source": True, "problem": None}] if playground is None else []
@@ -310,9 +384,9 @@ def listing(project, fresh=False, playground=None):
         record = prepared.get(pid)
         value = {"resources": {"containers": [], "volumes": [], "networks": []}, "local": None, "error": None, "running": False}
         try:
-            if record:
+            if record and available:
                 value = runtime_storage.inventory(pid)
-            elif independent.folder(pid).exists() or any(storage.resources(independent.name(pid)).values()):
+            elif available and (independent.folder(pid).exists() or any(storage.resources(independent.name(pid)).values())):
                 value["error"] = "An incomplete runtime has private resources; cleanup is held"
         except (OSError, ValueError, compose.ComposeError) as error:
             value["error"] = str(error)
@@ -335,7 +409,7 @@ def listing(project, fresh=False, playground=None):
                "ports": sorted({str(port) for spec in (record or {}).get("services", {}).values() for port in spec.get("ports", [])}),
                "prepared_at": (record or {}).get("prepared_at"),
                "active": bool((record or {}).get("active"))}
-        reason = value["error"] or ("Stop this runtime before cleanup" if value["running"] else None)
+        reason = value["error"] or ("Docker is not reachable" if not available else "Stop this runtime before cleanup" if value["running"] else None)
         row["cleanup"] = {"containers": {"enabled": bool(record and not reason and (resources["containers"] or resources["networks"])),
                                         "reason": reason or (None if resources["containers"] or resources["networks"] else "Containers already removed")},
                           "data": {"enabled": bool(record and not reason), "reason": reason or (None if record else "Not started yet")},
@@ -343,7 +417,7 @@ def listing(project, fresh=False, playground=None):
         rows.append(row)
     running = [c["name"] for row in rows for c in row["containers"] if c["state"] == "running"]
     try:
-        samples = storage.load(running)
+        samples = storage.load(running) if available else {}
     except (OSError, ValueError, compose.ComposeError) as error:
         samples = {}
         problems.append({"file": "Docker stats", "message": str(error)})
@@ -371,7 +445,7 @@ def listing(project, fresh=False, playground=None):
                                               "running": status in runtime_storage.RUNNING}})
         row["ports"] = sorted({port for service in row["services"] for port in service["ports"]})
         row["running"] = sum(c["state"] in runtime_storage.RUNNING for c in row["containers"])
-        row["state"] = "Running" if row["running"] else "Stopped" if row["prepared"] else "Not started"
+        row["state"] = "Unavailable" if not available else "Running" if row["running"] else "Stopped" if row["prepared"] else "Not started"
         row["volume_bytes"] = sum(usage["volumes"][v["name"]] for v in row["volumes"]) if not row["problem"] and all(
             usage["volumes"].get(v["name"]) is not None for v in row["volumes"]) else None
         each = [samples.get(c["name"]) for c in row["containers"] if c["state"] == "running"]
@@ -379,7 +453,11 @@ def listing(project, fresh=False, playground=None):
         row["memory_bytes"] = sum(s["memory_bytes"] for s in each) if all(s is not None for s in each) else None
         row["volumes"] = [{"name": v["name"], "bytes": usage["volumes"].get(v["name"])} for v in row["volumes"]]
         row["containers"] = [{key: c[key] for key in ("name", "service", "state", "ports")} for c in row["containers"]]
-    return {"default": "shared", "runtimes": rows, "shared_storage": usage["shared"] if playground is None else [], "problems": problems}
+        if not available:
+            row.update(volume_bytes=None, cpu_percent=None, memory_bytes=None)
+            for entry in row["services"]:
+                entry["state"] = {"key": "unknown", "label": "Unavailable", "running": False}
+    return {"default": "shared", "available": available, "runtimes": rows, "shared_storage": usage["shared"] if playground is None else [], "problems": problems}
 
 
 def cleanup(pid, body):

@@ -171,7 +171,7 @@ PYTHONPATH=lab-ui python3 -m tests.independent_docker
 
 It builds the seeder, creates two named runtimes of the same playground, starts uniquely named temporary projects
 and checks real Gravitee APIs, applications,
-subscriptions and API keys across stop, resume and rebuild. It also checks concurrent playgrounds, private writable
+subscriptions and API keys across Stop, Start, Apply and Update. It also checks concurrent playgrounds, private writable
 binds, volumes and ports, preserved catalog links, and a separate shared Redis sentinel. It exercises container removal
 without data loss, stale cleanup refusal, deletion of private data while another runtime runs, and a fresh start after
 deletion. It removes only its own projects and volumes. Set `INDEPENDENT_E2E_ARTIFACTS` to an absolute folder to keep its
