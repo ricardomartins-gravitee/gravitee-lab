@@ -1,5 +1,5 @@
 {
-  "level": 12,
+  "level": 13,
   "files": [
     {"path": ".catalog/standard.mk", "class": "managed", "since": 1, "when": "always", "scope": "full"},
     {"path": ".github/dependabot.yml", "class": "managed", "since": 1, "when": "always", "scope": "full"},
@@ -96,6 +96,11 @@
     },
     "12": {
       "summary": "The Lab action accepts upstream release tags vX.Y.Z and fork revisions vX.Y.Z-rev.N as Lab pins on the Lab repository's main. Revisions start at 1 and sort after their upstream parent and before the next parent; catalog release tags keep their existing format.",
+      "manual": [],
+      "settings": []
+    },
+    "13": {
+      "summary": "The Apps job fetches and links the catalog dependencies on its own runner before building, testing, starting or scanning apps. Public dependencies use anonymous HTTPS, and private dependencies use the read key only during setup; build and runtime steps receive no dependency key.",
       "manual": [],
       "settings": []
     }

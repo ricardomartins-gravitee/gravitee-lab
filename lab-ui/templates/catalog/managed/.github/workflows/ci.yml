@@ -1,4 +1,4 @@
-# Managed by the Lab catalog standard 12: change it with catalog.py upgrade, in a pull request a maintainer reads.
+# Managed by the Lab catalog standard 13: change it with catalog.py upgrade, in a pull request a maintainer reads.
 # The untrusted lane. It runs the code of every pull request, forks included, so its token only reads and it writes nothing. It
 # holds no secret but the read key of the Lab, which exists only while the Lab is private (a fork never gets it). In the order it
 # fails fastest:
@@ -125,7 +125,7 @@ jobs:
           PYTHONPATH: lab/seeder
         run: python -m unittest discover -s catalog/tests
 
-  # Build, test, start, scan. The Dockerfiles of the change run here, so no secret and no registry login reaches this job
+  # Each runner needs its own dependency links. Read keys exist only during setup, never in the build or runtime steps
   compile:
     name: Apps
     needs: static
@@ -145,6 +145,10 @@ jobs:
         uses: ./catalog/.github/actions/lab
         with:
           key: ${{ secrets.LAB_DEPLOY_KEY }}
+      - name: Catalogs it needs
+        env:
+          NEEDS_DEPLOY_KEY: ${{ secrets.NEEDS_DEPLOY_KEY }}
+        run: python3 -I lab/lab-ui/catalog.py ci needs catalog
       - id: build
         name: Build the apps
         env:
