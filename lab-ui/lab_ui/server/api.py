@@ -188,7 +188,7 @@ def _terminal(pid):
         rows = runtimes.independent.containers(pid)
         container = rows.get(playground["terminal"], {}).get("Name")
         if not container:
-            raise ValueError("Start this independent playground first")
+            raise ValueError("Start this sandbox first")
         return terminal.attach(pid, container)
     return terminal.attach(pid, found["container"])
 
@@ -352,9 +352,9 @@ def delete(req, kind, uid):
             raise ValueError("Choose a place besides This machine")
         return playgrounds.delete_place(p, uid, place)
     if kind == "playground" and runtimes.selected(uid):
-        raise ValueError("Remove a named runtime through its runtime cleanup actions")
+        raise ValueError("Remove a named sandbox through its sandbox cleanup actions")
     if kind == "playground" and runtimes.independent.read(uid) and runtimes.info(uid)["on"]:
-        raise ValueError("Stop this independent playground first")
+        raise ValueError("Stop this sandbox first")
     return personal.delete(p, kind, uid, places.deployed(uid, playgrounds.created) if kind == "playground" else ())
 
 
@@ -1058,7 +1058,7 @@ def start_up():
     stop left of a change of Personal is put right, the intent of the first run is written and what has no copy is marked as downloading,
     and the background threads of the Lab start. Each step is local and fast but the last ones, which return at once; a failure of one
     is said in a line and never keeps the Lab from serving, because its row says what is wrong."""
-    for what, step in (("initializing playground runtimes", lambda: runtimes.runtime_settings.initialize(project.load()["playgrounds"])),
+    for what, step in (("initializing playground sandboxes", lambda: runtimes.runtime_settings.initialize(project.load()["playgrounds"])),
                        ("finishing what a stop left", service.recover),
                        ("finishing a change of Personal that a stop left", moving.recover_at_start),
                        ("preparing the first run", firstrun.reconcile),

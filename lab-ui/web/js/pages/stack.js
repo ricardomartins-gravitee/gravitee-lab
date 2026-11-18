@@ -42,12 +42,12 @@ export const platformHead = (title, { lean = false, scope = "" } = {}) => `
 const SKELETON = `
   ${platformHead("Containers")}
   <div class="container-context">
-    <span id="container-runtime-label">Runtime</span>
-    <button class="combo-btn" data-container-runtime aria-label="Runtime" aria-labelledby="container-runtime-label container-runtime-value" aria-haspopup="dialog">
-      <span class="value" id="container-runtime-value">Shared platform</span>${icon("chevron")}</button>
-    <span data-container-source></span><a class="text-link" href="#/runtimes">Manage runtimes</a>
+    <span id="container-runtime-label">Run in</span>
+    <button class="combo-btn" data-container-runtime aria-label="Run in" aria-labelledby="container-runtime-label container-runtime-value" aria-haspopup="dialog">
+      <span class="value" id="container-runtime-value">Shared Lab</span>${icon("chevron")}</button>
+    <span data-container-source></span><a class="text-link" href="#/sandboxes">Manage sandboxes</a>
   </div>
-  <div data-container-head hidden></div><p class="empty" data-container-missing hidden>Runtime unavailable</p>
+  <div data-container-head hidden></div><p class="empty" data-container-missing hidden>Sandbox unavailable</p>
   <div class="stack-layout">
     <div class="card">
       <div class="cols stack-head" aria-hidden="true"><span></span><span>Service</span><span>State</span><span>Version</span><span>Ports</span><span>Uptime</span><span></span></div>
@@ -311,7 +311,7 @@ export function paintHead(root, { platform }) {
 function runtimeHead(scope) {
   const root = $("[data-container-head]", page);
   const verbs = scope ? [...(scope.running || scope.active ? ["stop"] : ["start"]), ...(scope.running ? ["restart", "update"] : []), ...(scope.initialized ? ["apply"] : [])] : [];
-  setHTML(root, scope ? `<div class="page-actions">${scope.source ? `<a class="btn" href="#/playgrounds/${esc(scope.id)}">Open runtime</a>` : ""}${verbs.map((verb) => actionButton({
+  setHTML(root, scope ? `<div class="page-actions">${scope.source ? `<a class="btn" href="#/playgrounds/${esc(scope.id)}">Open sandbox</a>` : ""}${verbs.map((verb) => actionButton({
     key: `playground:${scope.id}`, verb, label: verb[0].toUpperCase() + verb.slice(1), icon: verb === "start" ? "play" : verb === "update" ? "download" : verb,
     cls: `btn${verb === (scope.running ? "apply" : "start") ? " primary" : ""}`, attrs: `data-container-action="${verb}" data-busy aria-label="${esc(`${verb[0].toUpperCase() + verb.slice(1)} ${scope.name}`)}"`,
   })).join("")}</div>` : "");
@@ -328,7 +328,7 @@ function render(state) {
   $("[data-container-head]", page).hidden = !scope;
   $("[data-container-missing]", page).hidden = !selectedRuntime || !!scope;
   $(".stack-layout", page).hidden = !!selectedRuntime && !scope;
-  setHTML($("#container-runtime-value", page), esc(scope?.name || (selectedRuntime ? "Runtime unavailable" : "Shared platform")));
+  setHTML($("#container-runtime-value", page), esc(scope?.name || (selectedRuntime ? "Sandbox unavailable" : "Shared Lab")));
   setHTML($("[data-container-source]", page), scope ? `<span class="sub">${esc(scope.playground_name)}${scope.source ? "" : ", Source unavailable"}</span>` : "");
   if (selectedRuntime) runtimeHead(scope);
   else paintHead(page, state);
@@ -347,9 +347,9 @@ function chooseRuntime(button) {
   const scopes = Object.values(store.state.runtime_scopes || {});
   const parents = [...new Set(scopes.map((scope) => scope.playground))];
   Combo.open(button, { plain: true, current: selectedRuntime || "shared",
-    groups: (query) => [{ label: "", items: [{ value: "shared", name: "Shared platform" }] }, ...parents.map((parent) => ({
+    groups: (query) => [{ label: "", items: [{ value: "shared", name: "Shared Lab" }] }, ...parents.map((parent) => ({
       label: scopes.find((scope) => scope.playground === parent).playground_name,
-      items: scopes.filter((scope) => scope.playground === parent).map((scope) => ({ value: scope.id, name: scope.name, meta: "Independent" })),
+      items: scopes.filter((scope) => scope.playground === parent).map((scope) => ({ value: scope.id, name: scope.name, meta: "Sandbox" })),
     }))].map((group) => ({ ...group, items: group.items.filter((item) => `${group.label} ${item.name}`.toLowerCase().includes(query)) })),
     choose: (value) => router.go(value === "shared" ? "#/containers" : `#/containers/${encodeURIComponent(value)}`),
   });
@@ -365,7 +365,7 @@ const stays = (state) => state.playgrounds.flatMap((p) => (p.deployed || []).map
 // with the volumes, and what stays in a platform
 function resetConfirm(state) {
   const off = state.platform.reset_turns_off, privateOnes = state.playgrounds.filter((p) => p.runtime?.prepared);
-  const left = [...stays(state), ...privateOnes.map((p) => p.name + " (independent)")];
+  const left = [...stays(state), ...privateOnes.map((p) => p.name + " (sandbox)")];
   const scope = privateOnes.length ? "Deletes the shared platform’s containers and volumes" : CONFIRM.reset.text;
   const text = [scope + (off ? `, and turns off ${off}` : ""), left.length && `Stays: ${left.join(", ")}`];
   return { ...CONFIRM.reset, text: text.filter(Boolean).join(". ") };

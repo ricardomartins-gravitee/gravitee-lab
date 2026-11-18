@@ -1,4 +1,4 @@
-"""Named runtime identities beneath playgrounds; ordinary playgrounds always use Shared.
+"""Named sandbox identities beneath playgrounds; ordinary playgrounds always use Shared.
 
 The registry is machine-local. Legacy private projects keep their Docker identities
 and folders when exposed as named children; creating another instance never reassigns data.
@@ -21,21 +21,21 @@ def read():
     try:
         value = json.loads(file.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
-        raise ValueError("Playground runtime registry cannot be read") from error
+        raise ValueError("Playground sandbox registry cannot be read") from error
     if (not isinstance(value, dict) or type(value.get("schema")) is not int or value.get("schema") != 1
             or value.get("default") not in ("shared", "independent") or not isinstance(value.get("playgrounds"), dict)
             or any(not paths.is_id(pid) or mode not in ("shared", "independent") for pid, mode in value["playgrounds"].items())
             or not isinstance(value.get("instances", {}), dict)):
-        raise ValueError("Playground runtime registry is damaged")
+        raise ValueError("Playground sandbox registry is damaged")
     identities, names = set(), set()
     for rid, row in value.get("instances", {}).items():
         if (not paths.is_id(rid) or not isinstance(row, dict) or not paths.is_id(row.get("playground"))
                 or not isinstance(row.get("name"), str) or not row["name"].strip() or len(row["name"]) > 60
                 or not paths.is_id(row.get("storage", rid))):
-            raise ValueError("A named runtime identity is damaged")
+            raise ValueError("A named sandbox identity is damaged")
         identity, named = row.get("storage", rid), (row["playground"], row["name"].casefold())
         if identity in identities or named in names or identity == row["playground"] and "storage" not in row:
-            raise ValueError("Named runtime identities are ambiguous")
+            raise ValueError("Named sandbox identities are ambiguous")
         identities.add(identity)
         names.add(named)
     return value
@@ -96,15 +96,15 @@ def create(pid, name):
     if not paths.is_id(pid):
         raise paths.NotFound("No such playground")
     if not isinstance(name, str) or not name.strip() or len(name.strip()) > 60 or any(ord(c) < 32 for c in name):
-        raise ValueError("Give the runtime a name of 1 to 60 characters")
+        raise ValueError("Give the sandbox a name of 1 to 60 characters")
     name = name.strip()
     if name.casefold() == "shared":
-        raise ValueError("Shared names the playground's normal runtime; choose another name")
+        raise ValueError("Shared names the shared platform; choose another name")
     with LOCK:
         value = read()
         rows = value.setdefault("instances", {})
         if any(row["playground"] == pid and row["name"].casefold() == name.casefold() for row in rows.values()):
-            raise ValueError("This playground already has a runtime with that name")
+            raise ValueError("This playground already has a sandbox with that name")
         rid = "runtime-" + uuid.uuid4().hex
         rows[rid] = {"playground": pid, "name": name}
         _write(value)
@@ -115,7 +115,7 @@ def forget(rid):
     with LOCK:
         value = read()
         if rid not in value.get("instances", {}):
-            raise paths.NotFound("No such runtime")
+            raise paths.NotFound("No such sandbox")
         del value["instances"][rid]
         _write(value)
 
@@ -128,10 +128,10 @@ def _runtimes():
             if (not isinstance(value, dict) or type(value.get("active")) is not bool
                     or not isinstance(value.get("catalogs"), list)
                     or any(not isinstance(ns, str) for ns in value["catalogs"])):
-                raise ValueError("Invalid runtime record")
+                raise ValueError("Invalid sandbox record")
             found.append(value)
         except (OSError, ValueError) as error:
-            raise ValueError("An independent runtime record cannot be read; catalog changes are held") from error
+            raise ValueError("A sandbox record cannot be read; catalog changes are held") from error
     return found
 
 

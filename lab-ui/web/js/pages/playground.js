@@ -778,7 +778,7 @@ function render(state) {
   const job = shownJob(item, state), live = living(item, state);
   setHTML($("#pg-title", root), esc(item.name));
   setHTML($("#pg-star", root), item.runtime?.parent
-    ? `<a class="text-link" href="#/playgrounds/${esc(item.runtime.parent)}">${esc(item.runtime.parent_name || "Source playground")}</a> <span class="pill">Independent</span>`
+    ? `<a class="text-link" href="#/playgrounds/${esc(item.runtime.parent)}">${esc(item.runtime.parent_name || "Source playground")}</a> <span class="pill">Sandbox</span>`
     : `${item.runtime?.mode === "shared" ? '<span class="pill">Shared</span> ' : ""}${starButton(item)}`);
   // Its file is within reach in every state, as on its row in the list
   setHTML($("#pg-actions", root), `${live ? actions(item, job) : picker(item)}<span class="row-icons">${item.runtime?.parent ? "" : fileButtons(item, false)}${

@@ -15,7 +15,8 @@ const page = installDom({ fetch: async (path, options = {}) => {
   const value = /\/api\/(?:playgrounds|runtimes)\/.+\/check/.test(path) ? { checks: [], dialog: { starts: [] } }
     : path.startsWith("/api/runtimes/") && body?.check ? { fingerprint: "reviewed-resources", removes: {
     containers: ["own-app"], networks: ["own-net"], volumes: body.operation === "data" ? ["own-volume"] : [],
-    folders: body.operation === "data" ? [".lab/runtimes/own"] : [] }, keeps: ["Other runtimes", "Catalog source and links"] }
+    folders: body.operation === "data" ? [".lab/runtimes/own"] : [],
+    runtime: body.operation === "delete" ? ["Private A"] : [] }, keeps: ["Other sandboxes", "Catalog source and links"] }
     : path === "/api/state" ? store.state : body ? job : payload;
   return reply(value);
 } });
@@ -31,7 +32,7 @@ const base = { blind: false, wait: "", docker: { error: null }, job: null, servi
 const privateRow = { id: "local/a", name: "Private A", mode: "independent", selected: true, prepared: true, source: true,
   containers: [], volumes: [{ name: "own-volume", bytes: 100 }], local_bytes: 100, volume_bytes: 100,
   ports: ["31000"], problem: null, state: "Stopped", running: 0, active: false, memory_bytes: 0, cpu_percent: 0,
-  cleanup: { containers: { enabled: true }, data: { enabled: true } } };
+  cleanup: { containers: { enabled: true }, data: { enabled: true }, delete: { enabled: true } } };
 let root, panel;
 async function show(rows = [privateRow], playground = null) {
   remember("runtime-expanded", "{}");
@@ -66,9 +67,10 @@ const close = () => { panel.hide(); root.remove(); };
 test("stopped and missing-source runtimes stay visible, with shared images counted separately", async () => {
   await show([{ ...privateRow, source: false }]);
   assert.match(text(root), /Private A/);
+  assert.match(text(root), /Sandboxes/);
   assert.match(text(root), /Stopped/);
   assert.match(text(root), /Source unavailable/);
-  assert.equal(root.querySelectorAll('a.btn').find((a) => a.getAttribute('aria-label') === 'Open runtime Private A'), undefined);
+  assert.equal(root.querySelectorAll('a.btn').find((a) => a.getAttribute('aria-label') === 'Open sandbox Private A'), undefined);
   assert.ok(root.querySelectorAll('a.btn').find((a) => a.getAttribute('aria-label') === 'Containers of Private A'));
   assert.match(text(root), /Images: 9 kB \(machine-wide\)/);
   const start = root.querySelector("[data-runtime-act]");
@@ -88,12 +90,12 @@ test("Source playground navigates to the parent for named and legacy runtimes", 
   }
 });
 
-test("Open runtime targets the selected child's guide, while Source playground targets Shared", async () => {
+test("Open sandbox targets the selected child's guide, while Source playground targets Shared", async () => {
   await show([{ ...privateRow, id: "runtime-demo", playground: "local/a", name: "Demo" }]);
-  const open = root.querySelectorAll("a.btn").find((el) => el.getAttribute("aria-label") === "Open runtime Demo");
+  const open = root.querySelectorAll("a.btn").find((el) => el.getAttribute("aria-label") === "Open sandbox Demo");
   assert.equal(open.getAttribute("href"), "#/playgrounds/runtime-demo");
   location.hash = "#/containers";
-  await menu("Open runtime");
+  await menu("Open sandbox");
   assert.equal(location.hash, "#/playgrounds/runtime-demo");
   await menu("Source playground");
   assert.equal(location.hash, "#/playgrounds/local/a");
@@ -111,7 +113,7 @@ test("runtime management links to scoped Containers without duplicating service 
   close();
 });
 
-test("a failed inventory read settles instead of retaining Reading runtimes", async () => {
+test("a failed inventory read settles instead of retaining Reading sandboxes", async () => {
   await show();
   close();
   readFailure = true;
@@ -120,8 +122,8 @@ test("a failed inventory read settles instead of retaining Reading runtimes", as
   panel = runtimePanel(root);
   panel.show();
   await flush();
-  assert.match(text(root), /Runtime information unavailable/);
-  assert.doesNotMatch(text(root), /Reading runtimes/);
+  assert.match(text(root), /Sandbox information unavailable/);
+  assert.doesNotMatch(text(root), /Reading sandboxes/);
   readFailure = false;
   close();
 });
@@ -164,7 +166,7 @@ test("container-only cleanup keeps data and sends exactly the reviewed fingerpri
   await menu("Delete containers, keep data");
   assert.deepEqual(posts(), []);
   assert.match(text(page.ids["choice-list"]), /own-app/);
-  assert.match(text(page.ids["choice-list"]), /Other runtimes/);
+  assert.match(text(page.ids["choice-list"]), /Other sandboxes/);
   assert.match(text(page.ids["choice-title"]), /Delete containers, keep data/);
   assert.match(text(page.ids["choice-list"]), /Start recreates containers/);
   assert.match(text(page.ids["choice-list"]), /Deletes containers/);
@@ -177,18 +179,23 @@ test("container-only cleanup keeps data and sends exactly the reviewed fingerpri
 
 test("data deletion waits for both the exact scope and typed confirmation; cancellation removes nothing", async () => {
   await show();
-  await menu("Delete data, keep runtime");
+  await menu("Delete data, keep sandbox");
   assert.match(text(page.ids["choice-list"]), /own-volume/);
   assert.match(text(page.ids["choice-list"]), /\.lab\/runtimes\/own/);
   assert.deepEqual(posts(), []);
   await choice(true);
   assert.equal(page.ids["confirm-input"].placeholder, "Type delete to confirm");
-  assert.match(text(page.ids["confirm-title"]), /Delete data, keep runtime/);
+  assert.match(text(page.ids["confirm-title"]), /Delete data, keep sandbox/);
   assert.match(text(page.ids["confirm-text"]), /next Start initializes fresh data/);
   assert.deepEqual(posts(), []);
   page.ids.confirm.returnValue = "";
   page.ids.confirm.onclose();
   await flush();
+  assert.deepEqual(posts(), []);
+  await menu("Delete sandbox and data");
+  assert.match(text(page.ids["choice-list"]), /Deletes sandbox/);
+  assert.doesNotMatch(text(page.ids["choice-list"]), /Deletes runtime/);
+  await choice(false);
   assert.deepEqual(posts(), []);
   close();
 });
@@ -239,7 +246,11 @@ test("management controls wait for an inventory refresh and become usable again"
 });
 
 
-test("a playground lists only its named children and offers Create runtime rather than mode settings", async () => {
+test("a playground lists only its named children and offers Create sandbox rather than mode settings", async () => {
+  const { runtimesPage } = await import("../../../web/js/pages/runtimes.js");
+  assert.equal(runtimesPage.title, "Sandboxes");
+  assert.ok(runtimesPage.pattern.test("#/sandboxes"));
+  assert.ok(runtimesPage.pattern.test("#/runtimes"), "existing bookmarks still open sandbox management");
   await show([{ ...privateRow, id: "runtime-demo", playground: "local/a", name: "Demo" },
     { ...privateRow, id: "runtime-other", playground: "local/b", name: "Not here" }], "local/a");
   assert.match(text(root), /Demo/);
@@ -259,6 +270,7 @@ test("the More popup follows jobs only while open and reopening targets the chos
   await flush();
   const dialog = page.doc.querySelector(".runtime-dialog");
   assert.ok(dialog.open);
+  assert.equal(runtimeManagerEntry(store.item("playground", "local/a")).label, "Sandboxes");
   assert.match(text(dialog.querySelector("h2")), /Private A/);
   assert.equal(calls[0].path, "/api/runtimes?playground=local%2Fa");
   assert.equal(posts().length, 0, "opening the inventory changes no runtime");

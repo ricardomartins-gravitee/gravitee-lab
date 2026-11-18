@@ -205,7 +205,7 @@ class RuntimeState(Case):
             for pid, body in (("local/source-a", {}), (self.rid, {"place": "cloud/environment"})):
                 with self.subTest(pid=pid, operation=operation), self.assertRaises(ValueError):
                     runtimes.action(self.project, pid, operation, body)
-        with self.assertRaisesRegex(ValueError, "Unknown independent runtime action"):
+        with self.assertRaisesRegex(ValueError, "Unknown sandbox action"):
             runtimes.action(self.project, self.rid, "rebuild")
 
     def test_clone_rejects_other_playgrounds_before_registering_or_starting_anything(self):

@@ -10,7 +10,7 @@ const openCreate = formDialog("runtime-create", field("runtime-create-name", "Na
   '<div class="search"><input id="runtime-create-name" maxlength="60" required></div>')
   + field("runtime-create-source", "Start from", '<select id="runtime-create-source" required></select>')
   + note("runtime-create-note"),
-  { key: "new:runtime", verb: "create", label: "Create runtime" },
+  { key: "new:runtime", verb: "create", label: "Create sandbox" },
   () => {
     const source = $("#runtime-create-source").value;
     return api(`/api/playgrounds/${creating.id}/runtimes`, { name: $("#runtime-create-name").value.trim(),
@@ -34,7 +34,7 @@ export async function createRuntime(item, current = null) {
     const options = await api(`/api/playgrounds/${item.id}/runtimes`);
     creating = item;
     choices = options.sources || [];
-    openCreate(`Create runtime for ${item.name}`, () => {
+    openCreate(`Create sandbox for ${item.name}`, () => {
       $("#runtime-create-name").value = "";
       const select = $("#runtime-create-source");
       select.innerHTML = `<option value="${FRESH}">Fresh from playground</option>` + choices.map((row) =>
@@ -71,7 +71,7 @@ export async function independentAction(item, verb) {
 }
 
 export const runtimeActionEntries = (item) => ["apply", "update"].map((verb) => {
-  const reason = store.wait(true) || (!item.runtime?.prepared ? "Start this runtime first" : item.runtime.initialized === false ? "Start this runtime successfully first" : verb === "update" && !item.runtime.running ? "Nothing runs" : "");
+  const reason = store.wait(true) || (!item.runtime?.prepared ? "Start this sandbox first" : item.runtime.initialized === false ? "Start this sandbox successfully first" : verb === "update" && !item.runtime.running ? "Nothing runs" : "");
   return { label: verb === "apply" ? "Apply" : "Update", disabled: !!reason, reason,
     onSelect: () => independentAction(item, verb) };
 });

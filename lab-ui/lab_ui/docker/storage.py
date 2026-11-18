@@ -29,7 +29,7 @@ def size(text):
 def ask(*args):
     rc, out, err = compose.run(["docker", *args], timeout=60)
     if rc:
-        raise compose.ComposeError("Docker could not read runtime storage: " + (err.strip().splitlines() or ["no answer"])[-1])
+        raise compose.ComposeError("Docker could not read sandbox storage: " + (err.strip().splitlines() or ["no answer"])[-1])
     return out.strip()
 
 
@@ -62,7 +62,7 @@ def resources(project):
 
 
 def usage(fresh=False):
-    """Volumes are exclusive per runtime; images and caches are machine-wide, without double-counting shared layers."""
+    """Volumes are exclusive per sandbox; images and caches are machine-wide, without double-counting shared layers."""
     def read():
         detail = json.loads(ask("system", "df", "--verbose", "--format", "{{json .}}"))
         rc, out, err = compose.run(["docker", "system", "df", "--format", "{{json .}}"], timeout=60)

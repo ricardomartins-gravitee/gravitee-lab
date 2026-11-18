@@ -1,4 +1,4 @@
-"""Expose private playground runtimes through the existing Lab state and actions.
+"""Expose private playground sandboxes through the existing Lab state and actions.
 
 The shared project keeps its own service keys. Private services get stable UI keys;
 commands resolve them back to a verified playground project before reaching Docker.
@@ -47,7 +47,7 @@ def _states(rows, value, job=None):
 
 
 def _groups(project, pid, value, services):
-    """Partition captured services, never another runtime's current containers."""
+    """Partition captured services, never another sandbox's current containers."""
     remaining = set(value["services"])
     result = []
     for group in [*project.get("groups", []), {"id": "other-services", "name": "Other services", "services": sorted(remaining)}]:
@@ -109,7 +109,7 @@ def _scopes(body, project, instances):
             body["services"].update(entries)
             scope.update(prepared=True, initialized=bool(value.get("initialized")), running=runtime["running"],
                          active=runtime["on"], services=list(entries), groups=_groups(project, pid, value, entries),
-                         problem="This clone is incomplete; delete it and create a new runtime" if value.get("clone_pending") else None)
+                         problem="This clone is incomplete; delete it and create a new sandbox" if value.get("clone_pending") else None)
             existing = {link["service"] for link in body.get("links", [])}
             for link in project.get("links", []):
                 if link["service"] not in value["services"]:
@@ -127,11 +127,11 @@ def _scopes(body, project, instances):
 def group_action(project, pid, gid, operation):
     value = independent.read(pid)
     if not selected(pid) or not value:
-        raise paths.NotFound("No such runtime group")
+        raise paths.NotFound("No such sandbox group")
     entries = _service_entries(pid, value, {})
     group = next((group for group in _groups(project, pid, value, entries) if group["id"] == gid), None)
     if group is None:
-        raise paths.NotFound("No such runtime group")
+        raise paths.NotFound("No such sandbox group")
     names = [name for name in value["services"] if independent.service_key(pid, name) in group["services"]]
     return independent.service_group(pid, names, operation, gid, group["name"])
 
@@ -157,10 +157,10 @@ def _overlay(body, project):
                   and key in value["oneshots"] and state["key"] == "absent")]
         state = model.fold(folded, active, verb)
         blocked = project["playgrounds"][pid].get("blocked")
-        reason = body.get("wait") or ("This clone is incomplete; delete it and create a new runtime" if value and value.get("clone_pending")
+        reason = body.get("wait") or ("This clone is incomplete; delete it and create a new sandbox" if value and value.get("clone_pending")
                                      else "The playground is blocked" if blocked else None)
         item.update(on=active, up=state["key"] == "running", state=state,
-                    note="Independent", note_title="Its own platform, storage and ports", note_tone="",
+                    note="Sandbox", note_title="Its own platform, storage and ports", note_tone="",
                     note_target=None, note_file=None, note_causes=[],
                     brings=[], recreates=[], addons=[], setups=[],
                     created=independent.created(pid), secondary={"do": "stop", "label": "Turn off", "enabled": True,
@@ -174,7 +174,7 @@ def _overlay(body, project):
         if body.get("docker", {}).get("error"):
             item["state"] = {"key": "unknown", "label": "Unavailable", "running": False}
         if active:
-            item["held"] = {**(item.get("held") or {}), "delete": "Stop this independent playground first"}
+            item["held"] = {**(item.get("held") or {}), "delete": "Stop this sandbox first"}
         if value:
             entries = _service_entries(pid, value, rows, not body.get("docker", {}).get("error"), body.get("job"), body["services"])
             body["services"].update(entries)
@@ -187,7 +187,7 @@ def _overlay(body, project):
                 link["port"] = value["ports"].get(str(link.get("port")), link.get("port"))
                 link["up"] = states.get(link["service"], {}).get("running", False)
                 link["service"] = independent.service_key(pid, link["service"])
-            body.setdefault("links", []).extend({**link, "section": item["name"] + " (independent)"} for link in item["links"])
+            body.setdefault("links", []).extend({**link, "section": item["name"] + " (sandbox)"} for link in item["links"])
             tabs = independent.rewrite(frames.declared(project, pid), value["ports"])
             for tab in tabs:
                 if tab.get("persona"):
@@ -208,10 +208,10 @@ def check(project, pid, operation="start"):
     unit = layers.lookup(project, "playground", runtime_settings.source(pid))
     try:
         dialog = independent.plan(pid) if operation == "start" else independent.change_plan(pid, operation)
-        checks = [{"name": "Independent runtime", "state": "ok", "detail": "Own platform, data and ports"}]
+        checks = [{"name": "Sandbox", "state": "ok", "detail": "Own platform, data and ports"}]
     except (ValueError, compose.ComposeError) as error:
         dialog = None
-        checks = [{"name": "Independent runtime", "state": "warn", "detail": str(error)}]
+        checks = [{"name": "Sandbox", "state": "warn", "detail": str(error)}]
     if operation != "update":
         checks += playgrounds._host_checks(unit)
         checks += playgrounds._license_checks(project, unit, {})
@@ -221,17 +221,17 @@ def check(project, pid, operation="start"):
 def create(project, pid, body):
     # A new child is stopped and unprepared: its first Start captures private inputs.
     if JOBS.current and not JOBS.current.done:
-        raise RuntimeError("Wait for the current job before creating a runtime")
+        raise RuntimeError("Wait for the current job before creating a sandbox")
     layers.lookup(project, "playground", pid)
     if selected(pid):
-        raise ValueError("Create runtimes inside the source playground")
+        raise ValueError("Create sandboxes inside the source playground")
     mode = body.get("mode", "fresh")
     if mode not in ("fresh", "clone"):
-        raise ValueError("Choose Fresh from playground or Clone runtime")
+        raise ValueError("Choose Fresh from playground or Clone sandbox")
     source = body.get("source")
     if mode == "clone":
         if not isinstance(source, str) or runtime_settings.source(source) != pid:
-            raise ValueError("Clone only a runtime of this playground")
+            raise ValueError("Clone only a sandbox of this playground")
         runtime_clones.check(source)
     if mode == "fresh":
         independent.plan(pid, refresh=True)  # A snapshot uses its captured configuration.
@@ -248,7 +248,7 @@ def create(project, pid, body):
 def creation_options(project, pid):
     layers.lookup(project, "playground", pid)
     if selected(pid):
-        raise ValueError("Create runtimes inside the source playground")
+        raise ValueError("Create sandboxes inside the source playground")
     sources = [{"id": pid, "name": "Shared"}, *[{"id": rid, "name": row["name"]}
                for rid, row in runtime_settings.instances().items() if row["playground"] == pid]]
     return {"sources": [{**row, "reason": runtime_clones.reason(row["id"]),
@@ -258,13 +258,13 @@ def creation_options(project, pid):
 def action(project, pid, operation, body=None):
     layers.lookup(project, "playground", runtime_settings.source(pid))
     if not selected(pid):
-        raise ValueError("This playground uses the shared runtime")
+        raise ValueError("This playground uses Shared Lab")
     body = body or {}
     if body.get("place") not in (None, "machine"):
-        raise ValueError("An independent runtime runs only on this machine")
+        raise ValueError("A sandbox runs only on this machine")
     if operation in ("start", "apply", "update"):
         if (independent.read(pid) or {}).get("clone_pending"):
-            raise ValueError("This clone is incomplete; delete it and create a new runtime")
+            raise ValueError("This clone is incomplete; delete it and create a new sandbox")
         result = check(project, pid, operation=operation)
         if any(row["state"] == "warn" for row in result["checks"]):
             raise ValueError(next(row["detail"] for row in result["checks"] if row["state"] == "warn"))
@@ -275,7 +275,7 @@ def action(project, pid, operation, body=None):
         return independent.reseed(pid)
     if operation == "restart":
         return independent.restart(pid)
-    raise ValueError("Unknown independent runtime action")
+    raise ValueError("Unknown sandbox action")
 
 
 def services(project):
@@ -297,7 +297,7 @@ def view(project, pid):
     value = independent.read(pid)
     if not value:
         if selected(pid):
-            raise ValueError("Start this runtime before opening its consoles")
+            raise ValueError("Start this sandbox before opening its consoles")
         return project
     return independent.rewrite(project, value["ports"])
 
@@ -333,7 +333,7 @@ def overlay(body, project):
                 body["problems"].append(problem)
             held = True
         if held:
-            item["held"] = {**(item.get("held") or {}), "delete": "Stop the independent playground using this item first"}
+            item["held"] = {**(item.get("held") or {}), "delete": "Stop the sandbox using this item first"}
     originals = {item["id"]: item for item in body.get("playgrounds", [])}
     try:
         instances = runtime_settings.instances()
@@ -359,7 +359,7 @@ def overlay(body, project):
 
 
 def listing(project, fresh=False, playground=None, available=True):
-    """The Containers page's central inventory, including stopped and unavailable-source runtimes."""
+    """The Containers page's central inventory, including stopped and unavailable-source sandboxes."""
     if playground is not None:
         layers.lookup(project, "playground", playground)
     records, problems = runtime_storage.known()
@@ -387,7 +387,7 @@ def listing(project, fresh=False, playground=None, available=True):
             if record and available:
                 value = runtime_storage.inventory(pid)
             elif available and (independent.folder(pid).exists() or any(storage.resources(independent.name(pid)).values())):
-                value["error"] = "An incomplete runtime has private resources; cleanup is held"
+                value["error"] = "An incomplete sandbox has private resources; cleanup is held"
         except (OSError, ValueError, compose.ComposeError) as error:
             value["error"] = str(error)
         damaged = next((problem["message"] for problem in problems if problem["file"] ==
@@ -401,7 +401,7 @@ def listing(project, fresh=False, playground=None, available=True):
                "containers": resources["containers"], "volumes": resources["volumes"],
                "local_bytes": value["local"]["bytes"] if value["local"] else None,
                "folder": independent.folder(pid).relative_to(paths.ROOT).as_posix() if record else None,
-               "problem": value["error"] or ("This clone is incomplete; delete it and create a new runtime" if (record or {}).get("clone_pending") else None),
+               "problem": value["error"] or ("This clone is incomplete; delete it and create a new sandbox" if (record or {}).get("clone_pending") else None),
                "versions": ((record or {}).get("tested") or {}).get("versions", {}),
                "images": [{"service": key, "id": image,
                            "reference": ((record["snapshot"].get("references") or {}).get(key) or "")}
@@ -409,11 +409,11 @@ def listing(project, fresh=False, playground=None, available=True):
                "ports": sorted({str(port) for spec in (record or {}).get("services", {}).values() for port in spec.get("ports", [])}),
                "prepared_at": (record or {}).get("prepared_at"),
                "active": bool((record or {}).get("active"))}
-        reason = value["error"] or ("Docker is not reachable" if not available else "Stop this runtime before cleanup" if value["running"] else None)
+        reason = value["error"] or ("Docker is not reachable" if not available else "Stop this sandbox before cleanup" if value["running"] else None)
         row["cleanup"] = {"containers": {"enabled": bool(record and not reason and (resources["containers"] or resources["networks"])),
                                         "reason": reason or (None if resources["containers"] or resources["networks"] else "Containers already removed")},
                           "data": {"enabled": bool(record and not reason), "reason": reason or (None if record else "Not started yet")},
-                          "delete": {"enabled": pid in instances and not reason, "reason": reason or (None if pid in instances else "Unknown runtime definition")}}
+                          "delete": {"enabled": pid in instances and not reason, "reason": reason or (None if pid in instances else "Unknown sandbox definition")}}
         rows.append(row)
     running = [c["name"] for row in rows for c in row["containers"] if c["state"] == "running"]
     try:

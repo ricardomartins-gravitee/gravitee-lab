@@ -19,7 +19,7 @@ router.onLeave(() => { if (dialog.open) dialog.close(); });
 function showRuntimes(item) {
   panel?.hide();
   const parent = item.runtime?.parent || item.id;
-  $("#runtime-manager-title", dialog).textContent = `Runtimes for ${item.runtime?.parent_name || item.name}`;
+  $("#runtime-manager-title", dialog).textContent = `Sandboxes for ${item.runtime?.parent_name || item.name}`;
   const body = $(".runtime-dialog-body", dialog);
   body.innerHTML = "<div></div>";   // Reopening retires the previous inventory's listeners and pending reads.
   panel = runtimePanel(body.firstElementChild, parent, { heading: false, current: item.runtime?.parent ? item.id : null });
@@ -27,5 +27,5 @@ function showRuntimes(item) {
   panel.show();
 }
 
-export const runtimeManagerEntry = (item) => ({ label: "Runtimes", disabled: store.offline,
+export const runtimeManagerEntry = (item) => ({ label: "Sandboxes", disabled: store.offline,
   reason: store.offline ? store.wait() : "", onSelect: () => showRuntimes(item) });

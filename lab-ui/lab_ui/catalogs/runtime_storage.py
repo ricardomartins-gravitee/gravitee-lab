@@ -1,7 +1,7 @@
-"""Inventory and confirmed cleanup of one generated playground runtime.
+"""Inventory and confirmed cleanup of one generated playground sandbox.
 
 Only a validated private directory and explicitly owned Docker identities may be removed.
-A preview fingerprints the stopped runtime; changed resources require another preview.
+A preview fingerprints the stopped sandbox; changed resources require another preview.
 Catalog source, shared projects, images and build caches are never cleanup targets here.
 """
 
@@ -25,7 +25,7 @@ def known():
         try:
             pid = runtime_settings.alias(json.loads(file.read_text(encoding="utf-8")).get("id"))
             if not paths.is_id(pid) or file.parent != independent.folder(pid):
-                raise ValueError("The runtime record does not match its directory")
+                raise ValueError("The sandbox record does not match its directory")
             found.append((pid, independent.read(pid)))
         except (OSError, ValueError, AttributeError) as error:
             problems.append({"file": str(file.relative_to(paths.ROOT)), "message": str(error)})
@@ -39,11 +39,11 @@ def directory(pid):
     for part in folder.relative_to(paths.ROOT).parts:
         current = current / part
         if current.is_symlink():
-            raise ValueError("The private runtime directory contains a link; cleanup is held")
+            raise ValueError("The private sandbox directory contains a link; cleanup is held")
     if folder.resolve() != current or not folder.is_dir():
-        raise ValueError("The private runtime directory cannot be verified")
+        raise ValueError("The private sandbox directory cannot be verified")
     if (folder / "runtime.json").is_symlink() or (folder / "compose.json").is_symlink():
-        raise ValueError("The private runtime configuration is a link; cleanup is held")
+        raise ValueError("The private sandbox configuration is a link; cleanup is held")
     return folder
 
 
@@ -55,7 +55,7 @@ def tree(folder):
         nonlocal allocated, files
         item = file.lstat()
         if item.st_dev != device:
-            raise ValueError("The runtime contains another filesystem; cleanup is held")
+            raise ValueError("The sandbox contains another filesystem; cleanup is held")
         entries.append((file.relative_to(folder).as_posix(), item.st_ino, item.st_dev, item.st_mode,
                         item.st_size, item.st_mtime_ns, item.st_ctime_ns))
         if stat.S_ISDIR(item.st_mode):
@@ -68,7 +68,7 @@ def tree(folder):
                 seen.add(identity)
                 allocated += getattr(item, "st_blocks", (item.st_size + 511) // 512) * 512
         else:
-            raise ValueError("The runtime contains a device, socket or pipe; cleanup is held")
+            raise ValueError("The sandbox contains a device, socket or pipe; cleanup is held")
     walk(folder)
     return {"bytes": allocated, "files": files, "fingerprint": _digest(entries)}
 
@@ -81,7 +81,7 @@ def _owned(pid, resources):
     project, folder = independent.name(pid), directory(pid)
     for container in resources["containers"]:
         if container["project"] != project or container["directory"] != str(folder):
-            raise ValueError("A container does not belong to this runtime directory; cleanup is held")
+            raise ValueError("A container does not belong to this sandbox directory; cleanup is held")
     ids = {row["id"] for row in resources["containers"]}
     network_users = storage.network_users(resources["networks"])
     for kind in ("volumes", "networks"):
@@ -89,20 +89,20 @@ def _owned(pid, resources):
             if row["project"] != project or not row["key"] or row["name"] != project + "_" + row["key"]:
                 raise ValueError("A Docker resource has ambiguous ownership; cleanup is held")
             if kind == "networks" and (set(row["containers"]) | network_users[row["id"]]) - ids:
-                raise ValueError("A network is used outside this runtime; cleanup is held")
+                raise ValueError("A network is used outside this sandbox; cleanup is held")
             if kind == "volumes":
                 if row["driver"] != "local" or row["options"] or not row["created"]:
                     raise ValueError("A volume is not private local storage; cleanup is held")
                 users = set(storage.ask("container", "ls", "-a", "-q", "--no-trunc", "--filter", "volume=" + row["name"]).split())
                 if users - ids:
-                    raise ValueError("A volume is used outside this runtime; cleanup is held")
+                    raise ValueError("A volume is used outside this sandbox; cleanup is held")
 
 
 def inventory(pid):
     folder = directory(pid)
     value = independent.read(pid)
     if not value:
-        raise paths.NotFound("No prepared independent runtime")
+        raise paths.NotFound("No prepared sandbox")
     resources = storage.resources(value["project"])
     files, error = None, None
     try:
@@ -116,21 +116,21 @@ def inventory(pid):
 
 def preview(pid, operation):
     if operation not in OPERATIONS:
-        raise ValueError("Choose a runtime cleanup action")
+        raise ValueError("Choose a sandbox cleanup action")
     registered = runtime_settings.instances().get(pid)
     if operation == "delete" and not registered:
-        raise paths.NotFound("No such runtime definition")
+        raise paths.NotFound("No such sandbox definition")
     if operation == "delete" and registered and not independent.read(pid):
         if independent.folder(pid).exists() or any(storage.resources(independent.name(pid)).values()):
-            raise ValueError("An incomplete runtime has private resources; cleanup is held")
+            raise ValueError("An incomplete sandbox has private resources; cleanup is held")
         return {"id": pid, "operation": operation, "fingerprint": _digest({"id": pid, "instance": registered}),
                 "removes": {"containers": [], "networks": [], "volumes": [], "folders": [], "runtime": [registered["name"]]},
-                "keeps": ["Source playground", "Shared platform", "Other runtimes", "Catalog source and links"], "local_bytes": 0}
+                "keeps": ["Source playground", "Shared platform", "Other sandboxes", "Catalog source and links"], "local_bytes": 0}
     value = inventory(pid)
     if value["error"]:
         raise ValueError(value["error"])
     if value["running"]:
-        raise ValueError("Stop this runtime before cleanup")
+        raise ValueError("Stop this sandbox before cleanup")
     resources, files = value["resources"], value["local"]
     fingerprint = _digest({"id": pid, "operation": operation, "resources": resources, "files": files["fingerprint"]})
     return {"id": pid, "operation": operation, "fingerprint": fingerprint,
@@ -138,9 +138,9 @@ def preview(pid, operation):
                         "networks": [row["name"] for row in resources["networks"]],
                         "volumes": [row["name"] for row in resources["volumes"]] if operation != "containers" else [],
                         "folders": [independent.folder(pid).relative_to(paths.ROOT).as_posix()] if operation != "containers" else []},
-            "keeps": ["Source playground", "Shared platform", "Catalog source and links", "Other runtimes", "Images and build cache"]
-                     + (["Runtime definition"] if operation == "data" else [])
-                     + (["Volumes and runtime files"] if operation == "containers" else []),
+            "keeps": ["Source playground", "Shared platform", "Catalog source and links", "Other sandboxes", "Images and build cache"]
+                     + (["Sandbox definition"] if operation == "data" else [])
+                     + (["Volumes and sandbox files"] if operation == "containers" else []),
             "local_bytes": files["bytes"]}
 
 
@@ -160,12 +160,12 @@ def cleanup(pid, operation, fingerprint):
         raise ValueError("Preview the exact cleanup before confirming it")
     plan = preview(pid, operation)
     if fingerprint != plan["fingerprint"]:
-        raise ValueError("The runtime changed after the preview; review cleanup again")
+        raise ValueError("The sandbox changed after the preview; review cleanup again")
     def run(job):
         if operation == "delete" and not independent.read(pid):
             if preview(pid, operation)["fingerprint"] != fingerprint:
-                raise ValueError("The runtime changed after confirmation; preview cleanup again")
-            job.step("Delete the empty runtime")
+                raise ValueError("The sandbox changed after confirmation; preview cleanup again")
+            job.step("Delete the empty sandbox")
             runtime_settings.forget(pid)
             return
         if operation != "containers":
@@ -175,26 +175,26 @@ def cleanup(pid, operation, fingerprint):
                 job.exec(["docker", "pull", storage.FILES_IMAGE])
         # Recheck after a queued job or image download, before removing the first object.
         if preview(pid, operation)["fingerprint"] != fingerprint:
-            raise ValueError("The runtime changed after confirmation; preview cleanup again")
+            raise ValueError("The sandbox changed after confirmation; preview cleanup again")
         value = inventory(pid)
         resources = value["resources"]
-        job.step("Remove runtime containers and networks")
+        job.step("Remove sandbox containers and networks")
         for kind, key in (("container", "containers"), ("network", "networks")):
             ids = [row["id"] for row in resources[key]]
             if kind == "network":
                 expected = {c["id"] for c in resources["containers"]}
                 if any(users - expected for users in storage.network_users(resources[key]).values()):
-                    raise ValueError("A network is now used outside this runtime; preview cleanup again")
+                    raise ValueError("A network is now used outside this sandbox; preview cleanup again")
             if ids:
                 job.exec(["docker", kind, "rm", *ids])
         if operation != "containers":
-            job.step("Delete private volumes and runtime files")
+            job.step("Delete private volumes and sandbox files")
             for row in resources["volumes"]:
                 _volume_unchanged(row)
                 job.exec(["docker", "volume", "rm", row["name"]])
             folder = directory(pid)
             if tree(folder)["fingerprint"] != value["local"]["fingerprint"]:
-                raise ValueError("Runtime files changed; preview cleanup again")
+                raise ValueError("Sandbox files changed; preview cleanup again")
             manifest = hashlib.sha256((folder / "runtime.json").read_bytes()).hexdigest()
             job.exec(storage.remove_files_command(folder, manifest))
             directory(pid).rmdir()
@@ -204,5 +204,5 @@ def cleanup(pid, operation, fingerprint):
             record = independent.read(pid)
             record["active"] = False
             independent._write(independent.folder(pid) / "runtime.json", record)
-    return JOBS.start("Delete containers, keep data" if operation == "containers" else "Delete runtime and data" if operation == "delete" else "Delete data, keep runtime", [run],
+    return JOBS.start("Delete containers, keep data" if operation == "containers" else "Delete sandbox and data" if operation == "delete" else "Delete data, keep sandbox", [run],
                       key=f"playground:{pid}", verb="stop")

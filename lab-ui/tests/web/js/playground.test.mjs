@@ -303,7 +303,7 @@ test("creation explains complete Shared copying and offers a runtime clone and r
   mock.timers.tick(5000);
   await flush();
   await visit({ runtime: { mode: "shared" } }, { platforms: [], places: [] });
-  await more("Runtimes");
+  await more("Sandboxes");
   const manager = page.doc.querySelector(".runtime-dialog");
   manager.querySelector("[data-runtime-create]").click();
   await flush();
@@ -334,7 +334,7 @@ test("a playground creates a named child without changing the shared playground"
   server.calls = [];
   assert.equal(section.querySelector("#pg-runtimes"), null, "the main view has no runtime inventory");
   assert.equal(reads("/api/runtimes").length, 0, "disk usage is not read until requested");
-  await more("Runtimes");
+  await more("Sandboxes");
   const manager = page.doc.querySelector(".runtime-dialog");
   assert.ok(manager.open);
   manager.querySelector("[data-runtime-create]").click();
@@ -1154,7 +1154,7 @@ test("its file button reads View and shows no path of this machine; the file of 
   const file = section.querySelector("#pg-actions [data-file]");
   assert.deepEqual([file.getAttribute("data-tip"), file.getAttribute("aria-label")], ["View compose.yml", "View compose.yml"]);
   section.querySelector("#pg-actions [data-more]").click();
-  assert.deepEqual(entries(), [["Runtimes", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Copy to Personal", ""]],
+  assert.deepEqual(entries(), [["Sandboxes", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Copy to Personal", ""]],
     "a playground of a catalog has a More with Export, Export for Docker Compose and Copy to Personal");
   page.doc.dispatchEvent(Object.assign(new Ev("click"), { target: page.doc.body }));
   await leave();
@@ -1169,7 +1169,7 @@ test("a playground of this machine has a More, last of the page's actions, with 
   assert.deepEqual([button.getAttribute("aria-label"), button.getAttribute("data-tip"), button.getAttribute("aria-haspopup")], ["More for Acme Hostels", "More", "true"]);
   assert.ok(section.querySelector("#pg-actions .row-icons").lastElementChild === button, "at the end, after its files");
   button.click();
-  assert.deepEqual(entries(), [["Runtimes", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Share", ""], ["Delete", ""]]);
+  assert.deepEqual(entries(), [["Sandboxes", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Share", ""], ["Delete", ""]]);
   assert.equal(menu.querySelectorAll(".menu-sep").length, 1);
   assert.ok(menu.querySelectorAll(".menu-item")[4].classList.contains("danger"));
   page.doc.dispatchEvent(Object.assign(new Ev("click"), { target: page.doc.body }));
@@ -1179,7 +1179,7 @@ test("a playground of this machine has a More, last of the page's actions, with 
 test("Delete of the page is held for the reason the list gives, and the Lab UI not answering holds Share and Delete", async () => {
   await visit({ ...off, personal: true, id: "local/hotels", held: { delete: "Stop Acme Hostels first" } }, { platforms: [], places: [], id: "local/hotels" });
   section.querySelector("#pg-actions [data-more]").click();
-  assert.deepEqual(entries(), [["Runtimes", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Share", ""], ["Delete", "Stop Acme Hostels first"]]);
+  assert.deepEqual(entries(), [["Sandboxes", ""], ["Export", ""], ["Export for Docker Compose", ""], ["Share", ""], ["Delete", "Stop Acme Hostels first"]]);
   page.doc.dispatchEvent(Object.assign(new Ev("click"), { target: page.doc.body }));
   store.offline = true;
   section.querySelector("#pg-actions [data-more]").click();
