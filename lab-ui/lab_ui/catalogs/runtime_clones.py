@@ -1,4 +1,4 @@
-"""Create stopped child runtimes without writing to their source or catalog.
+"""Create stopped child sandboxes without writing to their source or catalog.
 
 Both Shared and private projects copy their complete verified storage while their
 writers are briefly paused. The resolved configuration and exact container images
@@ -24,7 +24,7 @@ def _configuration(pid):
     if runtime_settings.mode(pid) == "independent":
         value = independent.read(pid)
         if not value or not value.get("initialized") or value.get("clone_pending"):
-            raise ValueError("Start this runtime successfully before cloning it")
+            raise ValueError("Start this sandbox successfully before cloning it")
         return json.loads((runtime_storage.directory(pid) / "compose.json").read_text(encoding="utf-8"))
     gathered = standalone._gather(pid)
     config = compose.config_json(["-f", paths.CORE_FILE, "-f", paths.ON_FILE], timeout=60)
@@ -35,7 +35,7 @@ def _configuration(pid):
     rows = storage.resources(config["name"])
     services = {row["service"] for row in rows["containers"]}
     if services - set(config["services"]):
-        raise ValueError("The Shared runtime has containers outside its current configuration")
+        raise ValueError("The Shared Lab has containers outside its current configuration")
     required = standalone._keep(config, gathered, standalone._products(gathered))
     lasting = {key for key in required if config["services"][key].get("restart") != "no"
                and config["services"][key].get("labels", {}).get("io.gravitee.role") != "seed"}
@@ -51,7 +51,7 @@ def _running(pid, config):
                if service.get("restart") != "no" and service.get("labels", {}).get("io.gravitee.role") != "seed"}
     live = {row["service"] for row in rows["containers"] if row["state"] == "running"}
     if not lasting or not lasting <= live:
-        raise ValueError("Start the source runtime successfully before cloning it")
+        raise ValueError("Start the source successfully before cloning it")
     if any(row["state"] not in ("running", "exited", "created") for row in rows["containers"]):
         raise ValueError("Wait until the source containers are stable before cloning")
     if runtime_settings.mode(pid) == "independent":
@@ -80,7 +80,7 @@ def _execute(command, timeout=600):
     rc, out, err = compose.run(command, timeout=timeout)
     if rc:
         # Configuration, API responses and archived files can contain secrets.
-        raise JobFailed("Could not copy the runtime; its source was preserved")
+        raise JobFailed("Could not copy the sandbox; its source was preserved")
     return out.strip()
 
 
@@ -120,7 +120,7 @@ def _inherit_flushes(config, inspected):
             rc, image, _ = compose.run(["docker", "image", "inspect", "--format", "{{.Id}}", candidate["image"]], timeout=15)
             if rc or not image.strip() or not (image.strip() == container["Image"] or container.get("Id")
                     and compose.same_image(container["Id"], image.strip(), container["Image"])):
-                raise ValueError("Apply this runtime’s settings before cloning: its snapshot metadata and current settings use different images")
+                raise ValueError("Apply the source’s settings before cloning: its snapshot metadata and current settings use different images")
             labels.update(missing)
             if relocate is not None and captured is None:
                 config.setdefault("x-gravitee", {}).setdefault("snapshot", {}).setdefault(key, {})["relocate"] = relocate
@@ -157,7 +157,7 @@ def _volume(source, target, key):
     destination = independent.name(target) + "_" + key
     rc, _, _ = compose.run(["docker", "volume", "inspect", destination], timeout=15)
     if not rc:
-        raise ValueError("The new runtime's destination volume already exists; nothing was overwritten")
+        raise ValueError("The new sandbox's destination volume already exists; nothing was overwritten")
     _execute(["docker", "volume", "create", "--label", storage.PROJECT + "=" + independent.name(target),
               "--label", "com.docker.compose.volume=" + key, destination], timeout=30)
     _execute(storage.copy_command(source, destination))
@@ -174,7 +174,7 @@ def _running_image(container, reference):
     rc, out, _ = compose.run(["docker", "image", "inspect", "--format", "{{.Id}}", reference], timeout=15)
     image = out.strip()
     if rc or not image or not container.get("Id") or not compose.same_image(container["Id"], image, running):
-        raise ValueError("The source's exact running image is unavailable; update this runtime before cloning")
+        raise ValueError("The source's exact running image is unavailable; update the source before cloning")
     return image
 
 
@@ -192,12 +192,12 @@ def _check_canceled(job):
 
 def _files(source, destination):
     if source.is_symlink():
-        raise ValueError("A runtime data folder contains a link")
+        raise ValueError("A sandbox data folder contains a link")
     if not source.is_dir():
         before = runtime_storage.tree(source)["fingerprint"]
         independent._copy(source, destination)
         if runtime_storage.tree(source)["fingerprint"] != before:
-            raise ValueError("The source files changed while copying; retry with a new runtime")
+            raise ValueError("The source files changed while copying; retry with a new sandbox")
         return
     before = runtime_storage.tree(source)["fingerprint"]
     # Reject links, pipes and devices before a root helper copies a writable directory.
@@ -205,11 +205,11 @@ def _files(source, destination):
         for name in [*dirs, *files]:
             file = Path(parent) / name
             if file.is_symlink() or not (file.is_dir() or file.is_file()):
-                raise ValueError("A runtime data folder contains a link, device, socket or pipe")
+                raise ValueError("A sandbox data folder contains a link, device, socket or pipe")
     destination.mkdir(parents=True, mode=0o700)
     _execute(storage.copy_command(str(source), str(destination), "bind"))
     if runtime_storage.tree(source)["fingerprint"] != before:
-        raise ValueError("The source files changed while copying; retry with a new runtime")
+        raise ValueError("The source files changed while copying; retry with a new sandbox")
 
 
 def _volumes(config, inspected, resources):
@@ -217,11 +217,11 @@ def _volumes(config, inspected, resources):
     volumes = {row["name"]: row["key"] for row in resources["volumes"]}
     ids = {row["id"] for row in resources["containers"]}
     if None in volumes.values() or len(set(volumes.values())) != len(volumes):
-        raise ValueError("Runtime volumes have ambiguous storage identities")
+        raise ValueError("Sandbox volumes have ambiguous storage identities")
     for row in resources["volumes"]:
         users = set(storage.ask("container", "ls", "-a", "-q", "--no-trunc", "--filter", "volume=" + row["name"]).split())
         if row["driver"] != "local" or row["options"] or not users <= ids:
-            raise ValueError("A runtime volume is not exclusive local storage; cloning is held")
+            raise ValueError("A sandbox volume is not exclusive local storage; cloning is held")
         config.setdefault("volumes", {}).setdefault(row["key"], {})
     for container in inspected:
         key = container["Config"]["Labels"]["com.docker.compose.service"]
@@ -231,7 +231,7 @@ def _volumes(config, inspected, resources):
             declared = next((entry for entry in config["services"][key].get("volumes", []) if entry["target"] == mount["Destination"]), None)
             if mount["Name"] not in volumes:
                 if declared:
-                    raise ValueError("A declared volume is outside this runtime's ownership; cloning is held")
+                    raise ValueError("A declared volume is outside this sandbox's ownership; cloning is held")
                 spec = storage.inspect("volume", [mount["Name"]])[0]
                 users = set(storage.ask("container", "ls", "-a", "-q", "--no-trunc", "--filter", "volume=" + mount["Name"]).split())
                 if spec.get("Driver") != "local" or spec.get("Options") or not users <= ids:
@@ -280,7 +280,7 @@ def _snapshot(job, project, source, target, config):
     writable = [mount["source"] for service in config["services"].values() for mount in service.get("volumes", [])
                 if mount["type"] == "bind" and not mount.get("read_only")]
     if storage.bind_writers(writable) - {row["id"] for row in rows["containers"]}:
-        raise ValueError("A runtime file is writable by another container; its clone cannot be isolated safely")
+        raise ValueError("A sandbox file is writable by another container; its clone cannot be isolated safely")
     actual = {}
     for row in inspected:
         key = row["Config"]["Labels"]["com.docker.compose.service"]
@@ -304,7 +304,7 @@ def _snapshot(job, project, source, target, config):
                 if mount["type"] == "bind":
                     path = Path(mount["source"])
                     if not path.is_relative_to(root):
-                        raise ValueError("A source runtime mount escapes its private directory")
+                        raise ValueError("A source sandbox mount escapes its private directory")
                     mount["source"] = str(new / path.relative_to(root))
         for kind in ("secrets", "configs"):
             for spec in config.get(kind, {}).values():
@@ -348,7 +348,7 @@ def _snapshot(job, project, source, target, config):
         if private:
             runtime_storage._owned(source, again)
         if not _same_paused_resources(rows, again):
-            raise ValueError("The source runtime changed while preparing its clone")
+            raise ValueError("The source changed while preparing its clone")
         if _configuration(source) != source_config:
             raise ValueError("The source configuration changed while preparing its clone")
         if private:
@@ -371,7 +371,7 @@ def _snapshot(job, project, source, target, config):
             _check_canceled(job)
             _volume(volume, target, key)
 
-    job.step("Copy runtime storage; briefly pause its writers")
+    job.step("Copy sandbox storage; briefly pause its writers")
     _paused([row["id"] for row in rows["containers"] if row["state"] == "running"], transfer, flushes)
     # Captured browser URLs in configuration files follow the clone's ports too.
     for file in (new / "inputs").rglob("*"):
@@ -408,5 +408,5 @@ def create(project, source, target):
         _check_canceled(job)
         value.update(clone_pending=False, initialized=True, active=False)
         independent._write(independent.folder(target) / "runtime.json", value)
-        job.lines.append("Created a stopped independent clone; its source and other playgrounds were preserved")
-    return JOBS.start("Clone runtime", [run], key=f"playground:{target}", verb="create")
+        job.lines.append("Created a stopped sandbox clone; its source and other playgrounds were preserved")
+    return JOBS.start("Clone sandbox", [run], key=f"playground:{target}", verb="create")

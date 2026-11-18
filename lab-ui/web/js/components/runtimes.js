@@ -5,19 +5,19 @@ import { createRuntime, independentAction, runtimeActionEntries } from "../dialo
 import { runJob } from "../activity/jobs.js";
 
 const CLEANUP = {
-  containers: { label: "Delete containers, keep data", hint: "Keeps runtime; Start recreates containers" },
-  data: { label: "Delete data, keep runtime", hint: "Deletes all data; next Start initializes fresh data" },
-  delete: { label: "Delete runtime and data", hint: "Permanently deletes this runtime and all its data" },
+  containers: { label: "Delete containers, keep data", hint: "Keeps sandbox; Start recreates containers" },
+  data: { label: "Delete data, keep sandbox", hint: "Deletes all data; next Start initializes fresh data" },
+  delete: { label: "Delete sandbox and data", hint: "Permanently deletes this sandbox and all its data" },
 };
 
 export function runtimePanel(root, playground = null, { heading = true, current = null } = {}) {
   let model = null, visible = false, reading = false, pending = false, serial = 0, signature = "", failure = "";
-  root.innerHTML = `<div class="card runtime-overview"><div class="card-head">${heading ? "<h2>Independent runtimes</h2>" : ""}
-    <div class="page-actions">${playground ? '<button class="btn" data-runtime-create>Create runtime</button>' : ""}<button class="btn" data-runtime-refresh>Refresh storage</button></div></div>
-    <div class="runtime-summary"></div><div class="table-wrap"><table class="table"><thead><tr><th>Runtime</th><th>State</th><th>Storage</th><th>Actions</th></tr></thead>
-    <tbody><tr><td colspan="4" class="empty">${loading("Reading runtimes")}</td></tr></tbody></table></div></div>`;
+  root.innerHTML = `<div class="card runtime-overview"><div class="card-head">${heading ? "<h2>Sandboxes</h2>" : ""}
+    <div class="page-actions">${playground ? '<button class="btn" data-runtime-create>Create sandbox</button>' : ""}<button class="btn" data-runtime-refresh>Refresh storage</button></div></div>
+    <div class="runtime-summary"></div><div class="table-wrap"><table class="table"><thead><tr><th>Sandbox</th><th>State</th><th>Storage</th><th>Actions</th></tr></thead>
+    <tbody><tr><td colspan="4" class="empty">${loading("Reading sandboxes")}</td></tr></tbody></table></div></div>`;
   const source = (row) => store.item("playground", row.playground || row.id);
-  const wait = () => store.wait(true) || (reading ? "Reading runtimes" : "");
+  const wait = () => store.wait(true) || (reading ? "Reading sandboxes" : "");
   const cannot = (row) => row.problem || (!row.source ? "Catalog source unavailable" : "");
 
   function render() {
@@ -25,7 +25,7 @@ export function runtimePanel(root, playground = null, { heading = true, current 
       ...(model?.problems || []).map((p) => p.message), ...(failure ? [failure] : [])];
     setHTML($(".runtime-summary", root), summary.length ? `<p class="sub">${summary.map(esc).join("; ")}</p>` : "");
     if (!model) {
-      setHTML($("tbody", root), `<tr><td colspan="4" class="empty">${failure ? "Runtime information unavailable" : loading("Reading runtimes")}</td></tr>`);
+      setHTML($("tbody", root), `<tr><td colspan="4" class="empty">${failure ? "Sandbox information unavailable" : loading("Reading sandboxes")}</td></tr>`);
       return;
     }
     let parent = null;
@@ -36,13 +36,13 @@ export function runtimePanel(root, playground = null, { heading = true, current 
       const total = row.volume_bytes === null ? null : row.volume_bytes + (row.local_bytes || 0);
       const button = actionButton({ key: `playground:${row.id}`, verb: row.running || row.active ? "stop" : "start",
         label: row.running || row.active ? "Stop" : "Start", cls: "btn", attrs: `data-runtime-act="${row.running || row.active ? "stop" : "start"}" data-busy` });
-      const open = row.source ? `<a class="btn" href="#/playgrounds/${esc(row.id)}" aria-label="Open runtime ${esc(row.name)}" data-tip="Guide and consoles">Open runtime</a>` : "";
-      return `${group ? `<tr><td colspan="4"><div class="card-head"><h3>${esc(row.playground_name || row.playground || row.name)}</h3>${source(row) ? `<button class="btn" data-runtime-create-for="${esc(row.playground || row.id)}">Create runtime</button>` : ""}</div></td></tr>` : ""}
+      const open = row.source ? `<a class="btn" href="#/playgrounds/${esc(row.id)}" aria-label="Open sandbox ${esc(row.name)}" data-tip="Guide and consoles">Open sandbox</a>` : "";
+      return `${group ? `<tr><td colspan="4"><div class="card-head"><h3>${esc(row.playground_name || row.playground || row.name)}</h3>${source(row) ? `<button class="btn" data-runtime-create-for="${esc(row.playground || row.id)}">Create sandbox</button>` : ""}</div></td></tr>` : ""}
         <tr data-runtime-row="${index}"><td><div class="runtime-name">${esc(row.name)}${!row.source ? '<span class="sub">Source unavailable</span>' : ""}</div></td>
         <td>${statusHtml(row.problem ? "issue" : row.running ? "running" : "stopped", row.problem ? "Needs attention" : row.state)}</td>
         <td><button class="btn" data-runtime-details aria-label="Storage of ${esc(row.name)}" data-tip="Storage details">${size(total)}</button></td>
         <td><div class="page-actions"><a class="btn" href="#/containers/${encodeURIComponent(row.id)}" aria-label="Containers of ${esc(row.name)}">Containers</a>${open}${button}<span class="row-icons"><button class="icon-btn" data-runtime-menu aria-haspopup="true" aria-label="Manage ${esc(row.name)}" data-tip="More">${icon("more")}</button></span></div></td></tr>`;
-    }).join("") || `<tr><td colspan="4" class="empty">No independent runtimes yet${playground ? "" : ' <a href="#/playgrounds">Choose a playground</a>'}</td></tr>`);
+    }).join("") || `<tr><td colspan="4" class="empty">No sandboxes yet${playground ? "" : ' <a href="#/playgrounds">Choose a playground</a>'}</td></tr>`);
     for (const el of root.querySelectorAll("[data-runtime-act]")) {
       const row = model.runtimes[Number(el.closest("[data-runtime-row]").dataset.runtimeRow)];
       const reason = wait() || (el.dataset.runtimeAct === "start" ? cannot(row) : row.problem);
@@ -85,11 +85,11 @@ export function runtimePanel(root, playground = null, { heading = true, current 
       const path = `/api/runtimes/${row.id}/cleanup`;
       const plan = await api(path, { operation, check: true });
       const { label: title, hint } = CLEANUP[operation];
-      const rows = Object.entries(plan.removes).filter(([, values]) => values.length).map(([kind, values]) => ({ label: `Deletes ${kind}`, items: values }));
+      const rows = Object.entries(plan.removes).filter(([, values]) => values.length).map(([kind, values]) => ({ label: `Deletes ${kind === "runtime" ? "sandbox" : kind}`, items: values }));
       rows.push({ label: "Keeps", items: plan.keeps, note: true });
       if (!(await effectsDialog({ title: `${title}: ${row.name}`, options: [{ value: true, rows, sub: hint }], action: () => title, danger: () => operation !== "containers" }))) return;
       if (operation !== "containers" && !(await confirmDialog({ title: `${title}: ${row.name}`,
-        text: `${hint}. The source playground, shared platform and other runtimes stay.`,
+        text: `${hint}. The source playground, shared platform and other sandboxes stay.`,
         action: title, word: "delete", danger: true }))) return;
       runJob(() => api(path, { operation, fingerprint: plan.fingerprint }), { key: `playground:${row.id}`, verb: "stop" });
     } catch (error) { toast(error.message, true); }
@@ -106,7 +106,7 @@ export function runtimePanel(root, playground = null, { heading = true, current 
       { label: "Memory", items: row.memory_bytes == null ? [] : [size(row.memory_bytes)] },
       { label: "Ports", items: row.ports || [] },
       { label: "Volumes", items: row.volumes.map((v) => `${v.name}: ${size(v.bytes)}`) },
-      { label: "Runtime files", items: row.folder ? [`${row.folder}: ${size(row.local_bytes)}`] : [] },
+      { label: "Sandbox files", items: row.folder ? [`${row.folder}: ${size(row.local_bytes)}`] : [] },
       { label: "Captured versions", items: Object.entries(row.versions || {}).map(([key, value]) => `${key}: ${value}`) },
       { label: "Captured images", items: (row.images || []).map((image) => `${image.service}: ${image.reference} (${image.id})`) },
       { label: "Prepared", items: row.prepared_at ? [new Date(row.prepared_at).toLocaleString()] : [] },
@@ -127,11 +127,11 @@ export function runtimePanel(root, playground = null, { heading = true, current 
     if (button.hasAttribute("data-runtime-menu")) {
       const item = source(row), blocked = wait();
       const choices = [
-        { label: "Open runtime", onSelect: () => navigate(row.id), disabled: !item, reason: item ? "" : "Catalog source unavailable" },
+        { label: "Open sandbox", onSelect: () => navigate(row.id), disabled: !item, reason: item ? "" : "Catalog source unavailable" },
         { label: "Source playground", onSelect: () => navigate(row.playground || row.id), disabled: !item, reason: item ? "" : "Catalog source unavailable" },
-        { label: "Clone runtime", disabled: !!blocked || !item || !row.running || !!cannot(row), reason: blocked || cannot(row) || "Start this runtime first",
+        { label: "Clone sandbox", disabled: !!blocked || !item || !row.running || !!cannot(row), reason: blocked || cannot(row) || "Start this sandbox first",
           onSelect: () => createRuntime(item, row.id) },
-        { label: "Restart", disabled: !!blocked || !row.running || !!cannot(row), reason: blocked || cannot(row) || "Start this runtime first", onSelect: () => act(row, "restart") },
+        { label: "Restart", disabled: !!blocked || !row.running || !!cannot(row), reason: blocked || cannot(row) || "Start this sandbox first", onSelect: () => act(row, "restart") },
         ...runtimeActionEntries(store.item("playground", row.id) || { id: row.id, name: row.name,
           runtime: { prepared: row.prepared, initialized: row.initialized, running: !!row.running } }).map((entry) => ({ ...entry,
           disabled: !!blocked || !!cannot(row) || entry.disabled, reason: blocked || cannot(row) || entry.reason })),

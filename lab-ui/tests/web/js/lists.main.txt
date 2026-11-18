@@ -589,18 +589,18 @@
                     "Removing…"
   <div class="container-context">
     <span id="container-runtime-label">
-      "Runtime"
-    <button class="combo-btn" data-container-runtime="" aria-label="Runtime" aria-labelledby="container-runtime-label container-runtime-value" aria-haspopup="dialog">
+      "Run in"
+    <button class="combo-btn" data-container-runtime="" aria-label="Run in" aria-labelledby="container-runtime-label container-runtime-value" aria-haspopup="dialog">
       <span class="value" id="container-runtime-value">
-        "Shared platform"
+        "Shared Lab"
       <svg aria-hidden="true">
         <use href="#i-chevron">
     <span data-container-source="">
-    <a class="text-link" href="#/runtimes">
-      "Manage runtimes"
+    <a class="text-link" href="#/sandboxes">
+      "Manage sandboxes"
   <div data-container-head="" hidden="">
   <p class="empty" data-container-missing="" hidden="">
-    "Runtime unavailable"
+    "Sandbox unavailable"
   <div class="stack-layout">
     <div class="card">
       <div class="cols stack-head" aria-hidden="true">
