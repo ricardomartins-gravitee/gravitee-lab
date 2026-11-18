@@ -5,9 +5,10 @@ import { Ev, installDom, reply, text, isOff, offWhy } from "./dom-stub.mjs";
 
 mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
 const calls = [];
-let payload, holdRead = null;
+let payload, holdRead = null, readFailure = false;
 const job = { id: "abcdef12", for: "playground:local/a", verb: "stop", title: "Cleanup", done: false, ok: null, phases: [], progress: null };
 const page = installDom({ fetch: async (path, options = {}) => {
+  if (readFailure && !options.body && path.startsWith('/api/runtimes')) throw new Error('Offline');
   if (!options.body && holdRead && path.startsWith("/api/runtimes")) await holdRead;
   const body = options.body ? JSON.parse(options.body) : null;
   calls.push({ path, body });
@@ -67,7 +68,8 @@ test("stopped and missing-source runtimes stay visible, with shared images count
   assert.match(text(root), /Private A/);
   assert.match(text(root), /Stopped/);
   assert.match(text(root), /Source unavailable/);
-  assert.equal(root.querySelector("a.btn"), null);
+  assert.equal(root.querySelectorAll('a.btn').find((a) => a.getAttribute('aria-label') === 'Open runtime Private A'), undefined);
+  assert.ok(root.querySelectorAll('a.btn').find((a) => a.getAttribute('aria-label') === 'Containers of Private A'));
   assert.match(text(root), /Images: 9 kB \(machine-wide\)/);
   const start = root.querySelector("[data-runtime-act]");
   assert.ok(isOff(start));
@@ -99,65 +101,41 @@ test("Open runtime targets the selected child's guide, while Source playground t
   close();
 });
 
-test("runtime rows expand inline to their own services, containers and ports, retaining expansion through refresh", async () => {
-  const rows = [{ ...privateRow, id: "runtime-demo", playground: "local/a", name: "Demo", running: 1,
-    ports: ["31000", "31001"], services: [{ id: "sample-api", label: "Sample API", ports: ["31000"], image: "sample:2.3", tag: "2.3" },
-      { id: "console", label: "Console", ports: ["31001"] }, { id: "worker", label: "Worker", ports: [] }],
-    containers: [{ name: "demo-api", service: "sample-api", ports: ["31000"] }] },
-    { ...privateRow, id: "runtime-other", ports: ["32000"] }];
-  for (const containers of [rows[0].containers, [{ ...rows[0].containers[0], ports: [] }], []]) {
-    rows[0].containers = containers;
-    rows[0].services[0].containers = containers.map((c) => ({ name: c.name, state: "exited" }));
-    rows[0].services[0].state = { key: containers.length ? "stopped" : "absent", label: containers.length ? "Exited" : "Not created" };
-    await show(rows);
-    const selector = '[data-runtime-services="runtime-demo"]';
-    assert.equal(root.querySelector(selector), null);
-    assert.equal(root.querySelector("[data-runtime-ports]"), null, "ports no longer open a separate popup");
-    root.querySelector("[data-runtime-toggle]").click();
-    assert.equal(root.querySelector("[data-runtime-toggle]").getAttribute("aria-expanded"), "true");
-    const shown = text(root.querySelector(selector));
-    assert.match(shown, /Sample API/);
-    assert.match(shown, /31000/);
-    assert.match(shown, containers.length ? /demo-api/ : /No container/);
-    assert.match(shown, /2\.3/);
-    assert.match(shown, /Console/);
-    assert.match(shown, /Worker/);
-    assert.match(shown, /31001/);
-    assert.doesNotMatch(shown, /32000/);
-    assert.equal(root.querySelector('[data-runtime-services="runtime-other"]'), null);
-    assert.deepEqual(posts(), []);
-    if (containers[0]?.ports.length) {
-      store.state.services = { captured: { runtime: { id: "runtime-demo", service: "sample-api" },
-        state: { key: "healthy", label: "Healthy", running: true }, image: "snapshot/api:clone", tag: "2.3", running_tag: "clone" } };
-      panel.render(store.state);
-      assert.match(text(root.querySelector(selector)), /Healthy/);
-      assert.match(text(root.querySelector(selector)), /2\.3/);
-      assert.doesNotMatch(text(root.querySelector(selector)), /clone/, "the captured version replaces the internal snapshot tag");
-      store.state.services = {};
-    }
-    root.querySelector("[data-runtime-refresh]").click();
-    await flush();
-    assert.ok(root.querySelector(selector), "inventory refresh keeps the same runtime expanded");
-    panel.hide();
-    root.remove();
-    root = page.doc.createElement("section");
-    page.doc.body.append(root);
-    panel = runtimePanel(root);
-    panel.show();
-    await flush();
-    assert.ok(root.querySelector(selector), "returning to Containers restores the expanded runtime");
-    root.querySelector("[data-runtime-toggle]").click();
-    assert.equal(root.querySelector(selector), null);
-    close();
-  }
-  await show([{ ...privateRow, id: null, name: "Shared platform", services: rows[0].services }]);
-  root.querySelector("[data-runtime-toggle]").click();
-  assert.match(text(root.querySelector('[data-runtime-services="shared"]')), /Sample API/);
+test("runtime management links to scoped Containers without duplicating service controls", async () => {
+  await show([{ ...privateRow, id: "runtime-demo", playground: "local/a", name: "Demo", services: [{ id: "api", ports: ["31000"] }] }]);
+  const link = root.querySelectorAll('a.btn').find((a) => a.getAttribute('aria-label') === 'Containers of Demo');
+  assert.equal(link.getAttribute("href"), "#/containers/runtime-demo");
+  assert.equal(root.querySelector("[data-runtime-toggle]"), null);
+  assert.equal(root.querySelector("[data-runtime-service-act]"), null);
+  assert.deepEqual(posts(), []);
   close();
-  await show([{ ...privateRow, source: false, services: rows[0].services }]);
-  root.querySelector("[data-runtime-toggle]").click();
-  assert.match(text(root.querySelector('[data-runtime-services="local/a"]')), /Worker/);
-  assert.ok(isOff(root.querySelector("[data-runtime-act]")), "a missing source does not block reading captured services");
+});
+
+test("a failed inventory read settles instead of retaining Reading runtimes", async () => {
+  await show();
+  close();
+  readFailure = true;
+  root = page.doc.createElement('section');
+  page.doc.body.append(root);
+  panel = runtimePanel(root);
+  panel.show();
+  await flush();
+  assert.match(text(root), /Runtime information unavailable/);
+  assert.doesNotMatch(text(root), /Reading runtimes/);
+  readFailure = false;
+  close();
+});
+
+test("offline management retains saved runtime names and leaves container navigation available", async () => {
+  await show([{ ...privateRow, state: 'Unavailable', volume_bytes: null }]);
+  store.state.docker.error = 'Docker is not reachable';
+  store.state.wait = 'Docker is not reachable';
+  panel.render(store.state);
+  await flush();
+  assert.match(text(root), /Private A/);
+  assert.match(text(root), /Unavailable/);
+  assert.equal(root.querySelectorAll('a.btn').find(a => a.getAttribute('aria-label') === 'Containers of Private A').getAttribute('href'), '#/containers/local%2Fa');
+  assert.ok(isOff(root.querySelector('[data-runtime-act]')));
   close();
 });
 
@@ -168,47 +146,6 @@ test("storage details show captured image references and exact identities", asyn
   assert.match(text(page.ids["choice-list"]), /db: store:1 \(sha256:captured\)/);
   await choice(false);
   close();
-});
-
-test("container controls target only their runtime key, share seed rules and select only its logs", async () => {
-  const { logsPage } = await import("../../../web/js/pages/logs.js");
-  const logRoot = page.doc.createElement("section");
-  page.doc.body.append(logRoot);
-  logsPage.init(logRoot);
-  const service = (id, key, state, more = {}) => ({ id, key, label: "API", ports: [], on: true,
-    state: { key: state, label: state, running: state === "running" }, containers: [{ name: key, state }],
-    image: "fixture:1", tag: "1", ...more });
-  const a = service("api", "runtime-a--api", "running"), b = service("api", "runtime-b--api", "running");
-  const seed = service("seed", "runtime-a--seed", "done", { role: "seed" });
-  for (const action of ["stop", "restart", "start", "logs"]) {
-    a.state = { key: action === "start" ? "stopped" : "running", label: "API state", running: action !== "start" };
-    await show([{ ...privateRow, id: "runtime-a", services: [a, seed] }, { ...privateRow, id: "runtime-b", services: [b] }]);
-    store.state.services = { api: service("api", "api", "running"),
-      [a.key]: { ...a, runtime: { id: "runtime-a", service: "api" } },
-      [b.key]: { ...b, runtime: { id: "runtime-b", service: "api" } },
-      [seed.key]: { ...seed, role: null, runtime: { id: "runtime-a", service: "seed" } } };
-    panel.render(store.state);
-    root.querySelector("[data-runtime-toggle]").click();
-    const own = root.querySelector('[data-runtime-service="runtime-a--api"]');
-    const seedRow = root.querySelector('[data-runtime-service="runtime-a--seed"]');
-    assert.equal(seedRow.querySelector('[data-runtime-service-act="start"]'), null);
-    assert.equal(seedRow.querySelector('[data-runtime-service-act="restart"]'), null);
-    const button = own.querySelector(`[data-runtime-service-act="${action}"]`);
-    assert.ok(button && !isOff(button), action);
-    button.click();
-    await flush();
-    if (action === "logs") {
-      assert.equal(location.hash, "#/logs");
-      assert.match(logStreams.at(-1), /services=runtime-a--api&/);
-      assert.doesNotMatch(logStreams.at(-1), /runtime-b--api|services=api&/);
-      assert.deepEqual(posts(), []);
-    } else {
-      assert.deepEqual(posts().map((p) => p.path), [`/api/services/runtime-a--api/${action}`]);
-    }
-    close();
-  }
-  logsPage.hide();
-  logRoot.remove();
 });
 
 test("Apply opens its scoped confirmation before sending a change", async () => {
@@ -292,7 +229,7 @@ test("management controls wait for an inventory refresh and become usable again"
   holdRead = new Promise((resolve) => { release = resolve; });
   root.querySelector("[data-runtime-refresh]").click();
   assert.ok(isOff(root.querySelector("[data-runtime-act]")));
-  assert.ok(isOff(root.querySelector("[data-runtime-menu]")));
+  assert.ok(!isOff(root.querySelector("[data-runtime-menu]")), "navigation remains available during storage reads");
   release();
   holdRead = null;
   await flush();

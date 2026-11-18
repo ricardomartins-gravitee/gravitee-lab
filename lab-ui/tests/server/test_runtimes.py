@@ -31,6 +31,54 @@ class RuntimeState(Case):
         self.assertEqual(a["services"], [])
         self.assertEqual(b, {"id": "local/b", "name": "B", "runtime": {"mode": "shared"}})
 
+    def test_offline_scopes_keep_names_ports_and_source_unavailable_instances_without_querying_docker(self):
+        value = {"project": "private-test", "ports": {"8000": 31000}, "oneshots": [], "active": False,
+                 "services": {"db": {"label": "Database", "image": "store:1", "ports": ["31000"],
+                                     "display": {"tag": "1", "environment": {"TOKEN": "never-return"}}}}}
+        self.patch(independent, "read", return_value=value)
+        self.patch(independent, "created", return_value=[])
+        self.patch(runtimes.frames, "declared", return_value=[])
+        query = self.patch(independent, "containers", side_effect=AssertionError("Must not query Docker"))
+        self.body["docker"] = {"error": "Docker is not reachable"}
+        for source_available in (True, False):
+            project = self.project if source_available else {**self.project, "playgrounds": {}}
+            body = copy.deepcopy(self.body) if source_available else {"playgrounds": [], "services": {}, "docker": self.body["docker"]}
+            result = runtimes.overlay(body, project)
+            scope = result["runtime_scopes"][self.rid]
+            service = result["services"][independent.service_key(self.rid, "db")]
+            self.assertEqual((scope["name"], scope["source"]), ("A", source_available))
+            self.assertEqual((service["ports"], service["state"]["label"]), (["31000"], "Unavailable"))
+            self.assertFalse(result.get("problems"))
+            self.assertNotIn("never-return", repr(result))
+        query.assert_not_called()
+
+    def test_inventory_offline_preserves_definitions_and_disables_cleanup_without_storage_scans(self):
+        value = {"active": False, "label": "A", "services": {"db": {"label": "Database", "ports": ["31000"]}}}
+        self.patch(runtimes.runtime_storage, "known", return_value=([(self.rid, value)], []))
+        scans = [self.patch(runtimes.storage, name, side_effect=AssertionError("Must not query Docker"))
+                 for name in ("usage", "resources", "load")]
+        result = runtimes.listing(self.project, available=False)
+        row = next(row for row in result["runtimes"] if row["id"] == self.rid)
+        self.assertEqual((row["name"], row["ports"], row["state"]), ("A", ["31000"], "Unavailable"))
+        self.assertFalse(result["available"])
+        self.assertTrue(all(not entry["enabled"] for entry in row["cleanup"].values()))
+        for scan in scans:
+            scan.assert_not_called()
+
+    def test_container_groups_validate_the_explicit_runtime_and_never_accept_a_sibling_or_shared_group(self):
+        value = {"project": "private-test", "ports": {}, "oneshots": [], "active": True,
+                 "services": {"db": {"label": "Database", "image": "store:1"}, "app": {"label": "App", "image": "app:1"}}}
+        self.project["groups"] = [{"id": "database", "name": "Database", "services": ["db", "shared-only"]}]
+        self.patch(independent, "read", return_value=value)
+        invoke = self.patch(independent, "service_group")
+        gid = independent.service_key(self.rid, "database")
+        for invalid in ("database", independent.service_key("runtime-sibling", "database")):
+            with self.assertRaises(paths.NotFound):
+                runtimes.group_action(self.project, self.rid, invalid, "stop")
+        invoke.assert_not_called()
+        runtimes.group_action(self.project, self.rid, gid, "stop")
+        invoke.assert_called_once_with(self.rid, ["db"], "stop", gid, "Database")
+
     def test_damaged_runtime_does_not_hide_the_other_playgrounds_or_offer_an_unsafe_start(self):
         self.patch(independent, "read", side_effect=ValueError("Damaged private record"))
         result = runtimes.overlay(copy.deepcopy(self.body), self.project)
@@ -67,6 +115,7 @@ class RuntimeState(Case):
         rows.pop("seed")
         resumed = runtimes.overlay(copy.deepcopy(self.body), self.project)
         self.assertTrue(resumed["playgrounds"][2]["up"], "Removed completed one-shots must not leave the runtime partly running")
+        self.assertEqual(resumed["runtime_scopes"][self.rid]["groups"][0]["state"]["key"], "running")
         value["services"]["stopped"] = {"label": "Stopped app", "image": "fixture:local"}
         rows["stopped"] = {"State": "exited", "ExitCode": 0}
         self.patch(independent, "containers", return_value=rows)

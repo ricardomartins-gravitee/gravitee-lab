@@ -280,7 +280,8 @@ export const store = {
   unit(key) {
     const [kind, id] = splitKey(key), platform = store.state?.platform;
     if (kind === "platform") return platform;
-    if (kind === "group") return platform?.groups.find((g) => g.id === id);
+    if (kind === "group") return platform?.groups.find((g) => g.id === id)
+      || Object.values(store.state?.runtime_scopes || {}).flatMap((scope) => scope.groups).find((group) => group.id === id);
     if (kind === "service") return store.service(id);
     // A catalog by its namespace, whose download has a progress; "content" is what the lists wait for while one is on its way
     if (kind === "catalog") return store.state?.catalogs.find((c) => c.id === id);

@@ -394,6 +394,18 @@ class IndependentDocker(unittest.TestCase):
         self.assertEqual(self.command([*cmd, "exec", "-T", "redis", "redis-cli", "GET", "service-action-sentinel"]), "keep-private-data")
         self.json(self.lab + "/api/services/runtime-missing--redis/stop", "POST", {}, expected=(404,))
         self.assertEqual({cid: identity(cid) for cid in protected}, before)
+        scope = self.json(self.lab + "/api/state")["runtime_scopes"][self.instances[target]]
+        group = next(group for group in scope["groups"] if key in group["services"])
+        gid = group["id"]
+        group_path = f"/api/runtimes/{self.instances[target]}/groups/{gid}"
+        for operation in ("stop", "start", "restart"):
+            self.job(group_path + "/" + operation, {})
+            self.assertEqual({cid: identity(cid) for cid in protected}, before, "A private group touched Shared or its sibling")
+        self.until(lambda: next(row for row in self.json(self.lab + "/api/state")["runtime_scopes"][self.instances[target]]["groups"]
+                   if row["id"] == gid)["state"]["key"] == "running",
+                   "private group became healthy", timeout=180)
+        self.assertEqual(self.command([*cmd, "exec", "-T", "redis", "redis-cli", "GET", "service-action-sentinel"]), "keep-private-data")
+        self.json(self.lab + f"/api/runtimes/{self.instances[sibling]}/groups/{group['id']}/stop", "POST", {}, expected=(404,))
         print("Logs, Start, Stop and Restart used only the selected runtime; removed container recreated with data", flush=True)
 
     def cleanup_lab(self):

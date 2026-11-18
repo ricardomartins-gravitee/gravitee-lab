@@ -266,6 +266,22 @@ class Independent(Case):
         with self.assertRaisesRegex(ValueError, "incomplete"):
             independent.service("local/a", "db", "start")
 
+    def test_group_controls_target_only_private_members_and_restart_keeps_stopped_services_stopped(self):
+        self.prepare("local/a")
+        self.prepare("local/b")
+        jobs = self.patch(independent, "JOBS")
+        self.patch(independent, "containers", return_value={"db": {"State": "running"}, "a-app": {"State": "exited"}})
+        for operation, expected in (("restart", ["db"]), ("start", ["db", "a-app"]), ("stop", ["db", "a-app", "a-seed"])):
+            independent.service_group("local/a", ["db", "a-app", "a-seed"], operation, "private-group", "Product")
+            _, steps, more = self.started(jobs)
+            worker = Mock()
+            steps[0](worker)
+            args = ["up", "-d", "--no-deps"] if operation == "start" else [operation]
+            worker.exec.assert_called_once_with(independent.command("local/a", *args, *expected))
+            self.assertEqual(more["key"], "group:private-group")
+        with self.assertRaises(paths.NotFound):
+            independent.service_group("local/a", ["b-app"], "stop", "private-group", "Product")
+
     def test_required_versions_and_settings_are_checked_without_changing_the_shared_lab(self):
         gathered = self.inputs["local/a"][1]
         gathered["unit"]["requires"] = {"images": {"FIXTURE_VERSION": "2.0.0"}}

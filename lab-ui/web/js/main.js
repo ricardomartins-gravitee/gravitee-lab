@@ -14,6 +14,7 @@ import { playgroundsPage, setupsPage, addonsPage } from "./pages/list.js";
 import { playgroundPage } from "./pages/playground.js";
 import { catalogsPage } from "./pages/catalogs.js";
 import { stackPage } from "./pages/stack.js";
+import { runtimesPage } from "./pages/runtimes.js";
 import { logsPage } from "./pages/logs.js";
 import { imagesPage } from "./pages/images.js";
 import { pluginsPage } from "./pages/plugins.js";
@@ -43,7 +44,7 @@ document.querySelector(".skip").addEventListener("click", (e) => {
 initSidebar();
 initJobs();
 Combo.init();
-[dashboardPage, playgroundsPage, playgroundPage, setupsPage, addonsPage, catalogsPage, stackPage, logsPage, imagesPage, pluginsPage,
+[dashboardPage, playgroundsPage, playgroundPage, setupsPage, addonsPage, catalogsPage, stackPage, runtimesPage, logsPage, imagesPage, pluginsPage,
   platformsPage].forEach(router.register);
 
 // The page shows at once: until the first state comes, it says that the lab is read, or why it cannot be (core.js)

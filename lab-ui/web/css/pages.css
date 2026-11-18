@@ -226,6 +226,10 @@
 /* On a wide screen, what to open gets its names in full */
 @container (min-width: 1500px) { .stack-layout { grid-template-columns: minmax(0, 1fr) 360px; } }
 .side { min-width: 0; }
+.container-context { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-4); }
+.container-context > [data-container-source] { min-width: 0; }
+.container-context .combo-btn .value { font-family: inherit; font-size: inherit; }
+[data-container-head] { margin-bottom: var(--sp-4); }
 @container (max-width: 1299px) {
   .stack-layout { grid-template-columns: 1fr; }
   .side { order: -1; }
@@ -269,15 +273,14 @@
 .container:hover { background: var(--row-hover); }
 .container:hover .c-name { color: var(--text); }
 
-/* Narrower, the ports and the uptime leave first, as the category of a list does, so that a name keeps its badges; then a
-   name, the dot of its state and its icons are left */
+/* Keep assigned ports visible when space narrows; uptime leaves first, then the version. */
 @container (max-width: 1100px) {
-  .cols { grid-template-columns: 22px minmax(180px, 1fr) 132px var(--version-width, 116px) 156px; }
-  .cols > :is(:nth-child(5), :nth-child(6)):not(.row-icons) { display: none; }
+  .cols { grid-template-columns: 22px minmax(180px, 1fr) 132px var(--version-width, 116px) 128px 156px; }
+  .cols > :nth-child(6):not(.row-icons) { display: none; }
 }
-@container (max-width: 760px) {
-  .cols { grid-template-columns: 22px minmax(0, 1fr) auto auto; }
-  .cols > :is(:nth-child(4), :nth-child(5), :nth-child(6)):not(.row-icons) { display: none; }
+@container (max-width: 820px) {
+  .cols { grid-template-columns: 22px minmax(0, 1fr) auto 104px auto; }
+  .cols > :is(:nth-child(4), :nth-child(6)):not(.row-icons) { display: none; }
   .s-state .status-word { display: none; }
   .cols .row-icons .icon-gap { display: none; }   /* on a phone a name needs the room more than the icons their places */
   .core-name { flex-wrap: wrap; row-gap: var(--sp-1); min-width: 0; }
@@ -290,6 +293,7 @@
   .cols:not(.core-sep) .s-name { flex-wrap: wrap; row-gap: var(--sp-1); white-space: normal; }
   .cols:not(.core-sep) .s-name > :is(.g-name, .c-name, .c-id) { white-space: nowrap; }
   .cols:not(.core-sep) > .row-icons { grid-column: 2 / -1; justify-content: flex-start; }
+  .cols:not(.core-sep) > .s-ports { grid-column: 2 / -1; }
 }
 
 

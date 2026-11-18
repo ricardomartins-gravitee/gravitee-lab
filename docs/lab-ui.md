@@ -35,7 +35,7 @@ Normal playgrounds always use the shared platform. To create a separate instance
 Every clone copies the selected runtime's complete volumes and mounted files, along with its resolved configuration
 and exact container images. **Cloning Shared includes all data in the Shared runtime, including other playgrounds.**
 It captures all configured services that have containers there. To copy only a private instance's data, clone that named
-runtime instead. No management API export, resource filtering or database rewriting is involved: API definitions,
+runtime instead. No management API export or resource filtering is involved: API definitions,
 applications, subscriptions, keys, Gamma and Access Management data retain their identities and credentials.
 
 The source's application writers briefly pause, declared datastores flush and pause, storage is copied into new volumes
@@ -87,24 +87,30 @@ The Lab keeps private configuration and copied mounts in `.lab/runtimes/`, and n
 `.lab/playground-runtimes.json`. Catalogs and linked worktrees stay in place. Shared data enters a named runtime only through
 an explicitly selected clone of the complete Shared runtime. Existing private projects appear as named children after an upgrade,
 with their folders, volumes and ports intact.
-The Containers page's platform controls and `make` commands still act on the shared project. They leave independent
-runtimes untouched; stop those from their playground pages or the runtime inventory in Containers. Catalog replacement
+The Containers page opens on Shared. Its runtime picker selects which instance its controls and consoles address;
+changing the view starts and stops nothing. The `make` commands still act on the shared project and leave independent
+runtimes untouched; manage those from their playground pages, Runtimes, or their selected Containers view. Catalog replacement
 and removal wait while a private runtime using the catalog is on.
 
 ### Manage runtimes and storage
 
-The *Runtimes* card on Containers lists the shared platform and independent playgrounds, including stopped runtimes and
-kept data whose catalog source is unavailable. It shows CPU, memory and storage. Choose a storage value to inspect its
-volumes, runtime files, ports and captured versions. Clones also show their source image references and exact image IDs. *Refresh storage* reads disk usage again. Images and build caches
-are shown once as machine-wide storage; several runtimes can use the same image layers.
+Open *Runtimes* under Configure to manage independent instances, grouped by source playground. Stopped runtimes and
+kept data whose catalog source is unavailable remain listed. *Create runtime* belongs to its playground; the same
+controls are available from a playground's More > Runtimes dialog. *Clone runtime* selects that instance as the source
+of the creation form. Choose a storage value to inspect volumes, runtime files, assigned ports, captured versions and
+image identities. *Refresh storage* reads disk usage again. Images and build caches are shown once as machine-wide
+storage, because runtimes can share their image layers.
 
-Expand a runtime's row to see its services, container names, states, versions and ports inline, as on the shared platform.
-Stopped runtimes and services whose containers were removed keep their captured port assignments visible.
-Service rows offer the same Logs, Start, Stop and Restart controls as Shared, scoped to that runtime. Start can recreate
-a removed service container and keeps its data; seeds run through Re-seed.
-Choose *Open runtime* on its row to open its guide and consoles. *Source playground* in the menu opens the original Shared playground. Use the menu to restart, Apply or Update it. Source settings apply at first Start;
-Apply applies later saved changes to that runtime. The platform controls in the page header explicitly manage the
-shared platform. A runtime whose source is unavailable can still be stopped and cleaned up.
+Choose *Containers* beside an instance to inspect it. Containers uses one table for Shared and independent runtimes,
+with the same product groups, service states, versions, ports, uptime, Logs, Start, Stop and Restart controls. Its
+runtime picker defaults to Shared; an explicit runtime link selects that instance. The address records that choice,
+so reload, Back and Forward retain the target. Each action captures its runtime identity before confirmation.
+Start can recreate a removed container while preserving its data; seeds run through Re-seed.
+
+*Open runtime* opens the instance's guide and consoles. Its source playground continues to use Shared. Apply and Update
+keep their existing meaning, and cleanup remains on Runtimes. A runtime whose source is unavailable can still be
+inspected, stopped and cleaned up. With Docker unavailable, saved runtime names, versions and assigned ports stay
+visible, live values are unavailable, and operations wait for Docker. Storage reads do not hold the normal state stream.
 
 Stop an independent runtime before cleanup, then choose:
 

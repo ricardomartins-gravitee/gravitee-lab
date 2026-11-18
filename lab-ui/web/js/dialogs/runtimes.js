@@ -65,7 +65,7 @@ export async function independentAction(item, verb) {
     const confirmed = await effectsDialog({ title: `${label} ${item.name}`,
       options: [{ value: true, rows }], action: () => label });
     if (!confirmed) return;
-    const route = verb === "apply" ? `/api/runtimes/${item.id}/${verb}` : `/api/playgrounds/${item.id}/${verb}`;
+    const route = verb === "apply" || item.source === false ? `/api/runtimes/${item.id}/${verb}` : `/api/playgrounds/${item.id}/${verb}`;
     runJob(() => api(route, {}), { key: `playground:${item.id}`, verb });
   } catch (error) { toast(error.message, true); }
 }
