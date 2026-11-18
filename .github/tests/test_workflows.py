@@ -465,6 +465,31 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(run("major"), "", "v1.0.1 holds the older merge: no v1.0.0 and no v2.0.0 for it")
 
 
+class ForkReleaseTest(unittest.TestCase):
+    """fork-release.yml previews on forks only; publishing is an explicit action for the reviewed main commit."""
+
+    def setUp(self):
+        self.text = (ROOT / ".github/workflows/fork-release.yml").read_text(encoding="utf-8")
+        self.jobs = jobs(self.text)
+
+    def test_only_a_manual_run_on_a_forks_main_plans_a_release(self):
+        self.assertEqual(events(self.text), ["workflow_dispatch"])
+        self.assertIn("default: false", self.text)
+        self.assertIn("github.event.repository.fork && github.ref == 'refs/heads/main'", self.jobs["preview"])
+        self.assertIn("cancel-in-progress: false", self.text)
+        self.assertIn("refs/release-upstream/tags/v*", self.jobs["preview"])
+        self.assertNotIn("refs/tags/v*'", self.jobs["preview"], "upstream tags must not replace the fork's own tags")
+
+    def test_the_preview_cannot_write_and_only_explicit_publishing_reaches_the_publish_environment(self):
+        self.assertNotIn("environment:", self.jobs["preview"])
+        self.assertNotRegex(self.jobs["preview"], r"\bwrite\b")
+        self.assertIn("EXPECTED_COMMIT: ${{ inputs.expected_commit }}", self.jobs["preview"])
+        self.assertIn("inputs.publish && needs.preview.result == 'success'", self.jobs["publish"])
+        self.assertIn("environment: publish", self.jobs["publish"])
+        self.assertEqual(re.findall(r"^\s+([\w-]+): write$", self.text, re.M), ["contents"])
+        self.assertNotIn("secrets.", self.text, "the fork workflow needs no additional credentials")
+
+
 class ComposeTest(unittest.TestCase):
     """The Lab UI's tests run on the oldest Compose the Lab accepts: what reads otherwise there (Compose 5.0 prints an empty list
     under an x- key as null) fails in CI before a person on that release meets it."""

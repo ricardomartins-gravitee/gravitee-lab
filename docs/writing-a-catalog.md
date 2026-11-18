@@ -293,8 +293,8 @@ python3 lab-ui/catalog.py upgrade .
 prints the plan (`--write` writes it in place, for you to commit), and `upgrade --fleet OWNER --lab-ref COMMIT` opens one pull request per
 catalog of an owner. A managed file that someone edited by hand is reported (`SD02`) and never overwritten silently.
 
-The pin, `lab.ref`, is the commit of a release of the Lab (a tag `vX.Y.Z` on its `main`), and CI refuses any other (`SD11`): a
-catalog is checked with a Lab that people run, so what passes its CI works on that release and every later one. To use what a
+The pin, `lab.ref`, is the commit of a release of the Lab (a tag `vX.Y.Z` or `vX.Y.Z-rev.N` on its `main`), and CI refuses any
+other (`SD11`): a catalog is checked with a Lab that people run, so what passes its CI works on that release and every later one. To use what a
 newer release adds (its notes list it under *For catalogs*), move the pin to the latest release:
 
 ```bash

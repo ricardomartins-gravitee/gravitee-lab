@@ -70,6 +70,21 @@ test("after an update, what is new since the version this browser showed last is
   followLab();
   await settle();
   assert.equal(dialog.open, false, "said once");
+  for (const [before, after] of [["1.20.15", "1.20.15-rev.1"], ["1.20.15-rev.1", "1.20.15-rev.2"],
+    ["1.20.15-rev.9", "1.20.15-rev.10"], ["1.20.15-rev.10", "1.20.16"], ["1.20.16", "1.20.16-rev.1"]]) {
+    server.releases = { ...RELEASES, versions: [
+      { ...RELEASES.versions[0], version: after, current: true },
+      { ...RELEASES.versions[1], version: before, current: false },
+    ] };
+    state(LAB({ version: after, latest: after, update: false }));
+    openLab({ since: before });
+    await settle();
+    assert.deepEqual(card(), ["ok", `Updated From ${before}`, ""]);
+    assert.match(said(notes()), /The guide can be hidden/, `${after} follows ${before}`);
+    assert.doesNotMatch(said(notes()), /First version/);
+    close();
+  }
+  server.releases = RELEASES;
 });
 
 test("the version stands at the right of the name of the Lab, and turns into Update while a newer one waits", () => {

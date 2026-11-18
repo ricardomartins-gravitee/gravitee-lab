@@ -26,7 +26,8 @@ document.body.append(dialog);
 
 let shown = null;   // what the dialog draws: {releases, since}, `since` the version what is new is said after
 
-const newer = (a, b) => compareVersions(a, b) < 0;
+// A bare Lab release is revision 0, while the shared image comparator puts a bare release above its pre-releases
+const newer = (a, b) => compareVersions(a.includes("-rev.") ? a : `${a}-rev.0`, b.includes("-rev.") ? b : `${b}-rev.0`) < 0;
 const day = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "");
 const dated = (versions, version) => day(versions.find((v) => v.version === version)?.date);
 
