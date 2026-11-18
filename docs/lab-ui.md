@@ -23,26 +23,29 @@ Keep port 9000. The platform's consoles and the playground apps let only that ad
 9000, `make ui` says so and names `UI_PORT`:
 [Port 9000 is taken](troubleshooting.md#port-9000-is-taken-or-the-lab-ui-is-already-running).
 
-## Independent playgrounds
+<a id="independent-playgrounds"></a>
 
-Normal playgrounds always use the shared platform. To create a separate instance, open a playground and choose
-*Runtimes* in its More menu, then *Create runtime* in the popup. Give it a name such as Demo or Sandbox and choose *Start from*:
+## Playground sandboxes
+
+A sandbox is a named, isolated instance of a playground. Normal playgrounds always use Shared Lab.
+To create a separate instance, open a playground and choose
+*Sandboxes* in its More menu, then *Create sandbox* in the popup. Give it a name such as Demo or Experiment and choose *Start from*:
 
 - *Fresh from playground* registers a stopped child. First Start prepares its platform and runs its initial seed.
 - *Clone Shared* or *Clone <name>* copies the selected running instance's current data. The copy has separate storage
   and ports and stays stopped when copying finishes. Start resumes the copy without replaying its seed.
 
-Every clone copies the selected runtime's complete volumes and mounted files, along with its resolved configuration
-and exact container images. **Cloning Shared includes all data in the Shared runtime, including other playgrounds.**
+Every clone copies the selected source's complete volumes and mounted files, along with its resolved configuration
+and exact container images. **Cloning Shared includes all data in the Shared Lab, including other playgrounds.**
 It captures all configured services that have containers there. To copy only a private instance's data, clone that named
-runtime instead. No management API export or resource filtering is involved: API definitions,
+sandbox instead. No management API export or resource filtering is involved: API definitions,
 applications, subscriptions, keys, Gamma and Access Management data retain their identities and credentials.
 
 The source's application writers briefly pause, declared datastores flush and pause, storage is copied into new volumes
 and private files, then the same source containers resume. The copy stays stopped throughout. Its networks and host ports
 are separate; localhost URLs in its configuration follow the new ports. Before any cloned application starts, an offline
 helper updates local HTTP, HTTPS and WebSocket URLs in the copied MongoDB documents, including nested settings and JSON
-definitions. It translates only source runtime ports on localhost, loopback IPs and Docker host aliases. Internal service
+definitions. It translates only source ports on localhost, loopback IPs and Docker host aliases. Internal service
 names still resolve within the clone's network. Gravitee endpoint `target` URLs on loopback retain their container's
 internal port; Docker host targets follow the clone's published ports. External addresses, record identities and binary credentials stay intact.
 The helper mounts only copied storage and has no network access. Catalog files, source databases and links stay in place.
@@ -54,7 +57,7 @@ finish so that source containers can always resume.
 Process memory is not copied. Datastores that buffer persistent writes declare `io.gravitee.snapshot.flush` as a JSON
 array of command arguments in their Compose labels; the command runs inside their own container after application writers
 pause and must fail if flushing fails. The core declares this for MongoDB, Elasticsearch and Redis. Stores resume before
-their writers. Older runtime records inherit a core flush command only when its image exactly matches the running image;
+their writers. Older sandbox records inherit a core flush command only when its image exactly matches the running image;
 otherwise apply the source’s settings first. Custom stores need an appropriate flush command for their persistence model.
 
 The core's `x-gravitee.snapshot.<service>.relocate` declares an array of arguments for an offline command on that store's
@@ -63,66 +66,67 @@ copied mounts. This metadata does not change running containers or require Apply
 MongoDB hook updates stored URL strings without exporting resources or replaying seeds. Other datastores and opaque or
 encrypted URL values need their own relocation support; arbitrary external hostnames are not guessed or changed.
 
-There are no global runtime defaults or per-playground Shared/Independent settings.
+Shared Lab remains the default; sandboxes are created explicitly inside a playground.
 
-Create several named runtimes from the same playground and run them concurrently. Open a named runtime to work in it;
-open its source playground to use Shared. Its links, consoles, Start and Stop target only that named instance. The runtime inventory is opened on demand from
+Create several named sandboxes from the same playground and run them concurrently. Open a named sandbox to work in it;
+open its source playground to use Shared. Its links, consoles, Start and Stop target only that named instance. The sandbox inventory is opened on demand from
 More rather than displayed on the playground page.
 
-An independent playground starts its own platform services and dependencies, in a separate Compose project with its own
+A sandbox starts its own platform services and dependencies, in a separate Compose project with its own
 networks, storage and loopback ports. Several can run at once. Use the links and consoles on its page: their ports differ
-from the shared platform's. Start, Stop, Restart, Re-seed, logs and the terminal act on that runtime alone.
+from the shared platform's. Start, Stop, Restart, Re-seed, logs and the terminal act on that sandbox alone.
 
 Stop keeps its data, including API edits, applications, subscriptions, API keys and the seed's ownership record. Start resumes
-it without replaying its seed. The runtime’s More menu uses the existing actions:
+it without replaying its seed. The sandbox’s More menu uses the existing actions:
 
-- *Apply* applies the current saved playground and Lab settings to this runtime. Changed running containers are recreated and failed services are restarted when their dependencies are available; stopped services stay stopped. With the whole runtime stopped, the saved settings take effect at its next Start.
-- *Update* refreshes images using this runtime’s configured versions, then recreates changed running containers. It does not adopt later Shared settings or select newer version tags. Local builds are rebuilt when the runtime configuration declares them; a cloned local image refreshes from its recorded local image reference.
-- *Re-seed*, on the running runtime’s page, reapplies its seed data in Gravitee.
+- *Apply* applies the current saved playground and Lab settings to this sandbox. Changed running containers are recreated and failed services are restarted when their dependencies are available; stopped services stay stopped. With the whole sandbox stopped, the saved settings take effect at its next Start.
+- *Update* refreshes images using this sandbox’s configured versions, then recreates changed running containers. It does not adopt later Shared settings or select newer version tags. Local builds are rebuilt when the sandbox configuration declares them; a cloned local image refreshes from its recorded local image reference.
+- *Re-seed*, on the running sandbox’s page, reapplies its seed data in Gravitee.
 
 Apply and Update keep writable data and assigned ports and never run the seed. Restart only restarts running containers.
-The normal runtime creation, cloning and deletion actions remain separate.
+The normal sandbox creation, cloning and deletion actions remain separate.
 
-The Lab keeps private configuration and copied mounts in `.lab/runtimes/`, and named runtime identities in
-`.lab/playground-runtimes.json`. Catalogs and linked worktrees stay in place. Shared data enters a named runtime only through
-an explicitly selected clone of the complete Shared runtime. Existing private projects appear as named children after an upgrade,
-with their folders, volumes and ports intact.
-The Containers page opens on Shared. Its runtime picker selects which instance its controls and consoles address;
+The Lab keeps private configuration and copied mounts in `.lab/runtimes/`, and named sandbox identities in
+`.lab/playground-runtimes.json`. Catalogs and linked worktrees stay in place. Shared data enters a named sandbox only through
+an explicitly selected clone of the complete Shared Lab. Existing private projects appear as named children after an upgrade,
+with their folders, volumes and ports intact. The existing storage filenames and internal API identifiers are retained;
+the Sandboxes wording requires no storage migration.
+The Containers page opens on Shared Lab. Its *Run in* picker selects which instance its controls and consoles address;
 changing the view starts and stops nothing. The `make` commands still act on the shared project and leave independent
-runtimes untouched; manage those from their playground pages, Runtimes, or their selected Containers view. Catalog replacement
-and removal wait while a private runtime using the catalog is on.
+sandboxes untouched; manage those from their playground pages, Sandboxes, or their selected Containers view. Catalog replacement
+and removal wait while a private sandbox using the catalog is on.
 
-### Manage runtimes and storage
+### Manage sandboxes and storage
 
-Open *Runtimes* under Configure to manage independent instances, grouped by source playground. Stopped runtimes and
-kept data whose catalog source is unavailable remain listed. *Create runtime* belongs to its playground; the same
-controls are available from a playground's More > Runtimes dialog. *Clone runtime* selects that instance as the source
-of the creation form. Choose a storage value to inspect volumes, runtime files, assigned ports, captured versions and
+Open *Sandboxes* under Configure to manage independent instances, grouped by source playground. Stopped sandboxes and
+kept data whose catalog source is unavailable remain listed. *Create sandbox* belongs to its playground; the same
+controls are available from a playground's More > Sandboxes dialog. *Clone sandbox* selects that instance as the source
+of the creation form. Choose a storage value to inspect volumes, sandbox files, assigned ports, captured versions and
 image identities. *Refresh storage* reads disk usage again. Images and build caches are shown once as machine-wide
-storage, because runtimes can share their image layers.
+storage, because sandboxes can share their image layers.
 
-Choose *Containers* beside an instance to inspect it. Containers uses one table for Shared and independent runtimes,
+Choose *Containers* beside an instance to inspect it. Containers uses one table for Shared and sandboxes,
 with the same product groups, service states, versions, ports, uptime, Logs, Start, Stop and Restart controls. Its
-runtime picker defaults to Shared; an explicit runtime link selects that instance. The address records that choice,
-so reload, Back and Forward retain the target. Each action captures its runtime identity before confirmation.
+*Run in* picker defaults to Shared Lab; an explicit sandbox link selects that instance. The address records that choice,
+so reload, Back and Forward retain the target. Each action captures its sandbox identity before confirmation.
 Start can recreate a removed container while preserving its data; seeds run through Re-seed.
 
-*Open runtime* opens the instance's guide and consoles. Its source playground continues to use Shared. Apply and Update
-keep their existing meaning, and cleanup remains on Runtimes. A runtime whose source is unavailable can still be
-inspected, stopped and cleaned up. With Docker unavailable, saved runtime names, versions and assigned ports stay
+*Open sandbox* opens the instance's guide and consoles. Its source playground continues to use Shared. Apply and Update
+keep their existing meaning, and cleanup remains on Sandboxes. A sandbox whose source is unavailable can still be
+inspected, stopped and cleaned up. With Docker unavailable, saved sandbox names, versions and assigned ports stay
 visible, live values are unavailable, and operations wait for Docker. Storage reads do not hold the normal state stream.
 
-Stop an independent runtime before cleanup, then choose:
+Stop a sandbox before cleanup, then choose:
 
 | Action | What it deletes | What it keeps |
 |---|---|---|
-| *Delete containers, keep data* | That runtime's containers and networks | Its volumes, private files and initialized data; Start recreates containers without replaying the seed |
-| *Delete data, keep runtime* | That runtime's containers, networks, volumes and generated runtime folder | Its named definition, catalog source and links, all other runtimes, images and build caches; Start initializes fresh data |
-| *Delete runtime and data* | That runtime and its private containers, networks, volumes and generated folder | Its source playground, catalog links, shared data and all other runtimes |
+| *Delete containers, keep data* | That sandbox's containers and networks | Its volumes, private files and initialized data; Start recreates containers without replaying the seed |
+| *Delete data, keep sandbox* | That sandbox's containers, networks, volumes and generated sandbox folder | Its named definition, catalog source and links, all other sandboxes, images and build caches; Start initializes fresh data |
+| *Delete sandbox and data* | That sandbox and its private containers, networks, volumes and generated folder | Its source playground, catalog links, shared data and all other sandboxes |
 
 Review the exact resources before confirming. Data deletion also asks you to type `delete`. A resource or file changed
-since the preview requires a new preview. Cleanup refuses ambiguous ownership, resources used outside the runtime and
-linked runtime roots. It never follows links inside the private files. This cleanup does not prune machine-wide storage.
+since the preview requires a new preview. Cleanup refuses ambiguous ownership, resources used outside the sandbox and
+linked sandbox roots. It never follows links inside the private files. This cleanup does not prune machine-wide storage.
 
 Independence uses more memory and disk space. Normal Compose volumes and dedicated writable folders are isolated;
 external management endpoints, host networking, privileged services, devices, Docker socket mounts, external secrets and

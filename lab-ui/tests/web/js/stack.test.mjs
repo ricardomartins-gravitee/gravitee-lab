@@ -254,14 +254,14 @@ test("shared Reset names its own scope and explicitly keeps independent runtime 
   const independent = { ...playground("Private A"), runtime: { mode: "independent", prepared: true } };
   const text = says("Reset", { playgrounds: [independent] }).text;
   assert.match(text, /shared platform/);
-  assert.match(text, /Stays: Private A \(independent\)/);
+  assert.match(text, /Stays: Private A \(sandbox\)/);
 });
 
 test("Containers has a runtime selector instead of a runtime inventory", () => {
   draw(lab({ licensed: true }));
   assert.equal(section.querySelector("[data-runtime-panel]"), null);
-  assert.equal(text(section.querySelector("#container-runtime-value")), "Shared platform");
-  assert.ok(section.querySelector('a[href="#/runtimes"]'));
+  assert.equal(text(section.querySelector("#container-runtime-value")), "Shared Lab");
+  assert.ok(section.querySelector('a[href="#/sandboxes"]'));
 });
 
 function scopedLab() {
@@ -301,7 +301,7 @@ test("one Containers table displays only the selected runtime, with its ports, c
   assert.equal(seed.querySelector('[data-act="restart"]'), null);
   stackPage.show([]);
   draw(state);
-  assert.equal(text(section.querySelector('#container-runtime-value')), 'Shared platform');
+  assert.equal(text(section.querySelector('#container-runtime-value')), 'Shared Lab');
   assert.equal(section.querySelector('[data-service="runtime-a--api"]'), null);
   assert.equal(section.querySelector('.page-head > .page-actions').hidden, false);
 });

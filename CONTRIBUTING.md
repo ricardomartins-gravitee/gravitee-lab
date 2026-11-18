@@ -65,7 +65,7 @@ There is one lab per machine: the Compose project is named `gravitee` and its co
 
 CI runs the same checks on every pull request.
 
-The runtime Docker workflows use disposable Labs with linked catalogs; they do not use an installed Lab:
+The sandbox Docker workflows use disposable Labs with linked catalogs; they do not use an installed Lab:
 
 ```sh
 PYTHONPATH=lab-ui python3 -m tests.runtime_clone_docker
@@ -77,7 +77,7 @@ To include Gamma, set `RUNTIME_CLONE_TEST_LICENSE` privately to a license with G
 commit or test artifact. These workflows verify complete Shared and private storage copies, working keys and credentials,
 source preservation, and linked catalogs.
 
-Docker test isolation is checked before startup and again before cleanup. The runtime fixtures require their own
+Docker test isolation is checked before startup and again before cleanup. The sandbox fixtures require their own
 project, local volume and network names, and mounts inside their temporary Lab and catalog folders. Existing resource
 names, foreign ownership and failed inspections stop the workflow; they never authorize cleanup. Catalog smoke tests
 use disposable writable mounts instead of the catalog's existing state. App-test timeouts remove only container IDs
@@ -169,10 +169,10 @@ Run the isolated Docker workflow explicitly:
 PYTHONPATH=lab-ui python3 -m tests.independent_docker
 ```
 
-It builds the seeder, creates two named runtimes of the same playground, starts uniquely named temporary projects
+It builds the seeder, creates two named sandboxes of the same playground, starts uniquely named temporary projects
 and checks real Gravitee APIs, applications,
 subscriptions and API keys across Stop, Start, Apply and Update. It also checks concurrent playgrounds, private writable
 binds, volumes and ports, preserved catalog links, and a separate shared Redis sentinel. It exercises container removal
-without data loss, stale cleanup refusal, deletion of private data while another runtime runs, and a fresh start after
+without data loss, stale cleanup refusal, deletion of private data while another sandbox runs, and a fresh start after
 deletion. It removes only its own projects and volumes. Set `INDEPENDENT_E2E_ARTIFACTS` to an absolute folder to keep its
 diagnostics. No installed Lab or catalog is used. CI runs this workflow separately from the unit tests.

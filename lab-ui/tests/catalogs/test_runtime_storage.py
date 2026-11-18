@@ -45,7 +45,7 @@ class RuntimeStorage(Case):
         plan = self.plan()
         self.assertEqual(plan["removes"]["containers"], [self.resources["containers"][0]["name"]])
         self.assertEqual(plan["removes"]["volumes"], [])
-        self.assertIn("Volumes and runtime files", plan["keeps"])
+        self.assertIn("Volumes and sandbox files", plan["keeps"])
         plan = self.plan("data")
         self.assertEqual(plan["removes"]["volumes"], [self.resources["volumes"][0]["name"]])
         self.assertEqual(plan["removes"]["folders"], [self.root_path.relative_to(self.root).as_posix()])

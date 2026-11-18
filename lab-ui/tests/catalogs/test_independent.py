@@ -1,4 +1,4 @@
-"""Independent runtime generation owns mutable storage, ports and image names without changing linked sources.
+"""Sandbox generation owns mutable storage, ports and image names without changing linked sources.
 
 The deterministic compiler and lifecycle cases here complement the real multi-project
 Docker test, which proves data and seed identity survive stop/resume alongside a shared Lab.
@@ -340,7 +340,7 @@ class Independent(Case):
         worker = Mock()
         steps[0](worker)
         sent = worker.exec.call_args.args[0]
-        self.assertEqual((title, kwargs["verb"]), ("Apply independent playground", "apply"))
+        self.assertEqual((title, kwargs["verb"]), ("Apply sandbox", "apply"))
         self.assertIn("--force-recreate", sent)
         self.assertEqual(sent[-1], "db")
         self.assertNotIn("a-app", sent)

@@ -1,8 +1,8 @@
 """One private Compose project per named instance, assembled from its playground's dependency closure.
 
 Catalog source stays in place. Writable binds, Compose volumes, networks, built image
-names and published ports belong to the runtime. Its generated configuration is private
-and fixed until an explicit Apply; stop keeps every runtime's data and seed record.
+names and published ports belong to the sandbox. Its generated configuration is private
+and fixed until an explicit Apply; stop keeps every sandbox's data and seed record.
 """
 
 import copy
@@ -31,7 +31,7 @@ LOCAL_URL = re.compile(r"(?P<host>https?://(?:localhost|127\.0\.0\.1)):(?P<port>
 
 def folder(pid):
     if not paths.is_id(pid):
-        raise paths.NotFound("No such runtime")
+        raise paths.NotFound("No such sandbox")
     return paths.ROOT / FOLDER / hashlib.sha256(runtime_settings.key(pid).encode()).hexdigest()[:24]
 
 
@@ -47,9 +47,9 @@ def read(pid):
     try:
         value = json.loads(file.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
-        raise ValueError("The independent runtime record cannot be read") from error
+        raise ValueError("The sandbox record cannot be read") from error
     if not isinstance(value, dict) or type(value.get("schema")) is not int or value.get("schema") != 1 or value.get("id") != runtime_settings.key(pid) or value.get("project") != name(pid):
-        raise ValueError("The independent runtime record does not match this runtime")
+        raise ValueError("The sandbox record does not match this sandbox")
     return value
 
 
@@ -87,7 +87,7 @@ def _loopback(url):
 
 
 def _gateway_url(config):
-    """The gateway as another container of this runtime reaches it. Its published port is for a browser."""
+    """The gateway as another container of this sandbox reaches it. Its published port is for a browser."""
     gateway = config.get("services", {}).get("apim-gateway") or {}
     target = next((port.get("target") for port in gateway.get("ports") or [] if port.get("target")), None)
     return f"http://apim-gateway:{target}" if target else None
@@ -114,15 +114,15 @@ def _copy(source, target):
             for entry in [*dirs, *files]:
                 item = Path(parent) / entry
                 if item.is_symlink():
-                    raise ValueError("A writable runtime folder contains a link; use a dedicated data folder")
+                    raise ValueError("A writable sandbox folder contains a link; use a dedicated data folder")
                 if not item.is_dir() and not item.is_file():
-                    raise ValueError("A runtime cannot copy a socket, device or pipe")
+                    raise ValueError("A sandbox cannot copy a socket, device or pipe")
         shutil.copytree(source, target, ignore=shutil.ignore_patterns(".git"))
     elif source.is_file() and stat.S_ISREG(source.stat().st_mode):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
     else:
-        raise ValueError("A runtime bind must name an existing file or folder")
+        raise ValueError("A sandbox bind must name an existing file or folder")
 
 
 def _mount(source, target, empty=False, refresh=False):
@@ -148,7 +148,7 @@ def _requirements(gathered):
             if wanted:
                 actual = gathered["found"]["services"][component["services"][0]]["tag"]
                 if not layers.enough(gathered["unit"], component["id"], actual, wanted):
-                    raise ValueError(f"Choose {component['id']} {wanted} or later on Images before preparing this runtime")
+                    raise ValueError(f"Choose {component['id']} {wanted} or later on Images before preparing this sandbox")
     units = {uid: gathered.get("units", {}).get(kind, {}).get(uid, gathered["unit"] if uid == gathered["unit"]["id"] else {})
              for kind, uid in gathered["nodes"]}
     unset = layers._unset({"addons": {uid: {**unit, "settings": unit.get("settings", [])} for uid, unit in units.items()}})
@@ -184,7 +184,7 @@ def _config(pid, gathered, previous, dry_run=False, snapshot=None):
         old_name = service.pop("container_name", None)
         if (service.get("network_mode") or service.get("volumes_from") or service.get("privileged")
                 or service.get("devices") or any(service.get(key) == "host" for key in ("pid", "ipc", "uts"))):
-            raise ValueError("Independent runtimes require their own networks and mounts")
+            raise ValueError("Sandboxes require their own networks and mounts")
         for key, network in (service.get("networks") or {}).items():
             if old_name:
                 network = network or {}
@@ -193,7 +193,7 @@ def _config(pid, gathered, previous, dry_run=False, snapshot=None):
         for index, port in enumerate(service.get("ports", [])):
             original = str(port.get("published") or "0")
             if not original.isdigit():
-                raise ValueError("Independent runtimes require individual published ports")
+                raise ValueError("Sandboxes require individual published ports")
             key = original if original != "0" else f"{service_name}:{index}"
             if key not in ports:
                 ports[key] = _port(used)
@@ -212,7 +212,7 @@ def _config(pid, gathered, previous, dry_run=False, snapshot=None):
             if mount["type"] == "bind":
                 source = Path(mount["source"])
                 if source.name == "docker.sock" or (source.exists() and source.is_socket()):
-                    raise ValueError("Independent runtimes cannot mount the host Docker socket")
+                    raise ValueError("Sandboxes cannot mount the host Docker socket")
                 real = source.resolve()
                 shared = next((root for root in roots if real == root or root in real.parents), None)
                 base = shared or real
@@ -232,7 +232,7 @@ def _config(pid, gathered, previous, dry_run=False, snapshot=None):
                     if saved:
                         target = Path(saved)
                         if not target.is_relative_to(folder(pid)):
-                            raise ValueError("A saved runtime mount escapes its private directory")
+                            raise ValueError("A saved sandbox mount escapes its private directory")
                         if target != private / real.relative_to(base):
                             # Older runtimes stored overlapping mounts separately. Apply
                             # keeps their existing data instead of switching to an empty path.
@@ -251,7 +251,7 @@ def _config(pid, gathered, previous, dry_run=False, snapshot=None):
                 config.setdefault("volumes", {})[volume] = {}
                 mount["source"] = volume
             elif mount["type"] not in ("volume", "tmpfs"):
-                raise ValueError("This mount cannot be isolated in a playground runtime")
+                raise ValueError("This mount cannot be isolated in a playground sandbox")
             mounts.append(mount)
         service["volumes"] = mounts
         if service.get("build"):
@@ -267,13 +267,13 @@ def _config(pid, gathered, previous, dry_run=False, snapshot=None):
         for spec in config.get(kind, {}).values():
             if isinstance(spec, dict):
                 if spec.get("driver_opts") or spec.get("driver") not in (None, "local", "bridge"):
-                    raise ValueError("Independent runtimes require local Docker storage and bridge networks")
+                    raise ValueError("Sandboxes require local Docker storage and bridge networks")
                 spec.pop("name", None)
                 spec.pop("external", None)
     for kind in ("secrets", "configs"):
         for key, spec in config.get(kind, {}).items():
             if spec.get("external"):
-                raise ValueError("Independent runtimes cannot use external secrets or configs")
+                raise ValueError("Sandboxes cannot use external secrets or configs")
             if spec.get("file"):
                 target = folder(pid) / "inputs" / kind / key
                 if not dry_run:
@@ -309,7 +309,7 @@ def _config(pid, gathered, previous, dry_run=False, snapshot=None):
         if key in products.SEED_MANAGEMENT_URLS and value:
             url = urlsplit(value)
             if url.hostname not in aliases:
-                raise ValueError(f"{key} must address a service in the independent runtime")
+                raise ValueError(f"{key} must address a service in the sandbox")
     return config, ports, binds
 
 
@@ -375,7 +375,7 @@ def containers(pid):
     rc, out, err = compose.run([*compose.COMPOSE, "-p", name(pid), "ps", "--all", "--format", "json"],
                                cwd=compose.scratch(), timeout=15)
     if rc:
-        raise compose.ComposeError("Docker could not read the independent runtime")
+        raise compose.ComposeError("Docker could not read the sandbox")
     text = out.strip()
     rows = json.loads(text) if text.startswith("[") else [json.loads(line) for line in text.splitlines() if line]
     return {row["Service"]: row for row in rows}
@@ -416,11 +416,11 @@ def _wait(pid, job, names=None):
         if good:
             return
         time.sleep(1)
-    raise JobFailed("The independent runtime did not become ready within ten minutes")
+    raise JobFailed("The sandbox did not become ready within ten minutes")
 
 
 def _label(pid):
-    return runtime_settings.instances().get(pid, {}).get("name", "independent playground")
+    return runtime_settings.instances().get(pid, {}).get("name", "sandbox")
 
 
 def _plugins(pid, value, job):
@@ -429,7 +429,7 @@ def _plugins(pid, value, job):
         job.step("Prepare required plugins")
         private = value["binds"].get(str((paths.ROOT / target["folder"]).resolve()))
         if not private:
-            raise JobFailed("The product's plugin folder is not mounted in this independent runtime")
+            raise JobFailed("The product's plugin folder is not mounted in this sandbox")
         services = {key: {**spec["display"], "image": spec["image"],
                           "container": f"{value['project']}-{key}-1"} for key, spec in value["services"].items()}
         own_target = {**target, "folder": private,
@@ -443,17 +443,17 @@ def _plugins(pid, value, job):
 
 def start(pid):
     def run(job):
-        job.step("Prepare independent runtime")
+        job.step("Prepare sandbox")
         value = prepare(pid)
         value["active"] = True
         _write(folder(pid) / "runtime.json", value)
         if not value["initialized"]:
             _plugins(pid, value, job)
-            job.step("Start independent platform and apps")
+            job.step("Start sandbox platform and apps")
             job.exec(command(pid, "up", "-d", "--build"))
         else:
             lasting = [key for key in value["services"] if key not in value["oneshots"]]
-            job.step("Resume independent platform and apps")
+            job.step("Resume sandbox platform and apps")
             job.exec(command(pid, "up", "-d", "--no-deps", *lasting))
         _wait(pid, job)
         _tested(pid, value)
@@ -539,11 +539,11 @@ def change_plan(pid, operation):
         raise ValueError("Choose Apply or Update")
     value = read(pid)
     if not value:
-        raise ValueError("Start this runtime first")
+        raise ValueError("Start this sandbox first")
     if value.get("clone_pending"):
-        raise ValueError("This clone is incomplete; delete it and create a new runtime")
+        raise ValueError("This clone is incomplete; delete it and create a new sandbox")
     if not value.get("initialized"):
-        raise ValueError("Start this runtime successfully first")
+        raise ValueError("Start this sandbox successfully first")
     running = _running(pid, value)
     if operation == "apply":
         plan(pid, refresh=True)
@@ -594,7 +594,7 @@ def update(pid):
         # never retag another runtime's image or substitute today's Shared configuration.
         if any(not config["services"][key]["image"].startswith(name(pid) + "/")
                for key in references if key in config["services"]):
-            raise JobFailed("The clone image alias does not belong to this runtime")
+            raise JobFailed("The clone image alias does not belong to this sandbox")
         pulls = sorted({references[key] for key, service in config["services"].items() if key in references
                         and key not in snapshot.get("local", [])
                         and not (value["services"][key].get("display") or {}).get("built")})
@@ -618,7 +618,7 @@ def update(pid):
 def restart(pid):
     value = read(pid)
     if not value:
-        raise ValueError("Start this runtime first")
+        raise ValueError("Start this sandbox first")
     names = _running(pid, value)
     if not names:
         raise ValueError("Nothing runs")
@@ -635,14 +635,14 @@ def _tested(pid, value):
 def stop(pid, remove=False):
     value = read(pid)
     if not value:
-        raise ValueError("This independent playground has not been started")
+        raise ValueError("This sandbox has not been started")
     def run(job):
         if remove and value["seed"]:
             job.step("Delete what its seed created")
             job.exec(command(pid, "run", "--rm", "--no-deps", value["seed"], "--remove"))
             value["initialized"] = False
             _write(folder(pid) / "runtime.json", value)
-        job.step("Stop independent platform and apps")
+        job.step("Stop sandbox platform and apps")
         job.exec(command(pid, "stop"))
         value["active"] = False
         _write(folder(pid) / "runtime.json", value)
@@ -653,7 +653,7 @@ def stop(pid, remove=False):
 def reseed(pid):
     value = read(pid)
     if not value or not value["seed"] or not describe(pid)["running"]:
-        raise ValueError("Start this independent playground before re-seeding")
+        raise ValueError("Start this sandbox before re-seeding")
     return JOBS.start("Re-seed " + _label(pid), [command(pid, "run", "--rm", "--no-deps", value["seed"]),
                       lambda job: _tested(pid, value)],
                       key=f"playground:{pid}", verb="reseed")
@@ -671,10 +671,10 @@ def created(pid):
     if not file.exists():
         return []
     if file.is_symlink() or not file.resolve().is_relative_to(folder(pid).resolve()) or file.stat().st_size > 1 << 20:
-        raise ValueError("The independent seed record is not a regular runtime file")
+        raise ValueError("The sandbox seed record is not a regular file")
     rows = json.loads(file.read_text(encoding="utf-8"))
     if not isinstance(rows, list):
-        raise ValueError("The independent seed record is damaged")
+        raise ValueError("The sandbox seed record is damaged")
     counts = {}
     for row in rows:
         label = row.get("label") if isinstance(row, dict) else None
@@ -701,11 +701,11 @@ def plan(pid, refresh=False):
 def service(pid, service_name, operation):
     value = read(pid)
     if not value or service_name not in value["services"]:
-        raise paths.NotFound("No such independent service")
+        raise paths.NotFound("No such sandbox service")
     if operation not in ("start", "stop", "restart"):
         raise ValueError("Choose Start, Stop or Restart")
     if operation != "stop" and value.get("clone_pending"):
-        raise ValueError("This clone is incomplete; delete it and create a new runtime")
+        raise ValueError("This clone is incomplete; delete it and create a new sandbox")
     if service_name in value["oneshots"] and operation != "stop":
         raise ValueError("Use Re-seed to run the playground seed")
     def run(job):
@@ -719,14 +719,14 @@ def service(pid, service_name, operation):
 
 
 def service_group(pid, names, operation, gid, label):
-    """Group controls use only captured services of the explicit private runtime."""
+    """Group controls use only captured services of the explicit private sandbox."""
     value = read(pid)
     if not value or not names or any(name not in value["services"] for name in names):
-        raise paths.NotFound("No such independent services")
+        raise paths.NotFound("No such sandbox services")
     if operation not in ("start", "stop", "restart"):
         raise ValueError("Choose Start, Stop or Restart")
     if operation != "stop" and value.get("clone_pending"):
-        raise ValueError("This clone is incomplete; delete it and create a new runtime")
+        raise ValueError("This clone is incomplete; delete it and create a new sandbox")
     def run(job):
         chosen = [name for name in names if operation == "stop" or name not in value["oneshots"]]
         if operation == "restart":
@@ -753,8 +753,8 @@ def resolve_service(key):
         value = json.loads(file.read_text(encoding="utf-8"))
         pid = runtime_settings.alias(value.get("id"))
         if not paths.is_id(pid) or read(pid) != value:
-            raise ValueError("An independent runtime record is damaged")
+            raise ValueError("A sandbox record is damaged")
         for service_name in value["services"]:
             if service_key(pid, service_name) == key:
                 return pid, service_name
-    raise paths.NotFound("No such independent service")
+    raise paths.NotFound("No such sandbox service")
