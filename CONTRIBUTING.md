@@ -161,7 +161,7 @@ Maintainers: see [docs/maintaining.md](docs/maintaining.md) to move or fork the 
 
 Your contribution is licensed under the project's license, the GNU Affero General Public License v3.0 (see [LICENSE](LICENSE); [NOTICE](NOTICE) requires its attribution to stay). There is no contributor license agreement, and no sign-off is required.
 
-### Try independent playgrounds
+### Try playground sandboxes
 
 Run the isolated Docker workflow explicitly:
 
