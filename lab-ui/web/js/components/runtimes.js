@@ -1,10 +1,8 @@
-// The Containers page's runtime inventory: stopped runtimes stay visible, and cleanup previews only their own resources.
-import { $, esc, icon, size, api, store, router, setHTML, loading, recallObject, remember } from "../core.js";
-import { effectsDialog, confirmDialog, confirmPlan, openMenu, toast, statusHtml, itemLink, paintActions, actionButton, holdOff, serviceCells, containerActions, GAP, dockerDown } from "./ui.js";
+// Named runtime management and storage, shared by its page and a playground's More dialog.
+import { $, esc, icon, size, api, store, router, setHTML, loading } from "../core.js";
+import { effectsDialog, confirmDialog, openMenu, toast, statusHtml, paintActions, actionButton, holdOff } from "./ui.js";
 import { createRuntime, independentAction, runtimeActionEntries } from "../dialogs/runtimes.js";
-import { openSettings } from "../dialogs/editor.js";
 import { runJob } from "../activity/jobs.js";
-import { selectLogs } from "../pages/logs.js";
 
 const CLEANUP = {
   containers: { label: "Delete containers, keep data", hint: "Keeps runtime; Start recreates containers" },
@@ -13,81 +11,44 @@ const CLEANUP = {
 };
 
 export function runtimePanel(root, playground = null, { heading = true, current = null } = {}) {
-  let model = null, visible = false, reading = false, pending = false, serial = 0, signature = "";
-  const expanded = recallObject("runtime-expanded");
-  root.innerHTML = `<div class="card runtime-overview"><div class="card-head">${heading ? "<h2>Runtimes</h2>" : ""}
+  let model = null, visible = false, reading = false, pending = false, serial = 0, signature = "", failure = "";
+  root.innerHTML = `<div class="card runtime-overview"><div class="card-head">${heading ? "<h2>Independent runtimes</h2>" : ""}
     <div class="page-actions">${playground ? '<button class="btn" data-runtime-create>Create runtime</button>' : ""}<button class="btn" data-runtime-refresh>Refresh storage</button></div></div>
-    <div class="runtime-summary"></div><div class="table-wrap"><table class="table"><thead><tr><th>Runtime</th><th>State</th><th>Ports</th><th>CPU</th><th>Memory</th><th>Storage</th><th>Actions</th></tr></thead>
-    <tbody><tr><td colspan="7" class="empty">${loading("Reading runtimes")}</td></tr></tbody></table></div></div>`;
-  const source = (row) => row.id ? store.item("playground", row.playground || row.id) : store.state?.platform;
+    <div class="runtime-summary"></div><div class="table-wrap"><table class="table"><thead><tr><th>Runtime</th><th>State</th><th>Storage</th><th>Actions</th></tr></thead>
+    <tbody><tr><td colspan="4" class="empty">${loading("Reading runtimes")}</td></tr></tbody></table></div></div>`;
+  const source = (row) => store.item("playground", row.playground || row.id);
   const wait = () => store.wait(true) || (reading ? "Reading runtimes" : "");
   const cannot = (row) => row.problem || (!row.source ? "Catalog source unavailable" : "");
 
-  function services(row) {
-    const known = Object.entries(store.state?.services || {});
-    const rows = (row.services || []).map((entry) => {
-      const live = known.find(([key, value]) => row.id
-        ? value.runtime?.id === row.id && value.runtime.service === entry.id : key === entry.id)?.[1];
-      const service = { ...entry, ...live, role: entry.role || live?.role, ports: entry.ports }, state = service.state || { key: "absent", label: "Not created" };
-      // A private image's local snapshot tag is not its captured source version.
-      if (row.id) service.running_tag = null;
-      const containers = (entry.containers || []).map((c) => c.name).join(", ");
-      return `<li class="container cols" data-runtime-service="${esc(entry.key || "")}"><span></span><span class="s-name"><span class="c-name" data-tip="${esc(entry.id)}">${esc(entry.label)}</span>
-        <span class="c-id" data-tip="${esc(containers || "No container")}">${esc(containers || "No container")}</span></span>
-        <span class="s-state">${statusHtml(state.key, state.label)}</span>${serviceCells(service)}
-        <span class="s-uptime">${esc(state.running ? service.uptime || "" : "")}</span><span class="row-icons">${GAP}${GAP}${GAP}${entry.key
-          ? containerActions(entry.key, service, { attribute: "data-runtime-service-act" }) : GAP + GAP + GAP}</span></li>`;
-    }).join("");
-    return `<div class="cols stack-head" aria-hidden="true"><span></span><span>Service / container</span><span>State</span><span>Version</span><span>Ports</span><span>Uptime</span><span></span></div>
-      <ul class="containers">${rows || '<li class="empty">No containers or services yet</li>'}</ul>`;
-  }
-
-  function toggle(row) {
-    const key = row.id || "shared";
-    expanded[key] = !expanded[key];
-    remember("runtime-expanded", JSON.stringify(expanded));
-    render();
-    $(`[data-runtime-row="${model.runtimes.indexOf(row)}"] [data-runtime-toggle]`, root)?.focus();
-  }
-
   function render() {
-    if (!model) return;
-    const summary = [...(playground ? [] : ["Playgrounds use the shared platform unless a named runtime is opened"]),
-      ...(model.shared_storage || []).map((part) => `${part.kind}: ${size(part.bytes)} (machine-wide)`),
-      ...(model.problems || []).map((p) => p.message)];
+    const summary = [...(model?.shared_storage || []).map((part) => `${part.kind}: ${size(part.bytes)} (machine-wide)`),
+      ...(model?.problems || []).map((p) => p.message), ...(failure ? [failure] : [])];
     setHTML($(".runtime-summary", root), summary.length ? `<p class="sub">${summary.map(esc).join("; ")}</p>` : "");
+    if (!model) {
+      setHTML($("tbody", root), `<tr><td colspan="4" class="empty">${failure ? "Runtime information unavailable" : loading("Reading runtimes")}</td></tr>`);
+      return;
+    }
+    let parent = null;
     setHTML($("tbody", root), (model.runtimes || []).map((row, index) => {
-      if (playground && row.playground !== playground) return "";
+      if (!row.id || playground && row.playground !== playground) return "";
+      const group = !playground && parent !== row.playground;
+      parent = row.playground;
       const total = row.volume_bytes === null ? null : row.volume_bytes + (row.local_bytes || 0);
-      const button = row.id ? actionButton({ key: `playground:${row.id}`, verb: row.running || row.active ? "stop" : "start",
-        label: row.running || row.active ? "Stop" : "Start", cls: "btn", attrs: `data-runtime-act="${row.running || row.active ? "stop" : "start"}" data-busy` }) : "";
-      const ports = row.ports || [];
-      const unfolded = !!expanded[row.id || "shared"];
-      const open = row.id && row.source ? `<a class="btn" href="#/playgrounds/${esc(row.id)}" aria-label="Open runtime ${esc(row.name)}" data-tip="Guide and consoles">Open runtime</a>` : "";
-      return `<tr class="opens" data-runtime-row="${index}"><td><div class="runtime-name"><button class="s-toggle" data-runtime-toggle aria-expanded="${unfolded}" aria-label="Containers of ${esc(row.name)}">${icon("chevron")}</button>
-        <div>${row.id && row.source ? itemLink({ kind: "playground", id: row.id, name: row.name }) : esc(row.name)}
-        <span class="sub">${row.id ? "Independent" + (row.playground_name ? `, ${row.playground_name}` : "") + (!row.source ? ", Source unavailable" : "") : "Shared"}</span></div></div></td>
+      const button = actionButton({ key: `playground:${row.id}`, verb: row.running || row.active ? "stop" : "start",
+        label: row.running || row.active ? "Stop" : "Start", cls: "btn", attrs: `data-runtime-act="${row.running || row.active ? "stop" : "start"}" data-busy` });
+      const open = row.source ? `<a class="btn" href="#/playgrounds/${esc(row.id)}" aria-label="Open runtime ${esc(row.name)}" data-tip="Guide and consoles">Open runtime</a>` : "";
+      return `${group ? `<tr><td colspan="4"><div class="card-head"><h3>${esc(row.playground_name || row.playground || row.name)}</h3>${source(row) ? `<button class="btn" data-runtime-create-for="${esc(row.playground || row.id)}">Create runtime</button>` : ""}</div></td></tr>` : ""}
+        <tr data-runtime-row="${index}"><td><div class="runtime-name">${esc(row.name)}${!row.source ? '<span class="sub">Source unavailable</span>' : ""}</div></td>
         <td>${statusHtml(row.problem ? "issue" : row.running ? "running" : "stopped", row.problem ? "Needs attention" : row.state)}</td>
-        <td><span class="s-ports" data-tip="${esc(ports.join(", "))}">${ports.length ? `<span>${esc(ports[0])}</span>${ports.length > 1 ? `<span>+${ports.length - 1}</span>` : ""}` : "—"}</span></td>
-        <td>${row.cpu_percent === null ? "—" : `${row.cpu_percent}%`}</td><td>${size(row.memory_bytes, true)}</td>
         <td><button class="btn" data-runtime-details aria-label="Storage of ${esc(row.name)}" data-tip="Storage details">${size(total)}</button></td>
-        <td><div class="page-actions">${open}${button}<span class="row-icons"><button class="icon-btn" data-runtime-menu aria-haspopup="true" aria-label="Manage ${esc(row.name)}" data-tip="More">${icon("more")}</button></span></div></td></tr>
-        ${unfolded ? `<tr class="runtime-services" data-runtime-services="${esc(row.id || "shared")}"><td colspan="7">${services(row)}</td></tr>` : ""}`;
-    }).join("") || '<tr><td colspan="7" class="empty">No independent runtimes yet</td></tr>');
+        <td><div class="page-actions"><a class="btn" href="#/containers/${encodeURIComponent(row.id)}" aria-label="Containers of ${esc(row.name)}">Containers</a>${open}${button}<span class="row-icons"><button class="icon-btn" data-runtime-menu aria-haspopup="true" aria-label="Manage ${esc(row.name)}" data-tip="More">${icon("more")}</button></span></div></td></tr>`;
+    }).join("") || `<tr><td colspan="4" class="empty">No independent runtimes yet${playground ? "" : ' <a href="#/playgrounds">Choose a playground</a>'}</td></tr>`);
     for (const el of root.querySelectorAll("[data-runtime-act]")) {
       const row = model.runtimes[Number(el.closest("[data-runtime-row]").dataset.runtimeRow)];
       const reason = wait() || (el.dataset.runtimeAct === "start" ? cannot(row) : row.problem);
       holdOff(el, !!reason, reason || "");
     }
-    for (const button of root.querySelectorAll("[data-runtime-menu], [data-runtime-create]")) holdOff(button, !!wait(), wait());
-    for (const button of root.querySelectorAll("[data-runtime-service-act]")) {
-      const key = button.closest("[data-runtime-service]").dataset.runtimeService;
-      const row = model.runtimes.find((r) => r.services?.some((s) => s.key === key)), service = store.service(key);
-      const unavailable = !service || (row?.id ? service.runtime?.id !== row.id : !!service.runtime);
-      const reason = unavailable ? "Service state unavailable" : button.dataset.runtimeServiceAct === "logs"
-        ? dockerDown() && "Docker is unavailable" : row.problem || wait();
-      holdOff(button, !!reason, reason || "");
-    }
+    for (const button of root.querySelectorAll("[data-runtime-create], [data-runtime-create-for], [data-runtime-refresh]")) holdOff(button, !!wait(), wait());
     paintActions(root);
   }
 
@@ -96,16 +57,16 @@ export function runtimePanel(root, playground = null, { heading = true, current 
     if (reading) { pending = true; return; }
     const current = ++serial;
     reading = true;
+    failure = "";
     render();
     try {
       const query = new URLSearchParams();
       if (playground) query.set("playground", playground);
       if (fresh) query.set("refresh", "1");
-      const path = "/api/runtimes";
-      const result = await api(query.size ? path + "?" + query : path);
-      if (current === serial && visible) { model = result; render(); }
+      const result = await api(query.size ? "/api/runtimes?" + query : "/api/runtimes");
+      if (current === serial && visible) model = result;
     } catch (error) {
-      if (current === serial && visible) setHTML($(".runtime-summary", root), `<p class="sub">${esc(error.message)}</p>`);
+      if (current === serial && visible) failure = error.message;
     } finally {
       reading = false;
       if (current === serial && visible) render();
@@ -117,20 +78,6 @@ export function runtimePanel(root, playground = null, { heading = true, current 
     if (wait()) return;
     if (operation === "start") return independentAction(store.item("playground", row.id) || { id: row.id, name: row.name }, operation);
     runJob(() => api(`/api/runtimes/${row.id}/${operation}`, {}), { key: `playground:${row.id}`, verb: operation });
-  }
-
-  async function serviceAction(button) {
-    const key = button.closest("[data-runtime-service]").dataset.runtimeService;
-    const service = store.service(key), action = button.dataset.runtimeServiceAct;
-    if (!service) return;
-    if (action === "logs") {
-      selectLogs([key]);
-      root.closest("dialog[open]")?.close();
-      return router.go("#/logs");
-    }
-    if (action === "start" && !(await confirmPlan(`Start ${service.label}`, "Start", service.brings?.length || service.recreates?.length
-      ? { starts: service.brings || [], restarts: service.recreates || [] } : null))) return;
-    runJob(() => api(`/api/services/${key}/${action}`, {}), { key: `service:${key}`, verb: action });
   }
 
   async function cleanup(row, operation) {
@@ -155,6 +102,8 @@ export function runtimePanel(root, playground = null, { heading = true, current 
 
   function details(row) {
     const rows = [{ label: "Containers", items: row.containers.map((c) => `${c.name}: ${c.state}`) },
+      { label: "CPU", items: row.cpu_percent == null ? [] : [`${row.cpu_percent}%`] },
+      { label: "Memory", items: row.memory_bytes == null ? [] : [size(row.memory_bytes)] },
       { label: "Ports", items: row.ports || [] },
       { label: "Volumes", items: row.volumes.map((v) => `${v.name}: ${size(v.bytes)}`) },
       { label: "Runtime files", items: row.folder ? [`${row.folder}: ${size(row.local_bytes)}`] : [] },
@@ -167,39 +116,33 @@ export function runtimePanel(root, playground = null, { heading = true, current 
 
   root.addEventListener("click", (event) => {
     const button = event.target.closest("button");
-    const selected = model?.runtimes[Number(event.target.closest("[data-runtime-row]")?.dataset.runtimeRow)];
-    if (selected && (button?.hasAttribute("data-runtime-toggle") || !event.target.closest("a, button"))) return toggle(selected);
     if (!button || button.getAttribute("aria-disabled") === "true") return;
-    if (button.hasAttribute("data-runtime-service-act")) {
-      event.stopPropagation();
-      return serviceAction(button);
-    }
     if (button.hasAttribute("data-runtime-refresh")) return read(true);
     if (button.hasAttribute("data-runtime-create")) return createRuntime(store.item("playground", playground), current);
+    if (button.hasAttribute("data-runtime-create-for")) return createRuntime(store.item("playground", button.dataset.runtimeCreateFor));
     const row = model?.runtimes[Number(button.closest("[data-runtime-row]")?.dataset.runtimeRow)];
     if (!row) return;
     if (button.hasAttribute("data-runtime-details")) return details(row);
     if (button.hasAttribute("data-runtime-act")) return act(row, button.dataset.runtimeAct);
     if (button.hasAttribute("data-runtime-menu")) {
       const item = source(row), blocked = wait();
-      const choices = row.id ? [
+      const choices = [
         { label: "Open runtime", onSelect: () => navigate(row.id), disabled: !item, reason: item ? "" : "Catalog source unavailable" },
-        { label: "Source playground", onSelect: () => navigate(row.playground || row.id),
-          disabled: !item, reason: item ? "" : "Catalog source unavailable" }] : [
-        { label: "Platform settings", disabled: !!blocked || !item, reason: blocked || "", onSelect: () => openSettings(item) }];
-      if (row.id) choices.push(
+        { label: "Source playground", onSelect: () => navigate(row.playground || row.id), disabled: !item, reason: item ? "" : "Catalog source unavailable" },
+        { label: "Clone runtime", disabled: !!blocked || !item || !row.running || !!cannot(row), reason: blocked || cannot(row) || "Start this runtime first",
+          onSelect: () => createRuntime(item, row.id) },
         { label: "Restart", disabled: !!blocked || !row.running || !!cannot(row), reason: blocked || cannot(row) || "Start this runtime first", onSelect: () => act(row, "restart") },
         ...runtimeActionEntries(store.item("playground", row.id) || { id: row.id, name: row.name,
           runtime: { prepared: row.prepared, initialized: row.initialized, running: !!row.running } }).map((entry) => ({ ...entry,
           disabled: !!blocked || !!cannot(row) || entry.disabled, reason: blocked || cannot(row) || entry.reason })),
         ...["containers", "data", "delete"].map((operation) => ({ ...CLEANUP[operation], danger: operation !== "containers",
           disabled: !!blocked || !(row.cleanup[operation] || { enabled: false }).enabled, reason: blocked || row.cleanup[operation]?.reason,
-          onSelect: () => cleanup(row, operation) })));
+          onSelect: () => cleanup(row, operation) }))];
       openMenu(button, choices);
     }
   });
 
-  const stamp = (state) => JSON.stringify([state?.job?.id, state?.job?.done, state?.platform?.state?.key,
+  const stamp = (state) => JSON.stringify([state?.docker?.error, state?.job?.id, state?.job?.done,
     (state?.playgrounds || []).map((p) => [p.id, p.runtime?.mode, p.on, p.state?.key])]);
   return {
     show() { visible = true; signature = stamp(store.state); read(); },

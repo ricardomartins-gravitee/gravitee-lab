@@ -9,7 +9,11 @@ import { Ev, installDom, isOff, offWhy, text } from "./dom-stub.mjs";
 
 mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
 const OPEN = JSON.stringify({ "group:alert-engine": true, "group:api-management": true });   // the groups the page remembers open
-const page = installDom({ stored: { expanded: OPEN }, fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }) });
+const requests = [];
+const page = installDom({ stored: { expanded: OPEN }, fetch: async (path, options = {}) => {
+  requests.push({ path, body: options.body ? JSON.parse(options.body) : null });
+  return { ok: true, status: 200, json: async () => ({ id: "abcdef12", key: "service:runtime-a--api", verb: "stop", title: "Stop", done: true, ok: true, phases: [], progress: null }) };
+} });
 globalThis.innerHeight = 800;   // the menu opens under its button, or above it when the window ends first
 const { store } = await import("../../../web/js/core.js");
 const { stackPage } = await import("../../../web/js/pages/stack.js");
@@ -253,13 +257,120 @@ test("shared Reset names its own scope and explicitly keeps independent runtime 
   assert.match(text, /Stays: Private A \(independent\)/);
 });
 
-test("Shared rendering does not interpret expanded runtime rows as Shared services", () => {
+test("Containers has a runtime selector instead of a runtime inventory", () => {
   draw(lab({ licensed: true }));
-  const inventory = section.querySelector("[data-runtime-panel]");
-  const child = page.doc.createElement("li");
-  child.className = "container";
-  child.innerHTML = '<span class="s-uptime"></span>';
-  inventory.append(child);
-  assert.doesNotThrow(() => stackPage.render(store.state));
-  child.remove();
+  assert.equal(section.querySelector("[data-runtime-panel]"), null);
+  assert.equal(text(section.querySelector("#container-runtime-value")), "Shared platform");
+  assert.ok(section.querySelector('a[href="#/runtimes"]'));
+});
+
+function scopedLab() {
+  const state = lab({ licensed: true });
+  state.runtime_scopes = {};
+  for (const [id, port] of [["runtime-a", "31000"], ["runtime-b", "32000"]]) {
+    const api = `${id}--api`, seed = `${id}--seed`;
+    state.services[api] = service("Private API", RUNNING, { container: `${id}-api-1`, ports: [port], tag: "2.3", running_tag: null,
+      runtime: { id, service: "api" } });
+    state.services[seed] = service("Seed", { key: "done", label: "Done", running: false }, { role: "seed", runtime: { id, service: "seed" } });
+    state.runtime_scopes[id] = { id, name: id === "runtime-a" ? "Demo" : "Other", playground: "local/source", playground_name: "Source", source: true,
+      prepared: true, initialized: true, running: true, active: true, services: [api, seed], groups: [
+        group(`${id}--product`, "Product", [api, seed], RUNNING, { runtime: id })] };
+  }
+  state.links = [{ label: "Demo console", url: "http://localhost:31000", port: 31000, section: "Demo", service: "runtime-a--api", up: true },
+    { label: "Other console", url: "http://localhost:32000", port: 32000, section: "Other", service: "runtime-b--api", up: true }];
+  return state;
+}
+
+test("one Containers table displays only the selected runtime, with its ports, console and captured version", () => {
+  const state = scopedLab();
+  stackPage.show(["runtime-a"]);
+  draw(state);
+  assert.equal(store.unit('group:runtime-a--product'), state.runtime_scopes['runtime-a'].groups[0]);
+  section.querySelector('[data-toggle]').click();
+  stackPage.render(state);
+  assert.match(text(section.querySelector('.groups')), /Private API/);
+  assert.match(text(section.querySelector('.groups')), /31000/);
+  assert.match(text(section.querySelector('.groups')), /2\.3/);
+  assert.doesNotMatch(text(section.querySelector('.groups')), /32000|gateway|alert-engine/);
+  assert.match(text(section.querySelector('.links')), /Demo console/);
+  assert.doesNotMatch(text(section.querySelector('.links')), /Other console/);
+  assert.equal(section.querySelector('.page-head > .page-actions').hidden, true);
+  assert.equal(section.querySelector('.groups [data-settings]'), null);
+  const seed = section.querySelector('[data-service="runtime-a--seed"]');
+  assert.equal(seed.querySelector('[data-act="start"]'), null);
+  assert.equal(seed.querySelector('[data-act="restart"]'), null);
+  stackPage.show([]);
+  draw(state);
+  assert.equal(text(section.querySelector('#container-runtime-value')), 'Shared platform');
+  assert.equal(section.querySelector('[data-service="runtime-a--api"]'), null);
+  assert.equal(section.querySelector('.page-head > .page-actions').hidden, false);
+});
+
+test("service and group controls retain the selected runtime's keys and never call Shared", async () => {
+  const refresh = store.refresh;
+  store.refresh = async () => {};
+  const state = scopedLab();
+  const flush = async () => { for (let i = 0; i < 15; i += 1) await Promise.resolve(); };
+  try {
+    for (const action of ['stop', 'restart', 'start']) {
+      state.services['runtime-a--api'].state = action === 'start' ? { key: 'stopped', label: 'Stopped', running: false } : RUNNING;
+      stackPage.show(['runtime-a']);
+      draw(state);
+      const group = section.querySelector('.group-row');
+      if (group.querySelector('[data-toggle]').getAttribute('aria-expanded') !== 'true') group.querySelector('[data-toggle]').click();
+      stackPage.render(state);
+      requests.length = 0;
+      section.querySelector(`[data-service="runtime-a--api"] [data-act="${action}"]`).click();
+      await flush();
+      assert.deepEqual(requests.filter(r => r.body).map(r => r.path), [`/api/services/runtime-a--api/${action}`]);
+    }
+    state.services['runtime-a--api'].state = RUNNING;
+    draw(state);
+    requests.length = 0;
+    section.querySelector('.group-row [data-act="stop"]').click();
+    await flush();
+    assert.deepEqual(requests.filter(r => r.body).map(r => r.path), ['/api/runtimes/runtime-a/groups/runtime-a--product/stop']);
+  } finally { store.refresh = refresh; stackPage.show([]); draw(lab({ licensed: true })); }
+});
+
+test("Docker offline keeps a selected runtime's captured ports and never falls back to Shared", () => {
+  const state = scopedLab();
+  state.docker.error = 'Docker is not reachable';
+  state.services['runtime-a--api'].state = { key: 'unknown', label: 'Unavailable', running: false };
+  stackPage.show(['runtime-a']);
+  draw(state);
+  assert.equal(text(section.querySelector('#container-runtime-value')), 'Demo');
+  assert.match(text(section.querySelector('.groups')), /31000/);
+  assert.equal(section.querySelector('[data-service="gateway"]'), null);
+  stackPage.show(['runtime-missing']);
+  draw(state);
+  assert.equal(section.querySelector('.stack-layout').hidden, true);
+  assert.equal(section.querySelector('.page-head > .page-actions').hidden, true);
+  stackPage.show([]);
+  draw(lab({ licensed: true }));
+});
+
+test("container Logs selects only its private service and navigation sends no mutation", async () => {
+  const streams = [];
+  globalThis.EventSource = class { constructor(url) { streams.push(url); } close() {} addEventListener() {} };
+  const { logsPage } = await import('../../../web/js/pages/logs.js');
+  const state = scopedLab();
+  stackPage.show(['runtime-a']);
+  draw(state);
+  const logRoot = page.doc.createElement('section');
+  page.doc.body.append(logRoot);
+  logsPage.init(logRoot);
+  const toggle = section.querySelector('.group-row [data-toggle]');
+  if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+  stackPage.render(state);
+  requests.length = 0;
+  section.querySelector('[data-service="runtime-a--api"] [data-act="logs"]').click();
+  assert.equal(location.hash, '#/logs');
+  assert.match(streams.at(-1), /services=runtime-a--api&/);
+  assert.doesNotMatch(streams.at(-1), /runtime-b--api|services=gateway&/);
+  assert.deepEqual(requests.filter(r => r.body), []);
+  logsPage.hide();
+  logRoot.remove();
+  stackPage.show([]);
+  draw(lab({ licensed: true }));
 });

@@ -498,8 +498,6 @@
       <h1>
         "Containers"
     <div class="page-actions">
-      <span class="sub">
-        "Shared platform"
       <button class="btn pbtn" data-act-for="platform" data-act-verb="stop" data-busy="name" data-stack="stop" hidden="">
         <span class="pbtn-wrap">
           <span class="pbtn-face">
@@ -589,39 +587,20 @@
                   <span class="pbtn-mark">
                   <span>
                     "Removing…"
-  <div data-runtime-panel="">
-    <div class="card runtime-overview">
-      <div class="card-head">
-        <h2>
-          "Runtimes"
-        <div class="page-actions">
-          <button class="btn" data-runtime-refresh="">
-            "Refresh storage"
-      <div class="runtime-summary">
-      <div class="table-wrap">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>
-                "Runtime"
-              <th>
-                "State"
-              <th>
-                "Ports"
-              <th>
-                "CPU"
-              <th>
-                "Memory"
-              <th>
-                "Storage"
-              <th>
-                "Actions"
-          <tbody>
-            <tr>
-              <td colspan="7" class="empty">
-                <span class="loading">
-                  <span class="spinner">
-                  "Reading runtimes"
+  <div class="container-context">
+    <span id="container-runtime-label">
+      "Runtime"
+    <button class="combo-btn" data-container-runtime="" aria-label="Runtime" aria-labelledby="container-runtime-label container-runtime-value" aria-haspopup="dialog">
+      <span class="value" id="container-runtime-value">
+        "Shared platform"
+      <svg aria-hidden="true">
+        <use href="#i-chevron">
+    <span data-container-source="">
+    <a class="text-link" href="#/runtimes">
+      "Manage runtimes"
+  <div data-container-head="" hidden="">
+  <p class="empty" data-container-missing="" hidden="">
+    "Runtime unavailable"
   <div class="stack-layout">
     <div class="card">
       <div class="cols stack-head" aria-hidden="true">

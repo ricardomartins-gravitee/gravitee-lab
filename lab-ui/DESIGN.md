@@ -666,7 +666,7 @@ place gone with its platform, or a place not read yet.
 Ordinary playgrounds always use Shared. Explicitly created, named children own independent Compose projects; several
 children of the same source can run concurrently. Each child has a stable identity and its own page and actions, so
 opening a different runtime never redirects an in-flight action or stops another instance. The catalog list contains
-source playgrounds; children appear in their source's More > Runtimes dialog and in Containers. No default/mode settings are exposed.
+source playgrounds; children appear in their source's More > Runtimes dialog and on the Runtimes page. No default/mode settings are exposed.
 
 The machine registry maps each child identity to a source and a display name. Legacy private projects are registered
 with an alias to their original storage identity: migration never moves data, changes a Docker project or allocates
@@ -709,12 +709,25 @@ Platform controls remain scoped to the shared project. The private runtime group
 resource use includes active private projects. An unreadable private record is a problem of that playground and holds
 its actions, rather than hiding the whole Lab.
 
-The Containers page's runtime card reads `/api/runtimes` separately from state polling: storage scans and Docker stats
-must not slow the normal state stream. Completed jobs and explicit refresh update the inventory. The inventory opens on demand from More > Runtimes; it does not scan storage or occupy the playground view while closed.
-Creation uses the existing form dialog over that inventory; the normal source page stays Shared. Stopped and source-unavailable runtimes remain visible.
-Each available child has an explicit Open runtime link to its own guide and consoles. The Ports column opens addresses
-by service, with assigned ports retained after container removal. Both are also available from its menu; Source playground
-continues to open the Shared parent.
+Runtimes is a Configure page for instance creation, cloning and cleanup. Its table groups independent instances by
+source playground and shows state and storage, with Containers and Open runtime links. It shares its component with
+More > Runtimes. Shared has no duplicate management row. Storage details retain assigned ports, captured versions and
+image references. Machine-wide image and build-cache usage is shown once. `/api/runtimes` runs only while a management
+view is open; storage scans never hold the normal state stream.
+
+Containers opens on Shared, with one runtime picker. `#/containers/<runtime id>` identifies an explicit private view;
+Back, Forward and reload restore that target. Opening the ordinary menu link returns to Shared. Selection changes no
+machine settings or running services. Its groups, service rows, header actions and consoles all belong to the chosen
+instance. Private groups and services use stable keys containing that runtime's identity; the server validates group
+membership against captured service names. Group Restart retains stopped services, and group Start never replays seeds.
+Group expansion is independent between runtimes. The private view offers no editor of Shared files or plugins.
+
+The state carries saved inspection scopes, including instances whose catalog source is unavailable. These scopes have
+no volume scan, settings or secret values. When Docker is unavailable, saved identities and port assignments remain
+visible with unavailable live state; metadata damage remains a separate error. Docker unavailability adds no repeated
+per-runtime errors and never leaves an inventory showing Reading runtimes after its request ends. Unknown or deleted
+runtime addresses never fall back to Shared controls. Start, Stop, Restart, Apply and Update retain their meaning;
+Re-seed stays on the runtime's playground page, and cleanup stays in runtime management.
 
 `catalogs/runtime_storage.py` binds cleanup previews to explicit Docker identities and a fingerprint of the private
 filesystem tree. Both confirmation and execution recheck ownership and stopped state. Container removal keeps volumes
@@ -1659,6 +1672,14 @@ dark, at 1440 and 900 px wide.
       reads Running; once a license is saved, it is a group as any other and Start runs it. With a license, the License dialog keeps
       no empty cell for the ways to get one, and the packs stay beside the facts.
     - The platform stopped, an add-on running alone: the head has Stop, Restart and Update.
+   - Open Runtimes: private instances are grouped by source, with no Shared row or unrelated Shared Start/Apply.
+     Open Containers from an instance: only its services, ports, consoles and actions are drawn. Choose Shared, then
+     Back: the previous instance and its expanded groups return. An unknown runtime address never shows Shared controls.
+   - With Docker off, the inventory settles on saved names and unavailable live values, with one Docker notice. Inspect
+     an instance whose source is unavailable: captured ports remain; mutation controls are disabled with their reason.
+   - At phone width, management actions wrap below each runtime and remain visible without horizontal scrolling.
+     Container ports remain visible below names. Verify both themes and keyboard selection of the runtime picker.
+
 12. **Apply needed.** A version saved on Images while its container runs: the rows and the banner's notice, on every page but Containers, show the badge "Apply needed" (the notice its count; no page has it beside its title); hover it, tab to it (its name for a screen reader holds
     the reason) and tap it on a touch screen: the popover is one table, the tags that run and those saved under *Running* and
     *Saved* (an older one saved in amber), or the names of the settings that changed, and what Apply does; Apply's dialog says what

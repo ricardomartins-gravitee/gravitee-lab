@@ -58,7 +58,9 @@ export function initSidebar() {
 // The one place of the platform's state on every page: the state chip of the sidebar, which leads to Containers. Its words are its
 // tooltip, which the collapsed menu needs; an issue's popover says what each group has. A screen reader hears it change.
 function renderHealth() {
-  const { tone, text, title, why = [] } = store.health(), health = $("#health");
+  const state = store.health(), { tone, title, why = [] } = state, health = $("#health");
+  const runtimeView = router.current?.page.id === "runtimes" || router.current?.page.id === "stack" && router.current.params?.[0];
+  const text = runtimeView ? state.text.replace(/^Platform /, "Shared ") : state.text;
   $("#health-state").className = `state ${tone}`;
   $("#health-text").textContent = text;
   health.dataset.tip = title ? `${text}: ${title}` : text;
@@ -93,7 +95,7 @@ const PLATFORM_HEAD = ["stack", "dashboard"];
 // platform with the playground, and Logs while nothing runs
 function ownStart() {
   const id = router.current?.page.id;
-  return PLATFORM_HEAD.includes(id) || id === "playground" || (id === "logs" && offersStart());
+  return PLATFORM_HEAD.includes(id) || id === "runtimes" || id === "playground" || (id === "logs" && offersStart());
 }
 
 // What the notices about Docker offer: the machine's checks, each with its fix
@@ -120,7 +122,7 @@ function lab({ docker, platform, license, addons, playgrounds }) {
   }
   if (late) applying = platform.behind;
   else if (!showing("platform", "apply")) applying = [];
-  if (applying.length && router.current?.page.id !== "stack") {
+  if (applying.length && !["stack", "runtimes"].includes(router.current?.page.id)) {
     // How many containers differ, its popover a row for each product, add-on or playground with why (the summary beside it is the card's
     // title); once applied, the names alone
     const card = late && behindWhy(platform);
