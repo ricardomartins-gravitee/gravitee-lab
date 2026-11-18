@@ -135,6 +135,7 @@ class Template(unittest.TestCase):
             with self.subTest(job=job):
                 steps = workflow["jobs"][job]["steps"]
                 names = [step.get("name") for step in steps]
+                self.assertEqual(names.count("Catalogs it needs"), 1)
                 fetch = names.index("Catalogs it needs")
                 self.assertLess(names.index("Check out the Lab"), fetch)
                 self.assertLess(fetch, names.index(consumer))
