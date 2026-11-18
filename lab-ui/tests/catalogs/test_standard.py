@@ -791,8 +791,8 @@ class LabAction(unittest.TestCase):
         self.assertEqual((code, written), (0, f"repository=acme/gravitee-lab\nref={LAB_COMMIT}\n"))
 
     def test_the_commit_has_to_be_a_release_of_the_lab_and_a_fake_git_says_so(self):
-        """SD11 in CI: the pinned commit is on the Lab's main and a tag vX.Y.Z names it. A commit of main that no release names, a
-        tag that is not a version, or a commit that only a fork has, is refused; the nightly run of `latest` asks none of it."""
+        """SD11 in CI: the pinned commit is on the Lab's main and a tag vX.Y.Z or vX.Y.Z-rev.N names it. An untagged commit,
+        another tag form or a commit off main is refused; the nightly run of `latest` asks none of it."""
         script = blank(self.text, "REF: ${{ steps.lab.outputs.ref }}")
         self.assertIn("merge-base --is-ancestor", script)
         self.assertIn("if: ${{ inputs.latest != 'true' }}", self.text.split("name: The commit is a release of the Lab")[1].split("run:")[0])
@@ -808,9 +808,16 @@ class LabAction(unittest.TestCase):
             self.assertEqual(done.returncode, 0, done.stderr)
             self.assertEqual(record.read_text(), f"-C lab merge-base --is-ancestor {LAB_COMMIT} refs/remotes/origin/main\n"
                                                  f"-C lab tag --points-at {LAB_COMMIT}\n")
+            for tag in ("v1.20.15", "v1.20.15-rev.1", "v1.20.15-rev.10"):
+                with self.subTest(tag=tag):
+                    done = support.run_shell(script, {**env, "ANSWER": "yes", "TAGS": tag + "\n"}, folder)
+                    self.assertEqual(done.returncode, 0, done.stderr)
             refused = ("::error file=.github/standard.json,title=SD11::The Lab commit "
                        f"{LAB_COMMIT[:7]} is not a release of the Lab. Fix: pin the latest release (catalog.py upgrade --lab-ref latest).")
-            for answer, tags in (("yes", ""), ("yes", "v1.5\nv1.5.0-rc.1\nlatest\n"), ("yes", "v01.5.0\n"), ("no", "v1.5.0\n")):
+            for answer, tags in (("yes", ""), ("yes", "v1.5\nv1.5.0-rc.1\nlatest\n"), ("yes", "v01.5.0\n"), ("no", "v1.5.0\n"),
+                                 ("yes", "v1.20.15-rc.1\n"), ("yes", "v1.20.15-rev.0\n"), ("yes", "v1.20.15-rev.01\n"),
+                                 ("yes", "v1.20.15-rev.1-extra\n"), ("yes", "prefix-v1.20.15-rev.1\n"),
+                                 ("yes", "v1.20.15-rev.1 \n"), ("no", "v1.20.15-rev.1\n")):
                 with self.subTest(answer=answer, tags=tags):
                     done = support.run_shell(script, {**env, "ANSWER": answer, "TAGS": tags}, folder)
                     self.assertEqual(done.returncode, 1)
@@ -1307,6 +1314,13 @@ class MovingThePin(Case):
         self.assertIn("is not a release of the Lab", self.plan(lab_ref=between)["refused"])
         self.assertEqual((standard.release_state(self.lab.root, self.new), standard.release_state(self.lab.root, self.old)),
                          ("yes", "yes"))
+        for tag, wanted in (("v1.20.15-rc.1", "no"), ("v1.20.15-rev.0", "no"), ("v1.20.15-rev.01", "no"),
+                            ("v1.20.15-rev.1", "yes")):
+            with self.subTest(tag=tag):
+                self.lab.git("tag", tag, between)
+                self.assertEqual(standard.release_state(self.lab.root, between), wanted)
+                self.assertEqual(bool(self.plan(lab_ref=between)["refused"]), wanted == "no")
+                self.lab.git("tag", "-d", tag)
 
     def test_a_commit_the_lab_checkout_does_not_have_is_refused_too(self):
         plan = self.plan(lab_ref="e" * 40)
@@ -1325,6 +1339,18 @@ class MovingThePin(Case):
         self.assertEqual((code, err.getvalue()), (0, ""))
         self.assertEqual(json.loads((self.catalog.root / ".github/standard.json").read_text())["lab"]["ref"], self.new)
         self.assertIn("compare/", out.getvalue())
+        for tag in ("v1.20.15", "v1.20.15-rev.1", "v1.20.15-rev.2", "v1.20.15-rev.9", "v1.20.15-rev.10", "v1.20.16",
+                    "v1.20.16-rev.1"):
+            with self.subTest(tag=tag):
+                release = self.lab.commit({"lab-ui/catalog.py": f"print({tag!r})\n".encode()}, tag)
+                self.lab.git("tag", tag, release)
+                self.lab.git("update-ref", "refs/remotes/origin/main", release)
+                self.assertEqual(standard.latest_release(self.lab.root), release)
+        for tag in ("v9.0.0-rc.1", "v9.0.0-rev.0", "v9.0.0-rev.01"):
+            tip = self.lab.commit({"lab-ui/catalog.py": f"print({tag!r})\n".encode()}, tag)
+            self.lab.git("tag", tag, tip)
+            self.lab.git("update-ref", "refs/remotes/origin/main", tip)
+            self.assertEqual(standard.latest_release(self.lab.root), release)
 
     def test_a_release_that_does_not_ship_the_standard_written_is_no_pin(self):
         """The workflows of a standard call what the Lab of that standard has: the release pinned must ship it. When none does

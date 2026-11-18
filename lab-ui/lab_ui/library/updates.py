@@ -1,8 +1,9 @@
 """The Lab's own versions: which one this Lab is, which ones are newer, what each changed, and the update to the newest.
 
-A version is a tag of the Lab's repository, `v<major>.<minor>.<patch>`, on its main branch. This Lab is the version of the newest tag
-its commit holds (`git describe`), with the number of changes made since when it is past it (a clone of main between two versions);
-without a tag, a development version, said by its commit. What a version changed is the subjects of the commits between it and the
+A version is a tag of the Lab's repository, `v<major>.<minor>.<patch>` or `v<major>.<minor>.<patch>-rev.<revision>`, on its main
+branch. This Lab is the version of the newest tag its commit holds, with the number of changes made since when it is past it
+(a clone of main between two versions); without a tag, a development version, said by its commit. What a version changed is
+the subjects of the commits between it and the
 version before it, on the main branch: the titles of the pull requests merged, each with its number, which links to it when the Lab
 comes from GitHub.
 
@@ -29,7 +30,7 @@ from .. import paths
 from ..catalogs.registry import CatalogError
 from ..docker import jobs
 
-TAG = re.compile(r"v(\d{1,4})\.(\d{1,4})\.(\d{1,4})")
+TAG = re.compile(r"v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})(?:-rev\.([1-9][0-9]*))?")
 MAIN = "refs/remotes/origin/main"   # where the versions are: a tag elsewhere is not offered
 CHECK_EVERY = 6 * 3600   # seconds between two fetches of the tags in the background
 FETCH_WAIT = 60          # seconds a fetch may take
@@ -65,13 +66,16 @@ def _git(*args, timeout=LOCAL_WAIT):
 
 
 def version_of(tag):
-    """(major, minor, patch) of a tag of a version, None for any other name."""
+    """(major, minor, patch, revision) of a version tag, with revision 0 for a bare tag; None for another name."""
     found = TAG.fullmatch(tag or "")
-    return tuple(int(part) for part in found.groups()) if found else None
+    return tuple(int(part or 0) for part in found.groups()) if found else None
 
 
 def said(numbers):
-    return ".".join(str(part) for part in numbers) if numbers else None
+    if numbers is None:
+        return None
+    parent = ".".join(str(part) for part in numbers[:3])
+    return f"{parent}-rev.{numbers[3]}" if numbers[3] else parent
 
 
 def _cloned():
@@ -108,7 +112,7 @@ def _local():
     if code != 0:
         return {"cloned": False}
     code, branch = _git("symbolic-ref", "--short", "-q", "HEAD")
-    # The newest version it holds: a tag of the form vX.Y.Z on its history, not a tag of another form (v1.6.0-rc1) that would hide it
+    # Only release tags count, so a preview tag cannot hide the newest released Lab
     code_tag, held = _git("tag", "--merged", "HEAD", "--list", "v*")
     found = sorted((version_of(one), one) for one in held.splitlines() if version_of(one)) if code_tag == 0 else []
     base, tag = found[-1] if found else (None, "")

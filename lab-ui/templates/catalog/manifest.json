@@ -1,5 +1,5 @@
 {
-  "level": 11,
+  "level": 12,
   "files": [
     {"path": ".catalog/standard.mk", "class": "managed", "since": 1, "when": "always", "scope": "full"},
     {"path": ".github/dependabot.yml", "class": "managed", "since": 1, "when": "always", "scope": "full"},
@@ -91,6 +91,11 @@
     },
     "11": {
       "summary": "versions.yml closes the issue of a run that did not finish, The workflow Gravitee versions did not finish, once a run finishes: a run that failed on the network does not leave it open.",
+      "manual": [],
+      "settings": []
+    },
+    "12": {
+      "summary": "The Lab action accepts upstream release tags vX.Y.Z and fork revisions vX.Y.Z-rev.N as Lab pins on the Lab repository's main. Revisions start at 1 and sort after their upstream parent and before the next parent; catalog release tags keep their existing format.",
       "manual": [],
       "settings": []
     }

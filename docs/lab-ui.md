@@ -573,7 +573,10 @@ A playground comes first in the list. With an empty file, Compose runs the core 
 
 ## Versions of the Lab
 
-A version of the Lab is a tag `vX.Y.Z` on the `main` branch of the repository: each merge makes one, or one for a few merges that land together. The version at the right of the name of the Lab, at the top of the menu,
+A version of the Lab is a tag `vX.Y.Z` or `vX.Y.Z-rev.N` on the `main` branch of the repository. Upstream merges make `vX.Y.Z`
+versions; a fork uses that tag for the same upstream commit, or adds `-rev.N` for fork-only changes, starting at 1 and starting
+again for each newer upstream release. A revision sorts after its parent and before the next upstream release, and keeps its
+suffix in the version shown. The version at the right of the name of the Lab, at the top of the menu,
 says which one this Lab is (*dev* for a clone with no version), and opens a dialog: the version and the day it came out, then one
 card that says where this Lab stands, with the one thing to do about it:
 

@@ -85,7 +85,7 @@ Every rule that `catalog.py check` and the stages of `catalog.py ci` can print, 
 
 ### SD11
 
-*Error.* Lab.ref is not the commit of a release of the Lab (a tag vX.Y.Z on its main) (CI).
+*Error.* Lab.ref is not the commit of a release of the Lab (a tag vX.Y.Z or vX.Y.Z-rev.N on its main) (CI).
 
 - **Message**: The Lab commit {sha7} is not a release of the Lab. Fix: pin the latest release (catalog.py upgrade --lab-ref latest).
 

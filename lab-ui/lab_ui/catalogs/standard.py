@@ -81,7 +81,7 @@ RULES = table([
      ".github/dependabot.yml has no {ecosystem}. Fix: add it."),
     ("SD10", ERROR, "The Makefile does not include .catalog/standard.mk",
      "Makefile does not include .catalog/standard.mk. Fix: add the line: include .catalog/standard.mk"),
-    ("SD11", ERROR, "lab.ref is not the commit of a release of the Lab (a tag vX.Y.Z on its main) (CI)",
+    ("SD11", ERROR, "lab.ref is not the commit of a release of the Lab (a tag vX.Y.Z or vX.Y.Z-rev.N on its main) (CI)",
      "The Lab commit {sha7} is not a release of the Lab. Fix: pin the latest release (catalog.py upgrade --lab-ref latest)."),
 ])
 GOLDEN_MESSAGE = "The template changed. Raise level in manifest.json, add a note under levels, and refresh golden.json."
@@ -651,7 +651,7 @@ def _entry(path: str, action: str, kind: str, why: str = "", content: Optional[b
     return {"path": path, "action": action, "class": kind, "why": why, "content": content}
 
 
-RELEASE_TAG = re.compile(r"v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})")   # a release of the Lab
+RELEASE_TAG = re.compile(r"v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})(?:-rev\.([1-9][0-9]*))?")
 
 
 def _lab_git(lab):
@@ -666,9 +666,9 @@ def _lab_git(lab):
 
 def release_state(lab, ref: str, git=None) -> str:
     """SD11 of a pin, as the Lab checkout `lab` knows it with no fetch: "yes" when `ref` is the commit of a release of the Lab, a
-    tag vX.Y.Z on its `origin/main`; "no" when it is not; else why the checkout cannot say. A catalog is checked with a Lab that
-    people have: a commit of main that no release names is one nobody runs, and a commit of a fork is not the Lab's. `git` (args ->
-    a Result or None) is the seam of a caller that runs git its own way."""
+    tag vX.Y.Z or vX.Y.Z-rev.N on its `origin/main`; "no" when it is not; else why the checkout cannot say. A catalog is checked
+    with a Lab that people have: a commit of main that no release names is one nobody runs. `git` (args -> a Result or None)
+    is the seam of a caller that runs git its own way."""
     run = git or _lab_git(lab)
     have = run(["cat-file", "-e", f"{ref}^{{commit}}"])
     if have is None:
@@ -720,7 +720,7 @@ def pin_problem(lab, ref: str, level: int, git=None) -> str:
 
 
 def latest_release(lab, git=None) -> str:
-    """The commit of the latest release of the Lab, the greatest tag vX.Y.Z on the `origin/main` of the Lab checkout `lab`, as
+    """The commit of the latest release of the Lab, the greatest tag vX.Y.Z or vX.Y.Z-rev.N on its `origin/main`, as
     that checkout knows it with no fetch; '' when it has none. What `--lab-ref latest` pins, and what `new` pins by default.
     `git` is the seam of a caller that runs git its own way (the fleet)."""
     run = git or _lab_git(lab)
@@ -730,7 +730,7 @@ def latest_release(lab, git=None) -> str:
     names = [line.strip() for line in listed.out.decode("utf-8", "replace").splitlines() if RELEASE_TAG.fullmatch(line.strip())]
     if not names:
         return ""
-    newest = max(names, key=lambda name: tuple(int(part) for part in RELEASE_TAG.fullmatch(name).groups()))
+    newest = max(names, key=lambda name: tuple(int(part or 0) for part in RELEASE_TAG.fullmatch(name).groups()))
     found = run(["rev-parse", "--verify", "--quiet", f"refs/tags/{newest}^{{commit}}"])
     commit = found.out.decode("utf-8", "replace").strip() if found is not None and found.code == 0 else ""
     return commit if _COMMIT.fullmatch(commit) else ""
