@@ -125,6 +125,28 @@ class Template(unittest.TestCase):
                         self.assertIsNotNone(found, line)
                         self.assertRegex(found[3], r"^# v\d+\.\d+\.\d+$", line)
 
+    def test_each_ci_runner_fetches_dependencies_before_reading_catalog_units(self):
+        try:
+            import yaml
+        except ImportError:
+            support.skip("PyYAML is not installed, the CI dependency setup was not parsed")
+        workflow = yaml.safe_load(render()[".github/workflows/ci.yml"])
+        for job, consumer in (("static", "Check"), ("compile", "Build the apps")):
+            with self.subTest(job=job):
+                steps = workflow["jobs"][job]["steps"]
+                names = [step.get("name") for step in steps]
+                fetch = names.index("Catalogs it needs")
+                self.assertLess(names.index("Check out the Lab"), fetch)
+                self.assertLess(fetch, names.index(consumer))
+                self.assertEqual(steps[fetch]["run"], "python3 -I lab/lab-ui/catalog.py ci needs catalog")
+                self.assertEqual(steps[fetch].get("env"), {"NEEDS_DEPLOY_KEY": "${{ secrets.NEEDS_DEPLOY_KEY }}"})
+                self.assertNotIn("if", steps[fetch])
+                self.assertNotIn("continue-on-error", steps[fetch])
+                self.assertNotIn("NEEDS_DEPLOY_KEY", workflow.get("env", {}))
+                self.assertNotIn("NEEDS_DEPLOY_KEY", workflow["jobs"][job].get("env", {}))
+                for step in steps[fetch + 1:]:
+                    self.assertNotIn("NEEDS_DEPLOY_KEY", json.dumps(step))
+
 
 class Golden(Case):
     """The engine's test renders the template, compares it with golden.json, and fails a change without a bump."""
