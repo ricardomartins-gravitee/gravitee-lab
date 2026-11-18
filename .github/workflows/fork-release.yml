@@ -1,0 +1,75 @@
+# A fork has its own releases, retaining the upstream release they extend. A preview creates no tag or release.
+name: Fork release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the previewed release
+        type: boolean
+        default: false
+      expected_commit:
+        description: Full main commit SHA from the preview, required to publish
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    name: Preview the fork version
+    if: ${{ github.event.repository.fork && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      plan: ${{ steps.version.outputs.plan }}
+    steps:
+      - name: Check out the selected main commit and tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Read upstream release tags without replacing fork tags
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          upstream=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.parent.full_name')
+          [[ $upstream =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && $upstream != *..* ]] \
+            || { echo "::error::The repository has no valid upstream parent"; exit 1; }
+          git fetch --no-tags "https://github.com/$upstream.git" \
+            '+refs/heads/main:refs/remotes/release-upstream/main' \
+            '+refs/tags/v*:refs/release-upstream/tags/v*'
+          echo "repository=$upstream" >> "$GITHUB_OUTPUT"
+      - name: Work out the fork version and release notes
+        id: version
+        env:
+          UPSTREAM_REPOSITORY: ${{ steps.upstream.outputs.repository }}
+          PUBLISH: ${{ inputs.publish }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: python3 -I .github/scripts/fork_release.py plan
+
+  publish:
+    name: Publish the reviewed fork version
+    needs: preview
+    if: ${{ inputs.publish && needs.preview.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: publish
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the reviewed main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publish the immutable tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PLAN: ${{ needs.preview.outputs.plan }}
+        run: python3 -I .github/scripts/fork_release.py publish

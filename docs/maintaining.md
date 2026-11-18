@@ -132,6 +132,30 @@ The workflow pushes the tag with a deploy key, since the token of a workflow can
 
 To replace the key, make a new one, set the secret again and delete the old deploy key: nothing else changes.
 
+### Releasing a fork
+
+Use the **Fork release** workflow on the fork's `main`. It is separate from the upstream **Release** workflow and never runs
+on a merge by itself. Start with **Publish the previewed release** off: the run's summary shows the proposed tag, upstream
+parent, exact commit and release notes. This preview writes no tag or GitHub release.
+
+The workflow reads the fork's parent repository from GitHub and fetches its tags into a separate namespace. It selects the
+newest upstream release on upstream `main` that the fork contains. That exact commit uses the bare upstream tag. Any fork
+changes use `-rev.N`, starting at 1 for each parent, one number per release. A retry of a tagged commit reuses that tag; an
+existing number is never reused for another commit. A bare fork tag that does not match its upstream commit stops the run.
+
+After reviewing the preview and waiting for CI to pass, run it again with **Publish the previewed release** on and paste the
+full commit SHA from the preview into **Full main commit SHA**. Publishing refuses if `main` moved or a tag names another
+commit. It creates an annotated tag and a normal GitHub release, even though the revision suffix resembles a prerelease.
+If a run stops after tagging, run it again for the same commit to finish its release.
+
+Only the publishing job enters the `publish` environment and requests `contents: write`; it uses GitHub's workflow token,
+not the upstream workflow's deploy key. Existing environment and tag protections still apply: a ruleset that refuses that
+token will refuse publication. The workflow never bypasses protections or moves or deletes a tag.
+
+An older Lab UI recognizes only bare upstream tags. After this change reaches the fork's `main`, update an existing fork
+clone with Git and restart its Lab UI once; it then discovers revision tags through the usual update check. This changes no
+running containers or data. A fresh clone of a fork release already has that support.
+
 ## Pins to review by hand
 
 Dependabot updates the actions, the Python requirements and the Dockerfiles. A few pins sit in text it does not read:
