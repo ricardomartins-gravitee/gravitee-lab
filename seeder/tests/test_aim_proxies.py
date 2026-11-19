@@ -9,6 +9,8 @@ from lab_seeder import aim_proxies
 from lab_seeder import common
 from lab_seeder.testkit import PLAYGROUNDS, Seed
 
+from . import test_aim_studio as studio_test
+
 AIM = "/gamma/organizations/DEFAULT/environments/DEFAULT/modules/aim"
 AUTOMATION = "/automation/organizations/DEFAULT/environments/DEFAULT/aim/mcp-proxies"
 V2 = "/management/v2/organizations/DEFAULT/environments/DEFAULT"
@@ -105,7 +107,7 @@ class World:
 
     def put_api(self, call):
         api = self.apis[ids(call)[0]]
-        api.update({k: v for k, v in call.json.items() if k in ("endpointGroups", "responseTemplates", "analytics")})
+        api.update({k: v for k, v in call.json.items() if k in ("endpointGroups", "responseTemplates", "analytics", "visibility", "labels", "categories")})
         api["deploymentState"] = "NEED_REDEPLOY"
         return 200, api
 
@@ -639,3 +641,200 @@ class Removal(WithStudio):
     def test_a_proxy_that_is_gone_is_not_an_error(self):
         self.world.proxies.clear()
         aim_proxies.remove(common.created())
+
+
+class StudioOwnerCases:
+    OWNER = {"source": "memory", "sourceId": "api1"}
+    USERS = "/management/organizations/DEFAULT/users"
+
+    def owner_routes(self):
+        def transfer(call):
+            self.world.apis[ids(call)[0]]["primaryOwner"] = {"id": call.json["userId"]}
+            return 204
+        self.answer({("GET", self.USERS): lambda call: (200, {"data": [
+            {"id": "archived", **self.OWNER, "status": "ARCHIVED"},
+            {"id": "owner-" + call.params["q"], "source": "memory", "sourceId": call.params["q"]}]}),
+                     ("POST", re.compile(V2 + "/apis/[^/]+/_transfer-ownership")): transfer})
+
+    def owner_file(self, owner=OWNER, text=None):
+        self.seed_files({self.owner_path: (self.owner_text if text is None else text) + "\nprimaryOwner: " + json.dumps(owner) + "\n"})
+
+    def transfers(self):
+        return [c for c in self.platform.calls if c.path.endswith("/_transfer-ownership")]
+
+    def test_a_created_studio_transfers_once_without_sending_or_recording_the_instruction(self):
+        self.owner_file()
+        self.seed()
+        [call] = self.transfers()
+        [api_id] = self.world.studios
+        self.assertEqual((call.path, call.json), (V2 + f"/apis/{api_id}/_transfer-ownership",
+                                                {"userId": "owner-api1", "userType": "USER"}))
+        [created] = self.platform.sent("POST", AIM + "/mcp-studios")
+        self.assertNotIn("primaryOwner", created.json)
+        self.assertNotIn("primaryOwner", next(x for x in common.created() if x["kind"] == "studio"))
+        self.platform.calls.clear()
+        self.seed()
+        self.assertEqual(self.transfers(), [])
+        self.assertEqual(self.platform.changes(), [])
+        aim_proxies.remove(common.created())
+        self.assertEqual(self.transfers(), [])
+
+    def test_a_changed_owner_transfers_without_replacing_the_studio_or_changing_its_digest(self):
+        self.owner_file()
+        self.seed()
+        [api_id] = self.world.studios
+        digest = next(x["digest"] for x in common.created() if x["kind"] == "studio")
+        self.owner_file({"source": "memory", "sourceId": "api2"})
+        self.platform.calls.clear()
+        self.seed()
+        self.assertEqual(self.platform.changes(), [("POST", V2 + f"/apis/{api_id}/_transfer-ownership")])
+        self.assertEqual(next(x["digest"] for x in common.created() if x["kind"] == "studio"), digest)
+        self.seed_files({self.owner_path: self.owner_text})
+        self.platform.calls.clear()
+        self.seed()
+        self.assertEqual(self.platform.changes(), [])
+        self.assertEqual(self.world.apis[api_id]["primaryOwner"]["id"], "owner-api2")
+
+    def test_a_matching_live_owner_needs_no_transfer(self):
+        self.seed()
+        [api_id] = self.world.studios
+        self.world.apis[api_id]["primaryOwner"] = {"id": "owner-api1"}
+        self.owner_file()
+        self.platform.calls.clear()
+        self.seed()
+        self.assertEqual(self.platform.changes(), [])
+
+    def test_a_replaced_studio_transfers_the_new_api_id(self):
+        self.owner_file()
+        self.seed()
+        [old_id] = self.world.studios
+        self.owner_file(text=self.owner_text.replace("description: ", "description: Changed ", 1))
+        self.platform.calls.clear()
+        self.seed()
+        [new_id] = self.world.studios
+        self.assertNotEqual(old_id, new_id)
+        self.assertEqual([c.path for c in self.transfers()], [V2 + f"/apis/{new_id}/_transfer-ownership"])
+        self.platform.calls.clear()
+        self.seed()
+        self.assertEqual(self.transfers(), [])
+
+    def test_an_omitted_owner_does_no_lookup_or_transfer(self):
+        self.seed()
+        self.assertEqual(self.transfers(), [])
+        self.assertEqual(self.platform.sent("GET", self.USERS), [])
+
+    def test_a_missing_or_archived_owner_does_not_create_a_studio_or_a_user(self):
+        self.owner_file()
+        for users in ([], [{"id": "archived", **self.OWNER, "status": "ARCHIVED"}]):
+            with self.subTest(users=users):
+                self.answer({("GET", self.USERS): (200, {"data": users})})
+                with self.assertRaisesRegex(common.SeedError, self.owner_name + ".*memory.*api1"):
+                    aim_proxies.McpProxies().studio(common.load(common.SEED_DIR / self.owner_path))
+                self.assertEqual(self.world.studios, {})
+                self.assertEqual(self.transfers(), [])
+                self.assertEqual(self.platform.sent("POST", self.USERS), [])
+
+    def test_a_missing_owner_stops_before_replacing_an_existing_studio(self):
+        self.owner_file()
+        self.seed()
+        [api_id] = self.world.studios
+        self.owner_file(text=self.owner_text.replace("description: ", "description: Changed ", 1))
+        self.platform.add({("GET", self.USERS): (200, {"data": []})})
+        self.platform.calls.clear()
+        with self.assertRaisesRegex(common.SeedError, self.owner_name + ".*memory.*api1"):
+            self.seed()
+        self.assertEqual(list(self.world.studios), [api_id])
+        self.assertEqual(self.platform.changes(), [])
+
+    def test_later_updates_and_deletes_keep_the_seed_login(self):
+        self.owner_file()
+        self.seed()
+        login = self.transfers()[0].auth
+        changed = self.owner_text.replace("fga: true", "fga: false").replace("  enabled: true", "  enabled: false")
+        self.owner_file(text=changed)
+        self.platform.calls.clear()
+        self.seed()
+        self.assertEqual(self.transfers(), [])
+        aim_proxies.remove(common.created())
+        writes = [c for c in self.platform.calls if c.method != "GET"]
+        self.assertTrue(writes)
+        self.assertTrue(all(c.auth == login for c in writes))
+
+    def settings_file(self, fields, text=None):
+        self.seed_files({self.owner_path: (self.owner_text if text is None else text) + "\n" +
+                         "\n".join(key + ": " + json.dumps(value) for key, value in fields.items()) + "\n"})
+
+    def test_optional_api_settings_update_in_place_and_repeat_without_writes(self):
+        fields = {"visibility": "PUBLIC", "labels": ["assistant", "tools"], "categories": ["category-1"]}
+        self.settings_file(fields)
+        self.seed()
+        [api_id] = self.world.studios
+        self.assertEqual({key: self.world.apis[api_id][key] for key in fields}, fields)
+        [post] = self.platform.sent("POST", AIM + "/mcp-studios")
+        self.assertTrue(all(key not in post.json for key in fields))
+        self.assertEqual(self.world.apis[api_id]["deploymentState"], "DEPLOYED")
+        self.platform.calls.clear()
+        self.settings_file({**fields, "labels": list(reversed(fields["labels"]))})
+        self.seed()
+        self.assertEqual(self.platform.changes(), [])
+        self.settings_file({"visibility": "PRIVATE", "labels": [], "categories": []})
+        self.seed()
+        self.assertEqual(list(self.world.studios), [api_id])
+        self.assertEqual(self.world.apis[api_id]["labels"], [])
+        self.assertEqual(self.world.apis[api_id]["categories"], [])
+        self.assertEqual(self.world.apis[api_id]["visibility"], "PRIVATE")
+        self.assertEqual(self.platform.sent("DELETE", AIM + f"/mcp-proxies/{api_id}"), [])
+        self.settings_file({})
+        self.platform.calls.clear()
+        self.seed()
+        self.assertEqual(self.platform.changes(), [])
+
+    def test_replaced_studio_gets_api_settings_on_its_new_id(self):
+        fields = {"visibility": "PUBLIC", "labels": ["tools"]}
+        self.settings_file(fields)
+        self.seed()
+        [old_id] = self.world.studios
+        self.settings_file(fields, self.owner_text.replace("description: ", "description: Changed ", 1))
+        self.seed()
+        [new_id] = self.world.studios
+        self.assertNotEqual(old_id, new_id)
+        self.assertEqual({key: self.world.apis[new_id][key] for key in fields}, fields)
+
+    def test_bad_api_settings_stop_before_the_first_write(self):
+        for key, value in (("visibility", "public"), ("visibility", []), ("labels", None),
+                           ("labels", ["x", "x"]), ("categories", [{}]), ("categories", [""])):
+            with self.subTest(key=key, value=value):
+                self.settings_file({key: value})
+                with self.assertRaisesRegex(common.SeedError, key):
+                    self.seed()
+                self.assertEqual(self.platform.changes(), [])
+
+    def test_bad_owner_keys_are_refused_before_the_first_change(self):
+        for owner in (None, {}, {"source": "memory"}, {"source": "memory", "sourceId": False},
+                      {**self.OWNER, "userId": "machine-id"}):
+            with self.subTest(owner=owner):
+                self.owner_file(owner)
+                with self.assertRaisesRegex(common.SeedError, "primaryOwner") as error:
+                    self.seed()
+                self.assertNotIn("\n", str(error.exception))
+                self.assertEqual(self.platform.changes(), [])
+        for value in (42, ["not an object"], "text"):
+            with self.subTest(root=value):
+                self.seed_files({self.owner_path: json.dumps(value)})
+                with self.assertRaisesRegex(common.SeedError, "seed file is an object"):
+                    self.seed()
+                self.assertEqual(self.platform.changes(), [])
+
+
+class PlainStudioOwners(StudioOwnerCases, WithStudio):
+    def setUp(self):
+        super().setUp()
+        self.owner_path, self.owner_text, self.owner_name = "aim/studios/acme-bakery-toolkit.yaml", STUDIO, "Acme Bakery Toolkit"
+        self.owner_routes()
+
+
+class AgentsStudioOwners(StudioOwnerCases, studio_test.Studios):
+    def setUp(self):
+        super().setUp()
+        self.owner_path, self.owner_text, self.owner_name = "aim/studios/customer-desk.yaml", studio_test.STUDIO, "Customer desk"
+        self.owner_routes()
