@@ -541,7 +541,8 @@ shadowAi:
 ```
 
 Keep routes in first-match order, and create their proxy APIs through `seed/apim/apis/` as usual. Set `reportInterval`
-to an ISO 8601 duration of at least 10 seconds, using hours, minutes, or seconds. Leave sections or fields out to preserve
+to an ISO 8601 duration of at least 10 seconds, using hours, minutes, or seconds; oversized values stop the seed before
+it connects. Leave sections or fields out to preserve
 them; use empty lists to clear domains or routes. On creation, omit lists to default them to empty and omit the interval
 to use `PT2M`. Save and deploy only when the configuration differs. Treat this as shared environment configuration:
 removing the playground leaves it in place, as with APIM environment settings, and adds no entry to `created.json`.

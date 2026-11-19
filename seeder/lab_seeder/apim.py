@@ -113,6 +113,8 @@ def digest_of(definition):
 
 def primary_owner(spec, where):
     """The seed's user reference, never the primaryOwner object of a product export."""
+    if not isinstance(spec, dict):
+        raise SeedError(f"{where}: seed file is an object")
     if "primaryOwner" not in spec:
         return None
     owner = spec["primaryOwner"]
@@ -124,6 +126,8 @@ def primary_owner(spec, where):
 
 def api_owner(definition, where):
     """Seeder metadata beside the product export: stripped before importing or computing its digest."""
+    if not isinstance(definition, dict):
+        raise SeedError(f"{where}: API export is an object")
     metadata = definition.get("x-gravitee", {})
     if not isinstance(metadata, dict) or set(metadata) - {"primaryOwner"}:
         raise SeedError(f"{where}: x-gravitee takes only primaryOwner")

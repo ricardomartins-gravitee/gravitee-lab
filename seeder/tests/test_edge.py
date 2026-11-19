@@ -70,6 +70,14 @@ class Configuration(Seed):
         edge.seed()
         self.assertEqual(self.platform.changes(), [])
 
+    def test_defaults_added_to_route_objects_do_not_cause_repeat_saves(self):
+        self.live = {**URLS, "proxy": copy.deepcopy(PROXY), "shadowAi": copy.deepcopy(edge.DEFAULTS["shadowAi"])}
+        self.live["proxy"]["routes"][1]["provider"] = None
+        self.spec({"proxy": PROXY})
+        edge.seed()
+        self.assertEqual(self.platform.changes(), [])
+        self.assertIn("provider", self.live["proxy"]["routes"][1])
+
     def test_creation_needs_both_urls_but_updates_can_omit_them(self):
         for value in ({}, {"gatewayUrl": URLS["gatewayUrl"]}):
             with self.subTest(value=value):
@@ -101,12 +109,23 @@ class Configuration(Seed):
                              ({"shadowAi": {"domains": [{}]}}, "domains"),
                              ({"shadowAi": {"reportInterval": "PT9S"}}, "reportInterval"),
                              ({"shadowAi": {"reportInterval": "PT"}}, "reportInterval"),
-                             ({"shadowAi": {"reportInterval": 120}}, "reportInterval")):
+                             ({"shadowAi": {"reportInterval": 120}}, "reportInterval"),
+                             ({"shadowAi": {"reportInterval": "PT" + "9" * 5000 + "S"}}, "reportInterval"),
+                             ({"shadowAi": {"reportInterval": "PT9223372036854775808S"}}, "reportInterval")):
             with self.subTest(value=value):
                 self.spec(value)
                 with self.assertRaisesRegex(common.SeedError, field):
                     edge.seed()
                 self.assertEqual(self.platform.calls, [])
+
+    def test_an_unexpected_success_body_is_not_treated_as_a_missing_configuration(self):
+        self.spec(URLS)
+        for value in (None, 42, ["not an object"]):
+            with self.subTest(value=value):
+                self.platform.add({("GET", PATH): (200, value)})
+                with self.assertRaisesRegex(common.SeedError, "platform did not return an object"):
+                    edge.seed()
+                self.assertEqual(self.platform.changes(), [])
 
     def test_use_the_configured_environment_gamma_endpoint_and_seed_login(self):
         path = PATH.replace("DEFAULT/environments/DEFAULT", "acme/environments/preview")

@@ -550,7 +550,7 @@ def studio_problems(spec):
     plan each names, which its file holds: the `plan` of a studio made in one go, or the plan of the agents (JWT) of one built
     in steps (`access`), whose registration plan is closed."""
     if not isinstance(spec, dict):
-        return []
+        return ["MCP studio: seed file is an object"]
     owner_errors = []
     try:
         apim.primary_owner(spec, "MCP studio")
@@ -671,18 +671,17 @@ def _lint(folder):
             try:
                 with _with_environment(environment):
                     definition = _load(path, dict.fromkeys(provided, "x"))
-                    if isinstance(definition, dict):
-                        apim.api_owner(definition, "API export")
+                    apim.api_owner(definition, "API export")
             except common.SeedError as e:
                 out.append(Problem("owner", str(path), 0, _short(str(e))))
+                unread.add(path)
         elif path.suffix in (".yaml", ".yml") and path.parent == folder / "seed" / "aim" / "studios":
             try:
                 with _with_environment(environment):
                     spec = _load(path)
+                told = studio_problems(spec)
             except Exception as e:  # noqa: BLE001 - a stranger's file of any shape is a finding, never a crash
                 spec, told = None, ["cannot be checked: " + f"{type(e).__name__}: {_flat(e)}"]
-            else:
-                told = studio_problems(spec)
             out.extend(Problem("studio", str(path), 0, _short(text)) for text in told)
         if not blocked:
             validators = {
@@ -699,8 +698,8 @@ def _lint(folder):
                     if not isinstance(spec, dict):
                         raise common.SeedError("seed fields need an object")
                     validator(spec, str(path.name))
-                except common.SeedError as e:
-                    out.append(Problem("fields", str(path), 0, _short(str(e))))
+                except Exception as e:  # noqa: BLE001 - malformed seed fields are findings, never a crash
+                    out.append(Problem("fields", str(path), 0, _short(_flat(e))))
     # The files of an environment agree with one another only once each of them can be read
     environments = folder / "seed" / "environments"
     if environments.is_dir() and not environments.is_symlink():

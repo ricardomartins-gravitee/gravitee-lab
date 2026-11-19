@@ -39,6 +39,8 @@ ORDER = ["workspace", "workspace-user"]
 
 def workspace_fields(spec, where):
     """Optional workspace fields checked before any workspace is changed."""
+    if not isinstance(spec, dict):
+        raise SeedError(f"{where}: seed file is an object")
     if "tags" in spec and (not isinstance(spec["tags"], list)
                            or not all(isinstance(tag, str) and tag.strip() for tag in spec["tags"])
                            or len(set(spec["tags"])) != len(spec["tags"])):

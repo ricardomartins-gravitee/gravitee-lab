@@ -67,6 +67,8 @@ DETACHED = (200, 404, 409, 502)
 
 def agent_fields(spec, where):
     """Validate the existing identity and access keys without connecting to either platform."""
+    if not isinstance(spec, dict):
+        raise SeedError(f"{where}: seed file is an object")
     if not {"identity", "access"} & set(spec):
         return None
 

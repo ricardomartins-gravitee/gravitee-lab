@@ -1009,6 +1009,8 @@ class OptionalFields(Made):
             ("aim/workspaces/desk.yaml", {"tags": ["demo"]}, {"tags": ["demo", "demo"]}, "tags"),
             ("edge/configuration.yaml", {"shadowAi": {"reportInterval": "PT10S"}},
              {"shadowAi": {"reportInterval": "PT9S"}}, "reportInterval"),
+            ("edge/configuration.yaml", {"shadowAi": {"reportInterval": "PT2M"}},
+             {"shadowAi": {"reportInterval": "PT" + "9" * 5000 + "S"}}, "reportInterval"),
         ]
         for index, (path, valid, invalid, field) in enumerate(cases):
             for good, value in ((True, valid), (False, invalid)):
@@ -1018,6 +1020,25 @@ class OptionalFields(Made):
                     self.assertEqual(len(problems), 0 if good else 1)
                     if not good:
                         self.assertIn(field, problems[0].message)
+
+    def test_non_object_files_are_reported_without_crashing(self):
+        for index, path in enumerate(("aim/agents/desk.yaml", "aim/workspaces/desk.yaml", "aim/studios/desk.yaml",
+                                      "apim/apis/desk.json", "environments/newt/apis/desk.json")):
+            for shape, value in enumerate((42, ["not an object"], "text")):
+                with self.subTest(path=path, value=value):
+                    folder = self.playground({"seed/" + path: json.dumps(value),
+                                              "seed/environments/newt/environment.yaml": "id: newt\nname: Newt\n"},
+                                             name=f"shape-{index}-{shape}")
+                    problems = seedlint.problems(folder)
+                    self.assertEqual(len(problems), 1)
+                    self.assertIn("object", problems[0].message)
+
+    def test_malformed_studio_plan_names_are_findings_instead_of_exceptions(self):
+        text = AGENTS_STUDIO + "\naccess: {agents: {name: []}}\nsubscriptions: [{application: Desk}]\n"
+        folder = self.playground({"seed/aim/studios/desk.yaml": text})
+        problems = seedlint.problems(folder)
+        self.assertEqual(len(problems), 1)
+        self.assertEqual(problems[0].check, "studio")
 
     def test_studio_fields_are_checked_for_both_shapes(self):
         for index, text in enumerate((STUDIO, AGENTS_STUDIO)):

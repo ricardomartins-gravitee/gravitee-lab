@@ -468,6 +468,13 @@ class WorkspaceFields(Workspaces):
                     self.seed()
                 self.assertEqual(self.platform.changes(), [])
 
+        for value in (42, ["not an object"], "text"):
+            with self.subTest(root=value):
+                self.seed_files({"aim/workspaces/acme-bakery-teams.yaml": json.dumps(value)})
+                with self.assertRaisesRegex(common.SeedError, "seed file is an object"):
+                    self.seed()
+                self.assertEqual(self.platform.changes(), [])
+
     def test_user_lookup_skips_archived_rows_and_reads_later_pages(self):
         self.answer({("GET", USERS): (200, {"data": [{**ADMIN, "status": "ARCHIVED"}], "page": {"total_pages": 2}}),
                      ("GET", USERS + "?page=2"): (200, {"data": [ADMIN]})})

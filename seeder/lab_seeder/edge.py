@@ -11,7 +11,7 @@ import re
 from urllib.parse import urlsplit
 
 from .apim import merge
-from .common import SeedError, load, log, seed_file
+from .common import SeedError, contains, load, log, seed_file
 from .gamma import Gamma
 
 SECTION = "edge"
@@ -21,7 +21,7 @@ ORDER = []
 CONFIGURATION = "/configuration"
 URLS = ("gatewayUrl", "reactorUrl")
 DEFAULTS = {"proxy": {"dnsDomains": [], "routes": []}, "shadowAi": {"domains": [], "reportInterval": "PT2M"}}
-INTERVAL = re.compile(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?")
+INTERVAL = re.compile(r"PT(?:([0-9]{1,19})H)?(?:([0-9]{1,19})M)?(?:([0-9]{1,19})S)?")
 
 
 def configuration(spec, where="seed/edge/configuration.yaml"):
@@ -45,7 +45,7 @@ def configuration(spec, where="seed/edge/configuration.yaml"):
                 refused(f"{field}: each domain needs a nonempty name")
 
     mapping(spec, (*URLS, "proxy", "shadowAi"), "configuration")
-    spec = copy.deepcopy(spec)
+    spec = dict(spec)
     for key in URLS:
         if key not in spec:
             continue
@@ -82,14 +82,15 @@ def configuration(spec, where="seed/edge/configuration.yaml"):
         if "reportInterval" in shadow:
             value = shadow["reportInterval"]
             interval = INTERVAL.fullmatch(value) if isinstance(value, str) else None
-            if not interval or sum(int(part or 0) * scale for part, scale in zip(interval.groups(), (3600, 60, 1))) < 10:
-                refused("shadowAi.reportInterval is an ISO 8601 duration of at least 10 seconds, such as PT2M")
+            seconds = sum(int(part or 0) * scale for part, scale in zip(interval.groups(), (3600, 60, 1))) if interval else 0
+            if not 10 <= seconds <= 2 ** 63 - 1:
+                refused("shadowAi.reportInterval is an ISO 8601 duration of at least 10 seconds within the platform's "
+                        "duration range, such as PT2M")
             # Duration serializes PT120S as PT2M: compare and write the canonical form on repeat runs.
-            seconds = sum(int(part or 0) * scale for part, scale in zip(interval.groups(), (3600, 60, 1)))
             hours, seconds = divmod(seconds, 3600)
             minutes, seconds = divmod(seconds, 60)
-            shadow["reportInterval"] = "PT" + "".join(f"{value}{unit}" for value, unit in
-                                                       ((hours, "H"), (minutes, "M"), (seconds, "S")) if value)
+            spec["shadowAi"] = {**shadow, "reportInterval": "PT" + "".join(f"{value}{unit}" for value, unit in
+                                                                         ((hours, "H"), (minutes, "M"), (seconds, "S")) if value)}
     return spec
 
 
@@ -101,8 +102,11 @@ def seed():
     g = Gamma()
     g.connect(SECTION, lambda: g.edge.get(CONFIGURATION, expect=(200, 404)), "Edge Management")
     answer = g.edge.get(CONFIGURATION, expect=(200, 404))
-    live = answer.json() if answer.status_code == 200 else None
-    if live is not None and not isinstance(live, dict):
+    try:
+        live = answer.json() if answer.status_code == 200 else None
+    except ValueError:
+        live = None
+    if answer.status_code == 200 and not isinstance(live, dict):
         raise SeedError("Edge configuration: the platform did not return an object")
     if live is None:
         if not all(spec.get(key) for key in URLS):
@@ -112,7 +116,7 @@ def seed():
             if key in spec and spec[key] != live.get(key):
                 raise SeedError(f"seed/edge/configuration.yaml: {key} cannot change after the Edge configuration is created")
     wanted = merge(copy.deepcopy(live if live is not None else DEFAULTS), spec)
-    if wanted == live:
+    if contains(live, wanted):
         log(SECTION, "✓ Edge configuration up to date")
         return
     g.edge.put(CONFIGURATION, json=wanted, what="Edge configuration")

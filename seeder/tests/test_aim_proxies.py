@@ -734,6 +734,18 @@ class StudioOwnerCases:
                 self.assertEqual(self.transfers(), [])
                 self.assertEqual(self.platform.sent("POST", self.USERS), [])
 
+    def test_a_missing_owner_stops_before_replacing_an_existing_studio(self):
+        self.owner_file()
+        self.seed()
+        [api_id] = self.world.studios
+        self.owner_file(text=self.owner_text.replace("description: ", "description: Changed ", 1))
+        self.platform.add({("GET", self.USERS): (200, {"data": []})})
+        self.platform.calls.clear()
+        with self.assertRaisesRegex(common.SeedError, self.owner_name + ".*memory.*api1"):
+            self.seed()
+        self.assertEqual(list(self.world.studios), [api_id])
+        self.assertEqual(self.platform.changes(), [])
+
     def test_later_updates_and_deletes_keep_the_seed_login(self):
         self.owner_file()
         self.seed()
@@ -805,6 +817,12 @@ class StudioOwnerCases:
                 with self.assertRaisesRegex(common.SeedError, "primaryOwner") as error:
                     self.seed()
                 self.assertNotIn("\n", str(error.exception))
+                self.assertEqual(self.platform.changes(), [])
+        for value in (42, ["not an object"], "text"):
+            with self.subTest(root=value):
+                self.seed_files({self.owner_path: json.dumps(value)})
+                with self.assertRaisesRegex(common.SeedError, "seed file is an object"):
+                    self.seed()
                 self.assertEqual(self.platform.changes(), [])
 
 

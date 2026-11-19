@@ -2301,6 +2301,43 @@ class PrimaryOwners(Playground):
         with self.assertRaisesRegex(common.SeedError, "x-gravitee takes only primaryOwner"):
             self.run_seed()
         self.assertEqual(self.platform.changes(), [])
+        for value in (42, ["not an object"], "text"):
+            with self.subTest(root=value):
+                self.seed_files({"apim/apis/rest.json": json.dumps(value)})
+                with self.assertRaisesRegex(common.SeedError, "API export is an object"):
+                    self.run_seed()
+                self.assertEqual(self.platform.changes(), [])
+
+    def test_a_post_transfer_update_refusal_does_not_replace_the_api_or_add_membership(self):
+        self.owner_file()
+        self.run_seed()
+        self.platform.calls.clear()
+        self.edit("apim/apis/rest.json", lambda text: json.dumps({**json.loads(text), "api": {
+            **json.loads(text)["api"], "description": "After ownership transfer"}}))
+        self.platform.add({("PUT", V2 + "/apis/rest-id/_import/definition"): (403, {"message": "Forbidden"})})
+        with self.assertRaisesRegex(common.SeedError, "HTTP 403"):
+            self.run_seed()
+        self.assertEqual([call.method for call in self.platform.calls if call.method != "GET"], ["PUT"])
+        self.assertEqual(self.apim.apis["rest-id"]["primaryOwner"]["id"], "service-owner")
+
+    def test_a_lost_transfer_reply_can_be_retried_without_recreating_the_api(self):
+        self.owner_file()
+        path = V2 + "/apis/rest-id/_transfer-ownership"
+        calls = []
+
+        def transfer(call):
+            result = self.apim.transfer_owner(call)
+            calls.append(call)
+            if len(calls) == 1:
+                raise requests.ReadTimeout()
+            return result
+
+        self.platform.add({("POST", path): transfer})
+        self.run_seed()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.apim.apis["rest-id"]["primaryOwner"]["id"], "service-owner")
+        self.assertEqual(self.run_seed(), [])
+        self.assertEqual(len(calls), 2)
 
     def test_an_absent_or_archived_owner_is_not_created(self):
         self.owner_file()
