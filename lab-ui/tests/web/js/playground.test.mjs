@@ -354,6 +354,27 @@ test("a playground creates a named child without changing the shared playground"
 });
 
 
+test("a sandbox links its parent in the breadcrumb and keeps its name and badge together", async () => {
+  for (const parentName of ["ACME Bank", "ACME <Bank>", null]) {
+    await visit({ ...off, id: "runtime-demo", name: "Test", runtime: { mode: "independent", parent: "@acme-hub/bank", parent_name: parentName } },
+      { id: "runtime-demo", platforms: [], places: [] });
+    const parent = section.querySelector("#pg-parent"), link = parent.querySelector("a");
+    assert.equal(parent.hidden, false);
+    assert.equal(text(link), parentName || "Source playground");
+    assert.equal(link.getAttribute("href"), "#/playgrounds/@acme-hub/bank");
+    assert.equal(parent.querySelector("Bank"), null, "parent names are text, never markup");
+    assert.equal(text(section.querySelector(".pg-name h1")), "Test");
+    assert.equal(text(section.querySelector(".pg-name #pg-star")), "Sandbox");
+    assert.equal(section.querySelector("#pg-star a"), null, "the parent is part of the path, not the badge");
+    assert.deepEqual(server.calls.filter((call) => call.method === "POST"), [], "rendering and navigation never start a sandbox");
+    await leave();
+  }
+  await visit({ ...off }, { platforms: [], places: [] });
+  assert.equal(section.querySelector("#pg-parent").hidden, true);
+  assert.equal(text(section.querySelector("#pg-parent")), "", "a later playground cannot retain another sandbox's parent");
+  await leave();
+});
+
 test("a place kept for the playground is not known before the places are read: nothing deploys, and the picker says it waits", async () => {
   await visit({ ...off }, { kept: DEV.id, now: true });
   assert.deepEqual(buttons(), [["Loading", "Loading"], ["Start", "Loading"]]);

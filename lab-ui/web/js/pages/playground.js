@@ -758,7 +758,8 @@ export const maybeComing = (state, id) => state.content?.key === "downloading" &
 function missing(state) {
   if (!maybeComing(state, shown)) return router.replace("#/playgrounds");
   Workspace.leave(root);
-  for (const id of ["#pg-title", "#pg-star", "#pg-actions"]) setHTML($(id, root), "");
+  for (const id of ["#pg-title", "#pg-parent", "#pg-star", "#pg-actions"]) setHTML($(id, root), "");
+  $("#pg-parent", root).hidden = true;
   setHTML($("#pg-view", root), `<div class="empty">${loading("Loading")}</div>`);
 }
 
@@ -777,8 +778,12 @@ function render(state) {
   }
   const job = shownJob(item, state), live = living(item, state);
   setHTML($("#pg-title", root), esc(item.name));
+  const parent = $("#pg-parent", root);
+  parent.hidden = !item.runtime?.parent;
+  setHTML(parent, item.runtime?.parent
+    ? `<a class="crumb" href="#/playgrounds/${esc(item.runtime.parent)}" data-tip="${esc(item.runtime.parent_name || "Source playground")}">${esc(item.runtime.parent_name || "Source playground")}</a><span class="crumb-sep" aria-hidden="true">/</span>` : "");
   setHTML($("#pg-star", root), item.runtime?.parent
-    ? `<a class="text-link" href="#/playgrounds/${esc(item.runtime.parent)}">${esc(item.runtime.parent_name || "Source playground")}</a> <span class="pill">Sandbox</span>`
+    ? '<span class="pill">Sandbox</span>'
     : `${item.runtime?.mode === "shared" ? '<span class="pill">Shared</span> ' : ""}${starButton(item)}`);
   // Its file is within reach in every state, as on its row in the list
   setHTML($("#pg-actions", root), `${live ? actions(item, job) : picker(item)}<span class="row-icons">${item.runtime?.parent ? "" : fileButtons(item, false)}${
@@ -899,7 +904,7 @@ export const playgroundPage = {
     root = section;
     root.innerHTML = `
       <div class="page-head">
-        <div class="page-title pg-heading"><nav class="crumbs" aria-label="Breadcrumb"><a class="crumb" href="#/playgrounds">Playgrounds</a><span class="crumb-sep" aria-hidden="true">/</span></nav><h1 id="pg-title"></h1><span id="pg-star"></span></div>
+        <div class="page-title pg-heading"><nav class="crumbs" aria-label="Breadcrumb"><a class="crumb" href="#/playgrounds">Playgrounds</a><span class="crumb-sep" aria-hidden="true">/</span><span id="pg-parent" hidden></span></nav><div class="pg-name"><h1 id="pg-title"></h1><span id="pg-star"></span></div></div>
         <div class="page-actions" id="pg-actions"></div>
       </div>
       <div id="pg-view"><div class="empty">${loading("Loading")}</div></div>`;

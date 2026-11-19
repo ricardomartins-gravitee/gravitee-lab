@@ -303,11 +303,17 @@
 .crumb { color: var(--muted); text-decoration: none; font-weight: var(--fw-2); }
 .crumb:hover { color: var(--accent-ink); }
 .crumb-sep { margin: 0 10px; color: var(--border-strong); font-weight: var(--fw-1); }
-/* The page's title after the list it is in: one line, the crumb as large as the title, the star after it */
+/* A sandbox's title and badge stay together when its parent path needs another line. */
 .pg-heading { flex-wrap: nowrap; gap: 0; }
-.crumbs { display: flex; align-items: center; font-size: var(--fs-5); line-height: var(--lh-5); }
+.pg-heading:has(#pg-parent:not([hidden])) { flex: 1 1 12rem; flex-wrap: wrap; row-gap: var(--sp-2); }
+.page-head:has(#pg-parent:not([hidden])) > .page-actions { margin-left: auto; }
+.crumbs { display: flex; align-items: center; min-width: 0; max-width: 100%; font-size: var(--fs-5); line-height: var(--lh-5); }
+.crumbs > .crumb { flex-shrink: 0; }
+#pg-parent { display: inline-flex; align-items: center; min-width: 0; }
+#pg-parent .crumb { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg-name { display: flex; align-items: center; min-width: 0; max-width: 100%; }
 .pg-heading h1 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#pg-star { display: inline-flex; margin-left: 8px; }
+#pg-star { display: inline-flex; align-items: center; flex-shrink: 0; gap: var(--sp-2); margin-left: var(--sp-2); }
 
 .pg-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .pg-side h3, .pg-main h3 { margin: 0 0 8px; }
