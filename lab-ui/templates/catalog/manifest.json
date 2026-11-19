@@ -110,7 +110,7 @@
       "settings": []
     },
     "15": {
-      "summary": "Newest Lab supports private Labs and private catalog dependencies. LAB_DEPLOY_KEY is passed only to the Lab checkout, and NEEDS_DEPLOY_KEY only to Catalogs it needs, matching the other runners. Public repositories work without deploy keys.",
+      "summary": "CI, Nightly, Publish, E2E and Gravitee versions fetch and link catalog dependencies on each runner that reads catalog units. Private Labs use LAB_DEPLOY_KEY only for checkout, and private catalog dependencies use NEEDS_DEPLOY_KEY only for setup, including Newest Lab. Public dependencies use anonymous HTTPS.",
       "manual": [],
       "settings": []
     }
