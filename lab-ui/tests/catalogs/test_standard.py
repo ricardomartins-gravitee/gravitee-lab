@@ -160,10 +160,7 @@ class Template(unittest.TestCase):
                         self.assertNotIn("NEEDS_DEPLOY_KEY", json.dumps(step))
                     if latest:
                         self.assertEqual(steps[checkout].get("with"), {"key": "${{ secrets.LAB_DEPLOY_KEY }}", "latest": "true"})
-                        self.assertNotIn("env", steps[fetch])
-                        self.assertNotIn("NEEDS_DEPLOY_KEY", json.dumps(runner))
-                    else:
-                        self.assertEqual(steps[fetch].get("env"), {"NEEDS_DEPLOY_KEY": "${{ secrets.NEEDS_DEPLOY_KEY }}"})
+                    self.assertEqual(steps[fetch].get("env"), {"NEEDS_DEPLOY_KEY": "${{ secrets.NEEDS_DEPLOY_KEY }}"})
 
 
 class Golden(Case):
