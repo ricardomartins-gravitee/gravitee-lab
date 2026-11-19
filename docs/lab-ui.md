@@ -72,6 +72,9 @@ Create several named sandboxes from the same playground and run them concurrentl
 open its source playground to use Shared. Its links, consoles, Start and Stop target only that named instance. The sandbox inventory is opened on demand from
 More rather than displayed on the playground page.
 
+A sandbox's breadcrumb reads *Playgrounds / source playground / sandbox name*. Choose the source playground to return
+to its Shared page; the Sandbox badge stays beside the sandbox name.
+
 A sandbox starts its own platform services and dependencies, in a separate Compose project with its own
 networks, storage and loopback ports. Several can run at once. Use the links and consoles on its page: their ports differ
 from the shared platform's. Start, Stop, Restart, Re-seed, logs and the terminal act on that sandbox alone.
