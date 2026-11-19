@@ -568,7 +568,11 @@ class WhatItNeeds(Agents):
                               (AGENT.replace("- {studio: Customer desk, plan: Agents}", "- Customer desk"), access),
                               (AGENT.replace(", plan: Agents", ""), access),
                               (AGENT.replace("{studio: Customer desk,", "{studio: Customer desk, api: Orchid models,"), access),
-                              (AGENT.replace("plan: Agents}", "plan: Agents, apiKey: k}"), access)):
+                              (AGENT.replace("plan: Agents}", "plan: Agents, apiKey: k}"), access),
+                              (AGENT.replace("plan: Agents}", "plan: 42}"), access),
+                              (AGENT.replace("plan: Agents}", "plan: Agents, typo: x}"), access),
+                              (AGENT.replace("clientId: desk-copilot", "clientId: true"),
+                               "desk-copilot.yaml: identity needs a clientId")):
             with self.subTest(problem=problem):
                 self.seed_files({"aim/agents/desk-copilot.yaml": text})
                 self.fails(problem)

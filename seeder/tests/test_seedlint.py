@@ -966,3 +966,67 @@ class StudioShapes(Made):
     def test_an_empty_list_of_subscriptions_is_what_the_seed_takes(self):
         self.assertEqual(aim_proxies.read_subscriptions({"subscriptions": None}, "Desk"), [])
         self.assertEqual(self.studio(STUDIO + "subscriptions:\n"), [])
+
+
+class PrimaryOwners(Made):
+    def test_owner_references_are_checked_in_both_studio_shapes_and_api_locations(self):
+        owner = {"source": "memory", "sourceId": "api1"}
+        case = 0
+        for value in (owner, None, {}, {"source": "memory"}, {**owner, "sourceId": 1}, {**owner, "id": "machine-id"}):
+            for path, text in (
+                    ("seed/aim/studios/desk.yaml", STUDIO + "\nprimaryOwner: " + json.dumps(value)),
+                    ("seed/aim/studios/desk.yaml", AGENTS_STUDIO + "\nprimaryOwner: " + json.dumps(value)),
+                    ("seed/apim/apis/open.json", json.dumps({"api": {"name": "Open"}, "x-gravitee": {"primaryOwner": value}})),
+                    ("seed/environments/newt/apis/open.json", json.dumps({"api": {"name": "Open"}, "x-gravitee": {"primaryOwner": value}}))):
+                with self.subTest(path=path, owner=value):
+                    case += 1
+                    folder = self.playground({**GOOD, path: text,
+                                              "seed/environments/newt/environment.yaml": "id: newt\nname: Newt\n"}, name=f"owner-{case}")
+                    problems = seedlint.problems(folder)
+                    if value == owner:
+                        self.assertEqual(problems, [])
+                    else:
+                        self.assertEqual(len(problems), 1)
+                        self.assertIn("primaryOwner", problems[0].message)
+                        self.assertTrue(problems[0].path.endswith(path))
+
+    def test_unknown_export_metadata_is_named_but_the_product_owner_is_ignored(self):
+        for metadata, count in (({"owner": {}}, 1), (None, 1), ({}, 0)):
+            with self.subTest(metadata=metadata):
+                document = {"api": {"name": "Open", "primaryOwner": {"id": "exported"}}, "x-gravitee": metadata}
+                folder = self.playground({**GOOD, "seed/apim/apis/open.json": json.dumps(document)})
+                problems = seedlint.problems(folder)
+                self.assertEqual(len(problems), count)
+                if count:
+                    self.assertIn("x-gravitee", problems[0].message)
+
+
+class OptionalFields(Made):
+    def test_optional_fields_use_the_seeders_validation(self):
+        cases = [
+            ("aim/agents/desk.yaml", {"entityId": "desk", "access": [{"api": "Models", "plan": "Agents", "apiKey": "demo"}]},
+             {"entityId": "desk", "access": [{"api": "Models", "plan": "Agents", "apiKey": 123}]}, "access"),
+            ("aim/workspaces/desk.yaml", {"tags": ["demo"]}, {"tags": ["demo", "demo"]}, "tags"),
+            ("edge/configuration.yaml", {"shadowAi": {"reportInterval": "PT10S"}},
+             {"shadowAi": {"reportInterval": "PT9S"}}, "reportInterval"),
+        ]
+        for index, (path, valid, invalid, field) in enumerate(cases):
+            for good, value in ((True, valid), (False, invalid)):
+                with self.subTest(path=path, good=good):
+                    folder = self.playground({"seed/" + path: json.dumps(value)}, name=f"fields-{index}-{good}")
+                    problems = seedlint.problems(folder)
+                    self.assertEqual(len(problems), 0 if good else 1)
+                    if not good:
+                        self.assertIn(field, problems[0].message)
+
+    def test_studio_fields_are_checked_for_both_shapes(self):
+        for index, text in enumerate((STUDIO, AGENTS_STUDIO)):
+            for good, fields in ((True, {"visibility": "PUBLIC", "labels": ["tools"], "categories": []}),
+                                 (False, {"categories": [False]})):
+                with self.subTest(shape=index, good=good):
+                    suffix = "\n".join(key + ": " + json.dumps(value) for key, value in fields.items())
+                    folder = self.playground({"seed/aim/studios/desk.yaml": text + "\n" + suffix}, name=f"studio-{index}-{good}")
+                    problems = seedlint.problems(folder)
+                    self.assertEqual(len(problems), 0 if good else 1)
+                    if not good:
+                        self.assertIn("categories", problems[0].message)
