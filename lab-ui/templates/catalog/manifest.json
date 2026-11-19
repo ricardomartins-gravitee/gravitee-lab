@@ -1,5 +1,5 @@
 {
-  "level": 13,
+  "level": 14,
   "files": [
     {"path": ".catalog/standard.mk", "class": "managed", "since": 1, "when": "always", "scope": "full"},
     {"path": ".github/dependabot.yml", "class": "managed", "since": 1, "when": "always", "scope": "full"},
@@ -101,6 +101,11 @@
     },
     "13": {
       "summary": "The Apps job fetches and links the catalog dependencies on its own runner before building, testing, starting or scanning apps. Public dependencies use anonymous HTTPS, and private dependencies use the read key only during setup; build and runtime steps receive no dependency key.",
+      "manual": [],
+      "settings": []
+    },
+    "14": {
+      "summary": "Nightly and Publish fetch and link catalog dependencies on each runner that reads the catalog. Newest Lab does this without a deploy key; the other jobs use NEEDS_DEPLOY_KEY only for that setup step.",
       "manual": [],
       "settings": []
     }

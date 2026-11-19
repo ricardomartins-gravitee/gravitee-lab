@@ -129,24 +129,41 @@ class Template(unittest.TestCase):
         try:
             import yaml
         except ImportError:
-            support.skip("PyYAML is not installed, the CI dependency setup was not parsed")
-        workflow = yaml.safe_load(render()[".github/workflows/ci.yml"])
-        for job, consumer in (("static", "Check"), ("compile", "Build the apps")):
-            with self.subTest(job=job):
-                steps = workflow["jobs"][job]["steps"]
-                names = [step.get("name") for step in steps]
-                self.assertEqual(names.count("Catalogs it needs"), 1)
-                fetch = names.index("Catalogs it needs")
-                self.assertLess(names.index("Check out the Lab"), fetch)
-                self.assertLess(fetch, names.index(consumer))
-                self.assertEqual(steps[fetch]["run"], "python3 -I lab/lab-ui/catalog.py ci needs catalog")
-                self.assertEqual(steps[fetch].get("env"), {"NEEDS_DEPLOY_KEY": "${{ secrets.NEEDS_DEPLOY_KEY }}"})
-                self.assertNotIn("if", steps[fetch])
-                self.assertNotIn("continue-on-error", steps[fetch])
-                self.assertNotIn("NEEDS_DEPLOY_KEY", workflow.get("env", {}))
-                self.assertNotIn("NEEDS_DEPLOY_KEY", workflow["jobs"][job].get("env", {}))
-                for step in steps[fetch + 1:]:
-                    self.assertNotIn("NEEDS_DEPLOY_KEY", json.dumps(step))
+            support.skip("PyYAML is not installed, the workflow dependency setup was not parsed")
+        files = render(**EVERYTHING)
+        cases = {
+            "ci": {"static": "Check", "compile": "Build the apps"},
+            "nightly": {"verify-latest": "The newest Lab reads the catalog",
+                        "verify-pinned": "The published images have no fixable critical flaw"},
+            "publish": {"plan": "Whether this ref may publish, and what to build", "images": "Build and push the images",
+                        "release": "The notes and the index"},
+        }
+        for workflow, consumers in cases.items():
+            document = yaml.safe_load(files[f".github/workflows/{workflow}.yml"])
+            for job, consumer in consumers.items():
+                with self.subTest(workflow=workflow, job=job):
+                    latest = job == "verify-latest"
+                    runner = document["jobs"][job]
+                    steps = runner["steps"]
+                    names = [step.get("name") for step in steps]
+                    self.assertEqual(names.count("Catalogs it needs"), 1)
+                    fetch = names.index("Catalogs it needs")
+                    checkout = names.index("Check out the newest Lab" if latest else "Check out the Lab")
+                    self.assertLess(checkout, fetch)
+                    self.assertLess(fetch, names.index(consumer))
+                    self.assertEqual(steps[fetch]["run"], "python3 -I lab/lab-ui/catalog.py ci needs catalog")
+                    self.assertNotIn("if", steps[fetch])
+                    self.assertNotIn("continue-on-error", steps[fetch])
+                    self.assertNotIn("NEEDS_DEPLOY_KEY", json.dumps(document.get("env", {})))
+                    self.assertNotIn("NEEDS_DEPLOY_KEY", json.dumps(runner.get("env", {})))
+                    for step in steps[:fetch] + steps[fetch + 1:]:
+                        self.assertNotIn("NEEDS_DEPLOY_KEY", json.dumps(step))
+                    if latest:
+                        self.assertNotIn("DEPLOY_KEY", json.dumps(document.get("env", {})))
+                        self.assertNotIn("DEPLOY_KEY", json.dumps(runner))
+                        self.assertNotIn("key", steps[checkout].get("with", {}))
+                    else:
+                        self.assertEqual(steps[fetch].get("env"), {"NEEDS_DEPLOY_KEY": "${{ secrets.NEEDS_DEPLOY_KEY }}"})
 
 
 class Golden(Case):
