@@ -589,8 +589,8 @@
                     "Removing…"
   <div class="container-context">
     <span id="container-runtime-label">
-      "Run in"
-    <button class="combo-btn" data-container-runtime="" aria-label="Run in" aria-labelledby="container-runtime-label container-runtime-value" aria-haspopup="dialog">
+      "Show containers for"
+    <button class="combo-btn" data-container-runtime="" aria-label="Show containers for" aria-labelledby="container-runtime-label container-runtime-value" aria-haspopup="dialog">
       <span class="value" id="container-runtime-value">
         "Shared Lab"
       <svg aria-hidden="true">

@@ -42,8 +42,8 @@ export const platformHead = (title, { lean = false, scope = "" } = {}) => `
 const SKELETON = `
   ${platformHead("Containers")}
   <div class="container-context">
-    <span id="container-runtime-label">Run in</span>
-    <button class="combo-btn" data-container-runtime aria-label="Run in" aria-labelledby="container-runtime-label container-runtime-value" aria-haspopup="dialog">
+    <span id="container-runtime-label">Show containers for</span>
+    <button class="combo-btn" data-container-runtime aria-label="Show containers for" aria-labelledby="container-runtime-label container-runtime-value" aria-haspopup="dialog">
       <span class="value" id="container-runtime-value">Shared Lab</span>${icon("chevron")}</button>
     <span data-container-source></span><a class="text-link" href="#/sandboxes">Manage sandboxes</a>
   </div>
