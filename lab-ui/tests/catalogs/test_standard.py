@@ -137,7 +137,19 @@ class Template(unittest.TestCase):
                         "verify-pinned": "The published images have no fixable critical flaw"},
             "publish": {"plan": "Whether this ref may publish, and what to build", "images": "Build and push the images",
                         "release": "The notes and the index"},
+            "e2e": {"plan": "Plan the jobs", "e2e": "Try it"},
+            "versions": {"plan": "Plan the jobs", "try": "Try it", "record": "Write the versions that passed"},
         }
+        # These commands resolve catalog units; metadata-only commands (the PR gate, release guard, and seed lint) do not.
+        reads_units = re.compile(r"\bcatalog\.py\s+(?:check|index|link|ci\s+(?:plan|manifests|build|test|smoke|scan-built|"
+                                 r"scan-published|publish-plan|publish|release-notes|e2e-plan|versions-plan|versions-record|versions-release))\b")
+        found = set()
+        for path, data in files.items():
+            if path.startswith(".github/workflows/") and path.endswith(".yml"):
+                for job, runner in yaml.safe_load(data)["jobs"].items():
+                    if any(reads_units.search(step.get("run", "")) for step in runner.get("steps", [])):
+                        found.add((Path(path).stem, job))
+        self.assertEqual(found, {(workflow, job) for workflow, consumers in cases.items() for job in consumers})
         for workflow, consumers in cases.items():
             document = yaml.safe_load(files[f".github/workflows/{workflow}.yml"])
             for job, consumer in consumers.items():
@@ -151,6 +163,9 @@ class Template(unittest.TestCase):
                     checkout = names.index("Check out the newest Lab" if latest else "Check out the Lab")
                     self.assertLess(checkout, fetch)
                     self.assertLess(fetch, names.index(consumer))
+                    if workflow == "e2e" and job == "e2e":
+                        self.assertLess(names.index("The change is the one that was read"), fetch)
+                    self.assertEqual(steps[checkout].get("with", {}).get("key"), "${{ secrets.LAB_DEPLOY_KEY }}")
                     self.assertEqual(steps[fetch]["run"], "python3 -I lab/lab-ui/catalog.py ci needs catalog")
                     self.assertNotIn("if", steps[fetch])
                     self.assertNotIn("continue-on-error", steps[fetch])
@@ -159,11 +174,10 @@ class Template(unittest.TestCase):
                     for step in steps[:fetch] + steps[fetch + 1:]:
                         self.assertNotIn("NEEDS_DEPLOY_KEY", json.dumps(step))
                     if latest:
-                        self.assertNotIn("DEPLOY_KEY", json.dumps(document.get("env", {})))
-                        self.assertNotIn("DEPLOY_KEY", json.dumps(runner))
-                        self.assertNotIn("key", steps[checkout].get("with", {}))
+                        self.assertEqual(steps[checkout].get("with"), {"key": "${{ secrets.LAB_DEPLOY_KEY }}", "latest": "true"})
                     else:
-                        self.assertEqual(steps[fetch].get("env"), {"NEEDS_DEPLOY_KEY": "${{ secrets.NEEDS_DEPLOY_KEY }}"})
+                        self.assertEqual(steps[checkout].get("with", {}).get("latest", "false"), "false")
+                    self.assertEqual(steps[fetch].get("env"), {"NEEDS_DEPLOY_KEY": "${{ secrets.NEEDS_DEPLOY_KEY }}"})
 
 
 class Golden(Case):
