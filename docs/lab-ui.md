@@ -91,7 +91,7 @@ The Lab keeps private configuration and copied mounts in `.lab/runtimes/`, and n
 an explicitly selected clone of the complete Shared Lab. Existing private projects appear as named children after an upgrade,
 with their folders, volumes and ports intact. The existing storage filenames and internal API identifiers are retained;
 the Sandboxes wording requires no storage migration.
-The Containers page opens on Shared Lab. Its *Run in* picker selects which instance its controls and consoles address;
+The Containers page opens on Shared Lab. Its *Show containers for* picker selects which instance its controls and consoles address;
 changing the view starts and stops nothing. The `make` commands still act on the shared project and leave independent
 sandboxes untouched; manage those from their playground pages, Sandboxes, or their selected Containers view. Catalog replacement
 and removal wait while a private sandbox using the catalog is on.
@@ -107,7 +107,7 @@ storage, because sandboxes can share their image layers.
 
 Choose *Containers* beside an instance to inspect it. Containers uses one table for Shared and sandboxes,
 with the same product groups, service states, versions, ports, uptime, Logs, Start, Stop and Restart controls. Its
-*Run in* picker defaults to Shared Lab; an explicit sandbox link selects that instance. The address records that choice,
+*Show containers for* picker defaults to Shared Lab; an explicit sandbox link selects that instance. The address records that choice,
 so reload, Back and Forward retain the target. Each action captures its sandbox identity before confirmation.
 Start can recreate a removed container while preserving its data; seeds run through Re-seed.
 

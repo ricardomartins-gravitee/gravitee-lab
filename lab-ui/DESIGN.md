@@ -715,7 +715,7 @@ More > Sandboxes. Shared has no duplicate management row. Storage details retain
 image references. Machine-wide image and build-cache usage is shown once. `/api/runtimes` runs only while a management
 view is open; storage scans never hold the normal state stream.
 
-Containers opens on Shared Lab, with one Run in picker. `#/containers/<sandbox id>` identifies an explicit private view;
+Containers opens on Shared Lab, with one Show containers for picker. `#/containers/<sandbox id>` identifies an explicit private view;
 Back, Forward and reload restore that target. Opening the ordinary menu link returns to Shared. Selection changes no
 machine settings or running services. Its groups, service rows, header actions and consoles all belong to the chosen
 instance. Private groups and services use stable keys containing that sandbox's identity; the server validates group
@@ -1678,7 +1678,7 @@ dark, at 1440 and 900 px wide.
    - With Docker off, the inventory settles on saved names and unavailable live values, with one Docker notice. Inspect
      an instance whose source is unavailable: captured ports remain; mutation controls are disabled with their reason.
    - At phone width, management actions wrap below each sandbox and remain visible without horizontal scrolling.
-     Container ports remain visible below names. Verify both themes and keyboard selection of the Run in picker.
+     Container ports remain visible below names. Verify both themes and keyboard selection of the Show containers for picker.
 
 12. **Apply needed.** A version saved on Images while its container runs: the rows and the banner's notice, on every page but Containers, show the badge "Apply needed" (the notice its count; no page has it beside its title); hover it, tab to it (its name for a screen reader holds
     the reason) and tap it on a touch screen: the popover is one table, the tags that run and those saved under *Running* and
