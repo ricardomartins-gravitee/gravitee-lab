@@ -159,9 +159,9 @@ class Template(unittest.TestCase):
                     for step in steps[:fetch] + steps[fetch + 1:]:
                         self.assertNotIn("NEEDS_DEPLOY_KEY", json.dumps(step))
                     if latest:
-                        self.assertNotIn("DEPLOY_KEY", json.dumps(document.get("env", {})))
-                        self.assertNotIn("DEPLOY_KEY", json.dumps(runner))
-                        self.assertNotIn("key", steps[checkout].get("with", {}))
+                        self.assertEqual(steps[checkout].get("with"), {"key": "${{ secrets.LAB_DEPLOY_KEY }}", "latest": "true"})
+                        self.assertNotIn("env", steps[fetch])
+                        self.assertNotIn("NEEDS_DEPLOY_KEY", json.dumps(runner))
                     else:
                         self.assertEqual(steps[fetch].get("env"), {"NEEDS_DEPLOY_KEY": "${{ secrets.NEEDS_DEPLOY_KEY }}"})
 
