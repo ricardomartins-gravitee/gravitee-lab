@@ -667,6 +667,8 @@ Ordinary playgrounds always use Shared. Explicitly created, named children own i
 children of the same source can run concurrently. Each child has a stable identity and its own page and actions, so
 opening a different sandbox never redirects an in-flight action or stops another instance. The catalog list contains
 source playgrounds; children appear in their source's More > Sandboxes dialog and on the Sandboxes page. No default/mode settings are exposed.
+The child's header links Playgrounds, then its source playground, then shows its own title and Sandbox badge together.
+Breadcrumb links share one type size; long source names truncate and the title/badge group can wrap onto its own line.
 
 The machine registry maps each child identity to a source and a display name. Legacy private projects are registered
 with an alias to their original storage identity: migration never moves data, changes a Docker project or allocates
