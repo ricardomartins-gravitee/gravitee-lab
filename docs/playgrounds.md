@@ -450,10 +450,39 @@ except API exports, which are `.json` (`seed/apim/apis/*.json`, and the `apis/*.
 | `seed/am/gamma-link.yaml` | The link from Gamma to the AM domain | Gamma and AM APIs |
 | `seed/openfga/*.yaml` | OpenFGA store file (`fga store import`) | OpenFGA API |
 | `seed/aim/<resource>/*.yaml` | Agent Management: credentials, providers, models, MCP servers, knowledge, skills, agents (an agent file may also carry its `identity` and its `access` to the plan of a studio, or of an API that seed/apim makes, with an `apiKey` on a plan of API keys, on the amp-demo build only), API tools (only the `operations` listed, tailored when asked), workspaces (a component may name its own endpoint, `target`, with a price on each model: the amp-demo build takes no other), MCP proxies, studios (with their `subscriptions`, and, for one built in steps with `access`, `authorization.agentIdentityResolution` for a policy that reads the agent), dashboards, governance (approval rules and settings, compliance); a file with `needs: NAME` is skipped while the setting NAME is empty | Gamma and Automation APIs |
+| `seed/edge/configuration.yaml` | Shared environment configuration: gateway and reactor URLs, proxy DNS domains and ordered routes, Shadow AI domains and reporting interval | Edge Management Gamma API |
 | `seed/authz/entities.yaml`, `policies/*.yaml`, `schema.yaml`, `schemas/*.yaml` | Authorization Management: what the policies are about, GAPL policies, the schema of the editor | Gamma API |
 | `seed/k8s/*.yaml` | Kubernetes manifests: a namespace, a Secret, a `ManagementContext` for the Gravitee Kubernetes Operator. One manifest to a file, in name order | Server-side apply on the cluster of `KUBECONFIG` |
 | `seed/controls.yaml` | The protections the lessons switch on | The APIs of the files above, aligned to the mode on every run |
 | `seed/refills.yaml` | What the lessons spend, given back on every run | The counters the gateway keeps in the core's Redis |
+
+Set an optional primary owner by the user's `source` and `sourceId`, as in `users.yaml`. For an imported API,
+add `x-gravitee` beside the export's `api` and `plans`:
+
+```json
+"x-gravitee": {
+  "primaryOwner": {"source": "memory", "sourceId": "api1"}
+}
+```
+
+Keep Gravitee's exported `primaryOwner` object as product data; do not use it as a seed instruction or add a
+machine-specific user id. The seeder strips `x-gravitee` before `_import/definition` and excludes it from the definition's
+digest. For either shape of studio in `seed/aim/studios/*.yaml`, add the reference directly:
+
+```yaml
+primaryOwner:
+  source: memory
+  sourceId: api1
+```
+
+Use an existing, non-archived organization user. A memory user has no platform row until its first sign-in or group
+membership; the seeder reports a missing row and never creates the owner or signs in as that user. Keep the seed login's
+environment admin role: the seed login keeps managing the API through that role after ownership transfers.
+
+Leave the key out to keep the current owner. With the key present, let the seeder transfer ownership after creation,
+update or replacement, and when the definition is already up to date; an owner that already matches needs no transfer.
+Changing only the owner replaces no API or studio. Removing the key transfers nothing back, and the ownership transfer
+adds nothing to `created.json`.
 
 A studio file (`seed/aim/studios/`) says its tools, its plan or its `access`, and its authorization check. Three keys
 serve the lessons:
@@ -475,6 +504,49 @@ serve the lessons:
   back in place, with the keys of the APIs, and the flow of the authorization check is written again after them.
 - A studio file of either shape gives its protocol versions with the key its build takes:
   [What differs from one build to another](#what-differs-from-one-build-to-another).
+
+Set optional API fields directly on either studio shape. Use existing category ids, supplied by the seed service's
+variables when they differ between platforms. Leave a field out to preserve it; use an empty list to clear it. Changing
+these fields updates the existing API and does not recreate the studio:
+
+```yaml
+visibility: PUBLIC
+labels: [assistant, tools]
+categories: ['${DEMO_CATEGORY_ID}']
+```
+
+Add `tags` to an `aim/workspaces/*.yaml` file to set its workspace tags. Leave the key out to preserve existing tags,
+or set `tags: []` to clear them:
+
+```yaml
+tags: [demo, support]
+```
+
+Configure Edge Management with `seed/edge/configuration.yaml`. Set both URLs on the first save; omit them on later saves
+or keep the same values, because the platform does not allow changing them. Keep every endpoint in a variable:
+
+```yaml
+gatewayUrl: '${EDGE_GATEWAY_URL}'
+reactorUrl: '${EDGE_REACTOR_URL}'
+proxy:
+  dnsDomains:
+    - {name: api.example.com}
+  routes:
+    - {pathPrefix: /v1/messages, apiPath: /interception/claude, provider: anthropic}
+    - {pathPrefix: /, apiPath: /interception/passthrough}
+shadowAi:
+  domains:
+    - {name: api.example.com}
+  reportInterval: PT2M
+```
+
+Keep routes in first-match order, and create their proxy APIs through `seed/apim/apis/` as usual. Set `reportInterval`
+to an ISO 8601 duration of at least 10 seconds, using hours, minutes, or seconds; oversized values stop the seed before
+it connects. Leave sections or fields out to preserve
+them; use empty lists to clear domains or routes. On creation, omit lists to default them to empty and omit the interval
+to use `PT2M`. Save and deploy only when the configuration differs. Treat this as shared environment configuration:
+removing the playground leaves it in place, as with APIM environment settings, and adds no entry to `created.json`.
+Install and enroll Edge devices through the platform's existing process.
 
 Seed files use `${VAR}` for everything that depends on the target: service URLs, the Redis password of a vector store
 resource, the gateway and AM addresses shown to clients. Acme Shop's seed files use, among others, `${AM_GATEWAY_URL}`,
@@ -973,6 +1045,7 @@ with the code it names once no build that the Lab runs needs it.
 |---|---|---|---|
 | A studio's protocol versions | A list on every release, one value on the amp-demo build, which refuses the list | `supportedProtocolVersions: ["2025-11-25"]` or `protocolVersion: "2025-11-25"` | Sends a release the list, from either key, and a build the key the file gives (`aim_proxies.protocol_versions`) |
 | A studio's keyless plan | The amp-demo build makes it from `KEYLESS`, the name of Agent Management, and its plans read it back as `KEY_LESS` | `plan: {security: {type: KEYLESS}}` | Knows both names where it checks a subscription (`seedlint.studio_problems`) |
+| Credential usage surfaces | Required by the amp-demo build; removed from the release API | Nothing | Omits `allowedUsageSurfaces` on releases and keeps the legacy default on builds (`aim_catalog`) |
 | The module of a dashboard | Some platforms ask for it, with a 400 that holds the code `module_required` | Nothing | Asks again with the module when the answer holds that code (`aim_dashboards`) |
 | An update the platform does not offer | It answers 404, 405 or 501 | Nothing | Imports the API again, or makes the studio again (`apim.UNSUPPORTED`) |
 | Models of an AI workspace with an endpoint of their own | The only kind the amp-demo build takes | A component with `target` and a price on each model | Makes the component the file describes (`aim_workspaces`) |

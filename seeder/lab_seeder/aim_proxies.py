@@ -48,7 +48,8 @@ import re
 from . import controls
 from . import gamma
 from . import versions
-from .apim import ENDED, UNSUPPORTED, accept, digest_of, find_application, held_subscription, merge, subscribe
+from .apim import (ENDED, UNSUPPORTED, accept, digest_of, find_application, held_subscription, merge, owner_user, primary_owner,
+                   subscribe, transfer_ownership)
 from .common import (OK, Api, SeedError, adopted, contains, created, excerpt, files, forget, has_seed, load, log, making, owned, record,
                      recorded, setting, wait_until, waits_for_gateway)
 
@@ -80,6 +81,22 @@ KINDS = {"mcp-proxy": "MCP proxy", "studio": "MCP studio"}
 VERSION_KEYS = ("supportedProtocolVersions", "protocolVersion")
 # What a subscription of a studio's file may say
 SUBSCRIPTION_KEYS = ("application", "plan", "apiKey")
+
+
+STUDIO_FIELDS = ("visibility", "labels", "categories")
+
+
+def studio_fields(spec, where):
+    """Optional writable API fields, kept outside the studio's creation digest."""
+    wanted = {key: spec[key] for key in STUDIO_FIELDS if key in spec}
+    if "visibility" in wanted and wanted["visibility"] not in ("PUBLIC", "PRIVATE"):
+        raise SeedError(f"{where}: visibility is PUBLIC or PRIVATE")
+    for key in ("labels", "categories"):
+        if key in wanted and (not isinstance(wanted[key], list)
+                              or not all(isinstance(value, str) and value.strip() for value in wanted[key])
+                              or len(set(wanted[key])) != len(wanted[key])):
+            raise SeedError(f"{where}: {key} is a list of distinct, nonempty strings")
+    return wanted
 
 
 def fill(value, slug):
@@ -470,7 +487,22 @@ class McpProxies:
 
     def studio(self, spec):
         """A studio made in one go, or in steps (`access` present): its keys tell apart."""
-        (self.agents_studio if "access" in spec else self.plain_studio)(spec)
+        studio_fields(spec, f"MCP studio {spec['name']}")
+        owner = owner_user(self.g.org_v1, primary_owner(spec, f"MCP studio {spec['name']}"), spec["name"])
+        api_id = (self.agents_studio if "access" in spec else self.plain_studio)(spec)
+        transfer_ownership(self.g.v2, f"/apis/{api_id}", owner, spec["name"], SECTION)
+
+    def studio_api_fields(self, api_id, name, wanted):
+        if not wanted:
+            return False
+        live = self.g.v2.get(f"/apis/{api_id}").json()
+        if all((set(live.get(key) or []) == set(value) if isinstance(value, list) else live.get(key) == value)
+               for key, value in wanted.items()):
+            return False
+        body = {key: value for key, value in live.items() if key not in STUDIO_API_READ_ONLY}
+        self.g.v2.put(f"/apis/{api_id}", json={**body, **wanted}, what=f"MCP studio {name}")
+        log(SECTION, f"✓ API settings of MCP studio {name}")
+        return True
 
     def plain_studio(self, spec):
         """Created from the catalog's tools, and replaced when its file changed: its plan cannot be edited in place. Tools
@@ -495,11 +527,13 @@ class McpProxies:
         toggled = self.g.aim.get(f"/mcp-proxies/{found['id']}").json().get("fgaEnabled", False) != enabled
         if toggled:
             self.g.aim.put(f"/mcp-studios/{found['id']}/fga", json={"enabled": enabled})
-        if toggled or recomposed:
+        settings_changed = self.studio_api_fields(found["id"], name, studio_fields(spec, f"MCP studio {name}"))
+        if toggled or recomposed or settings_changed:
             self.g.v2.post(f"/apis/{found['id']}/deployments", json=DEPLOYMENT)
         if toggled:
             log(SECTION, f"  ✓ Authorization check {'on' if enabled else 'off'}")
         self.subscribe(found["id"], name, subscriptions)
+        return found["id"]
 
     def kept(self, name, path, wanted, body):
         """The studio at this path, as the seed keeps it: (None, False) when there is none, or when it was made from another
@@ -620,9 +654,11 @@ class McpProxies:
         api_id = found["id"]
         changed = self.access(api_id, access) or changed
         changed = self.checks(api_id, name, spec) or changed   # after the tools: writing them may rebuild the check's flow
+        changed = self.studio_api_fields(api_id, name, studio_fields(spec, f"MCP studio {name}")) or changed
         self.deploy(api_id, changed)
         self.subscribe(api_id, name, subscriptions)
         self.wait_served(spec)
+        return api_id
 
     def access(self, api_id, access):
         """The plan of the agents is published, then the registration plan is closed. The registration plan is what the
@@ -707,12 +743,16 @@ class McpProxies:
 def seed():
     if not has_seed(*FOLDERS):
         return   # before any setting is read or any connection made: a playground that does not seed this is untouched
+    studios = [(path, load(path)) for path in files("aim", "studios")]
+    for path, spec in studios:
+        primary_owner(spec, str(path))
+        studio_fields(spec, str(path))
     proxies = McpProxies()
     proxies.connect()
     for path in files("aim", "mcp-proxies"):
         proxies.proxy(load(path))
-    for path in files("aim", "studios"):
-        proxies.studio(load(path))
+    for _, spec in studios:
+        proxies.studio(spec)
 
 
 def remove(records):

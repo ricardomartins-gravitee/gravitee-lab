@@ -111,6 +111,70 @@ def digest_of(definition):
     return hashlib.sha256(json.dumps(definition, sort_keys=True).encode()).hexdigest()
 
 
+def primary_owner(spec, where):
+    """The seed's user reference, never the primaryOwner object of a product export."""
+    if not isinstance(spec, dict):
+        raise SeedError(f"{where}: seed file is an object")
+    if "primaryOwner" not in spec:
+        return None
+    owner = spec["primaryOwner"]
+    if (not isinstance(owner, dict) or set(owner) != {"source", "sourceId"}
+            or not all(isinstance(owner[key], str) and owner[key].strip() for key in ("source", "sourceId"))):
+        raise SeedError(f"{where}: primaryOwner needs only source and sourceId, both nonempty text")
+    return owner
+
+
+def api_owner(definition, where):
+    """Seeder metadata beside the product export: stripped before importing or computing its digest."""
+    if not isinstance(definition, dict):
+        raise SeedError(f"{where}: API export is an object")
+    metadata = definition.get("x-gravitee", {})
+    if not isinstance(metadata, dict) or set(metadata) - {"primaryOwner"}:
+        raise SeedError(f"{where}: x-gravitee takes only primaryOwner")
+    return primary_owner(metadata, where)
+
+
+def users_named(api, source_id, path="/users"):
+    """Live organization users with this exact sourceId, across every search page."""
+    page = 1
+    while True:
+        body = api.get(path, params={"q": source_id, "page": page, "size": 100}).json()
+        for user in body.get("data", []):
+            if user.get("sourceId") == source_id and user.get("status") != "ARCHIVED":
+                yield user
+        if page >= body.get("page", {}).get("total_pages", 1):
+            return
+        page += 1
+
+
+def find_user(api, source, source_id, path="/users"):
+    """The live organization user with this source and sourceId, or None."""
+    return next((user for user in users_named(api, source_id, path) if user.get("source") == source), None)
+
+
+def owner_user(api, wanted, name, path="/users"):
+    """Resolve the owner without creating a user: a memory user may have no platform row yet."""
+    if wanted is None:
+        return None
+    user = find_user(api, wanted["source"], wanted["sourceId"], path)
+    if user is None:
+        raise SeedError(excerpt(f"API {name}: no live primary owner for source {wanted['source']} and sourceId {wanted['sourceId']}; "
+                                "a memory user needs a first sign-in or group membership"))
+    return user
+
+
+def transfer_ownership(api, path, user, name, section):
+    """Use the environment's existing v2 client, including when the definition needs no write."""
+    if user is None:
+        return
+    live = api.get(path, what=f"API {name}").json()
+    if (live.get("primaryOwner") or {}).get("id") == user["id"]:
+        return
+    api.post(f"{path}/_transfer-ownership", json={"userId": user["id"], "userType": "USER"},
+             what=f"API {name}: transfer primary owner", idempotent=True)
+    log(section, f"✓ Primary owner of {name}: {user['source']}/{user['sourceId']}")
+
+
 def made_by_seed(api_id):
     """The record of an API the seed created, None for any other."""
     return next((x for x in created() if (x["product"], x["kind"], x["id"]) == (SECTION, "api", api_id)), None)
@@ -289,15 +353,7 @@ class ApiManagement:
 
     def find_user(self, source, source_id):
         """The user of the platform with this source and id, None for none. An archived one (a user that was deleted) is none."""
-        page = 1
-        while True:
-            body = self.api.get(f"{self.org_v1}/users", params={"q": source_id, "page": page, "size": 100}).json()
-            for user in body.get("data", []):
-                if (user.get("source"), user.get("sourceId")) == (source, source_id) and user.get("status") != "ARCHIVED":
-                    return user
-            if page >= body.get("page", {}).get("total_pages", 1):
-                return None
-            page += 1
+        return find_user(self.api, source, source_id, f"{self.org_v1}/users")
 
     def appears(self, source, source_id):
         """The user the platform has just made from a group, which its search may list a moment later; None when it never does."""
@@ -464,8 +520,11 @@ class ApiManagement:
         return next((a for a in self.all_apis() if address and self.address(a) == address), None)
 
     def import_api(self, definition, file_name):
+        wanted_owner = api_owner(definition, file_name)
+        definition = {key: value for key, value in definition.items() if key != "x-gravitee"}
         api = definition.get("api", {})
         plain = api.get("name", file_name)
+        owner = owner_user(self.api, wanted_owner, self.scoped(plain), f"{self.org_v1}/users")
         name, digest = self.scoped(plain), digest_of(definition)   # the file's: the mode is not part of it
         found = controls.of("api", plain) if self.own else None   # the controls name an API of seed/apim/
         wanted = self.as_mode_says(definition, found)
@@ -490,12 +549,14 @@ class ApiManagement:
                 log(SECTION, f"✓ API up to date: {name}")
             else:
                 self.start(live["id"])   # the definition has not changed, but the API does not run: no new import
+            transfer_ownership(self.api, f"{self.v2}/apis/{live['id']}", owner, name, SECTION)
             return
         else:
             api_id = self.update(live, imported, name, digest)   # someone edited it beyond what a control puts back
             self.said(name, found)
         self.restrict(api_id, groups, name)
         self.start(api_id)
+        transfer_ownership(self.api, f"{self.v2}/apis/{api_id}", owner, name, SECTION)
 
     def groups_of(self, hrids):
         """The live ids of the groups an API or an application of an environment names by hrid, in the order it names them.
@@ -893,6 +954,7 @@ def check_environment(where, wanted):
             raise SeedError(f"{where}/groups/{hrid}: defaults has {', '.join(sorted(unknown))}, which the platform has no field for")
     names = set()
     for definition, file_name in wanted["apis"]:
+        api_owner(definition, f"{where}/apis/{file_name}")
         api = definition.get("api") or {}
         name = api.get("name", file_name)
         if name in names:
@@ -963,6 +1025,8 @@ def seed():
     for scope in scopes:
         scope.require_environment()   # all of them, before anything is changed in any
     loaded = [(load(path), path.name) for path in apis]
+    for definition, file_name in loaded:
+        api_owner(definition, f"seed/apim/apis/{file_name}")
     # What the gateway is waited for, in this order: the platform's own APIs, then those of each environment, whose names say it
     definitions = [definition for definition, _ in loaded] + [
         {**definition, "api": {**definition.get("api", {}), "name": scope.scoped(definition.get("api", {}).get("name", file_name))}}
