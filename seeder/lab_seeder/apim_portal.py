@@ -85,11 +85,11 @@ DOC_KINDS = {"asyncapi": (ASYNCAPI_TITLE, "ASYNCAPI", "ASYNCAPI"), "openapi": (O
 # the entrypoints make that call go to the gateway rather than the server URL written in the document, and the
 # context path is part of that server so the call includes it.
 OPENAPI_VIEWER = {"viewer": "SWAGGER", "tryIt": True, "tryItAnonymous": False,
-                  "entrypointsAsServers": True, "contextPathAsServerPath": True}
+                  "entrypointsAsServers": True, "contextPathAsServerPath": True, "tryItURL": ""}
 # The API's own Swagger page keeps the same choice as strings, which is how that page stores a switch.
 SWAGGER_VIEWER = {
     "viewer": "Swagger", "tryIt": "true", "tryItAnonymous": "false",
-    "entrypointsAsServers": "true", "contextPathAsServerPath": "true",
+    "entrypointsAsServers": "true", "contextPathAsServerPath": "true", "tryItURL": "",
 }
 # The versions the portal's viewer reads (its parser holds a schema of each): any other is an error shown in place of the page
 ASYNCAPI_VERSIONS = ("2.0.0", "2.1.0", "2.2.0", "2.3.0", "2.4.0", "2.5.0", "2.6.0", "3.0.0", "3.1.0")

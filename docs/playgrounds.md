@@ -672,8 +672,9 @@ seed/environments/<id>/
   viewer labels an operation `RECEIVE` or `SEND`, where a 2.x `subscribe` shows as `SUB`. The page is made, written, then
   published, so that the platform's sample document is never shown. A document that is gone from the folder takes its page.
   An OpenAPI document gets an OpenAPI page in the same place, with Swagger **Try it out** enabled. Calls use the gateway
-  entrypoints as servers and the API context path as the server path. Anonymous Try it out is off; the caller supplies the
-  credentials its API plan requires. This configures the viewer, without changing API plans, subscriptions or gateway access.
+  entrypoints as servers and the API context path as the server path; a saved manual server URL is cleared. Anonymous
+  Try it out is off; the caller supplies the credentials its API plan requires. This configures the viewer, without changing
+  API plans, subscriptions or gateway access.
 - **The page of an API itself is the other way to it.** `/catalog/api/<id>` is not the menu: its Details tab shows the page of
   the API that is its homepage, and its Documentation tab the others, which the Console keeps in the API's Documentation. The
   seed makes there a Markdown homepage from `api-details.md` and an AsyncAPI page (a `SWAGGER` page for an OpenAPI document) from the document, each published and found
