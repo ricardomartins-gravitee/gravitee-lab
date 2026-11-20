@@ -99,6 +99,7 @@ class World:
         self.store = {}                                   # (env, kind, portal, hrid) -> what the platform answers
         self.items = {env: {} for env in self.environments}
         self.contents = {env: {} for env in self.environments}   # env -> {id: the text of a page, as the platform keeps it}
+        self.viewers = {env: {} for env in self.environments}   # env -> {content id: OpenAPI viewer configuration}
         self.own = {env: {} for env in self.environments}   # env -> {api id: {page id: a page of the API itself}}
         self.active = {}                                  # env -> hrid of the theme the portal shows
         self.made = 0                                     # pages made, which gives each its id
@@ -121,6 +122,8 @@ class World:
             ("PUT", re.compile(nav + "/[^/]+")): self.known(self.put_item),
             ("DELETE", re.compile(nav + "/[^/]+")): self.known(self.delete_item),
             ("GET", re.compile(contents)): self.known(self.get_content), ("PUT", re.compile(contents)): self.known(self.put_content),
+            ("GET", re.compile(contents + "/configuration")): self.known(self.get_viewer),
+            ("PATCH", re.compile(contents + "/configuration")): self.known(self.patch_viewer),
             ("GET", re.compile(pages)): self.known(self.list_own), ("POST", re.compile(pages)): self.known(self.create_own),
             ("PUT", re.compile(pages + "/[^/]+")): self.known(self.put_own), ("DELETE", re.compile(pages + "/[^/]+")): self.known(self.delete_own),
             ("POST", re.compile(pages + "/[^/]+/_publish")): self.known(self.publish_own),
@@ -284,8 +287,15 @@ class World:
         return 204
 
     def get_content(self, call):
-        found = self.contents[self.env(call)].get(call.path.rsplit("/", 1)[1])
-        return (200, found) if found else (404, {"message": "Portal page content not found"})
+        content = call.path.rsplit("/", 1)[1]
+        found = self.contents[self.env(call)].get(content)
+        if not found:
+            return 404, {"message": "Portal page content not found"}
+        viewer = self.viewers[self.env(call)].get(content)
+        body = dict(found)
+        if viewer:
+            body["configuration"] = viewer
+        return 200, body
 
     def put_content(self, call):
         """The platform renders a text before it keeps it: an expression it cannot evaluate is a 400."""
@@ -303,6 +313,20 @@ class World:
                 return 400, {"httpStatus": 400, "message": f"Invalid expression or value is missing for {expression}"}
         self.contents[env][content] = {"id": content, "type": call.json["type"], "content": text}
         return 200, self.contents[env][content]
+
+    def content_id(self, call):
+        return call.path.rsplit("/", 2)[-2] if call.path.endswith("/configuration") else call.path.rsplit("/", 1)[1]
+
+    def get_viewer(self, call):
+        found = self.viewers[self.env(call)].get(self.content_id(call))
+        return (200, found) if found else (404, {"message": "Portal page content configuration not found"})
+
+    def patch_viewer(self, call):
+        env, content = self.env(call), self.content_id(call)
+        if content not in self.contents[env]:
+            return 404, {"message": "Portal page content not found"}
+        self.viewers[env][content] = dict(call.json)
+        return 200, self.viewers[env][content]
 
     # --- The pages of an API itself (the Console's Documentation of the API) ---
 
@@ -341,6 +365,8 @@ class World:
         page = {"id": ident("page", str(self.made)), "name": body["name"], "type": body["type"], "content": body.get("content", ""),
                 "order": 1 + max([p["order"] for p in pages.values()], default=0), "published": False, "visibility": body["visibility"],
                 "homepage": body.get("homepage", False)}
+        if "configuration" in body:
+            page["configuration"] = body["configuration"]
         pages[page["id"]] = page
         return 201, copy.deepcopy(page)
 
@@ -354,6 +380,8 @@ class World:
             return self.refused(body)
         page.update({"type": body["type"], "name": body["name"], "visibility": body["visibility"], "content": body.get("content", ""),
                      "order": body.get("order", 0), "homepage": body.get("homepage", False)})
+        if "configuration" in body:
+            page["configuration"] = body["configuration"]
         return 200, copy.deepcopy(page)
 
     def publish_own(self, call):
@@ -893,6 +921,9 @@ class Documents(Portals):
         self.assertEqual(self.stored(page)["type"], "OPENAPI")
         self.assertEqual(self.titles(0), ["Overview", "OpenAPI"])
         self.assertEqual(self.own(0)["OpenAPI"]["type"], "SWAGGER")
+        self.assertEqual(self.own(0)["OpenAPI"]["configuration"], apim_portal.SWAGGER_VIEWER)
+        self.assertEqual(self.world.viewers["mallard"][page["portalPageContentId"]], apim_portal.OPENAPI_VIEWER)
+        self.assertEqual(self.run_seed(), [])
 
     def test_the_calls_go_overview_then_the_asyncapi_page_made_written_and_published_in_that_order(self):
         self.document()
