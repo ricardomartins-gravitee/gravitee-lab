@@ -206,16 +206,18 @@ def _overlay(body, project):
 
 def check(project, pid, operation="start"):
     unit = layers.lookup(project, "playground", runtime_settings.source(pid))
+    blocked = None
     try:
         dialog = independent.plan(pid) if operation == "start" else independent.change_plan(pid, operation)
         checks = [{"name": "Sandbox", "state": "ok", "detail": "Own platform, data and ports"}]
     except (ValueError, compose.ComposeError) as error:
         dialog = None
-        checks = [{"name": "Sandbox", "state": "warn", "detail": str(error)}]
+        blocked = str(error)
+        checks = [{"name": "Sandbox", "state": "warn", "detail": blocked}]
     if operation != "update":
         checks += playgrounds._host_checks(unit)
         checks += playgrounds._license_checks(project, unit, {})
-    return {"checks": checks, "dialog": dialog}
+    return {"checks": checks, "dialog": dialog, "blocked": blocked}
 
 
 def create(project, pid, body):
@@ -266,8 +268,8 @@ def action(project, pid, operation, body=None):
         if (independent.read(pid) or {}).get("clone_pending"):
             raise ValueError("This clone is incomplete; delete it and create a new sandbox")
         result = check(project, pid, operation=operation)
-        if any(row["state"] == "warn" for row in result["checks"]):
-            raise ValueError(next(row["detail"] for row in result["checks"] if row["state"] == "warn"))
+        if result["blocked"] is not None:
+            raise ValueError(result["blocked"])
         return {"start": independent.start, "apply": independent.apply, "update": independent.update}[operation](pid)
     if operation == "stop":
         return independent.stop(pid, remove=bool(body.get("remove")))

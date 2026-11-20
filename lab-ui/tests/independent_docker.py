@@ -467,6 +467,8 @@ class IndependentDocker(unittest.TestCase):
         (image / "Dockerfile").write_text("FROM busybox:1.37.0\nRUN printf action-v1 > /action-version\n")
         (source_a / "backend/action.txt").write_text("read-only-v1")
         settings = json.loads(original)
+        settings["x-gravitee"]["requires"] = {"host": [{"name": "External model downloads",
+            "check": "https://models.example.invalid/", "help": "The gateway downloads its models on first deployment"}]}
         settings["services"]["a-backend"].update(image=self.name + "/action-backend:local",
             build={"context": "./action-image"}, pull_policy="never", environment={"RUNTIME_ACTION_TEST": "initial"})
         settings["services"]["a-idle"] = {"image": "busybox:1.37.0", "restart": "unless-stopped",
@@ -476,7 +478,12 @@ class IndependentDocker(unittest.TestCase):
         self.assertEqual(parent["runtime"]["mode"], "shared")
         self.assertFalse(parent["on"])
         self.current = "a"
-        print("Start private A and create real consumer access", flush=True)
+        checked = self.json(self.lab + f"/api/runtimes/{self.instances['a']}/check")
+        self.assertIsNone(checked["blocked"])
+        warning = next(row for row in checked["checks"] if row["name"] == "External model downloads")
+        self.assertEqual((warning["state"], warning["detail"]), ("warn", "Not checked"))
+        self.assertIn("first deployment", warning["help"])
+        print("Start private A despite the unchecked external prerequisite and create real consumer access", flush=True)
         self.job(f"/api/playgrounds/{self.instances['a']}/start", {})
         self.assertIn(self.instances["a"], json.loads((self.root / ".lab/tested.json").read_text()))
         app = self.consumer_app("Independent consumer A")
