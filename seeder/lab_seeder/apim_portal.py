@@ -84,7 +84,8 @@ DOC_KINDS = {"asyncapi": (ASYNCAPI_TITLE, "ASYNCAPI", "ASYNCAPI"), "openapi": (O
 # The new portal renders an OpenAPI page as Redoc until this is set. Swagger is the viewer that runs Try it out,
 # the entrypoints make that call go to the gateway rather than the server URL written in the document, and the
 # context path is part of that server so the call includes it.
-OPENAPI_VIEWER = {"viewer": "SWAGGER", "tryIt": True, "entrypointsAsServers": True, "contextPathAsServerPath": True}
+OPENAPI_VIEWER = {"viewer": "SWAGGER", "tryIt": True, "tryItAnonymous": False,
+                  "entrypointsAsServers": True, "contextPathAsServerPath": True}
 # The API's own Swagger page keeps the same choice as strings, which is how that page stores a switch.
 SWAGGER_VIEWER = {
     "viewer": "Swagger", "tryIt": "true", "tryItAnonymous": "false",
@@ -106,6 +107,13 @@ IDS = uuid.UUID("5d0c2f6e-2b7a-4a58-9c0e-6a1f0f6f3c11")   # the namespace of the
 
 
 # --- Paths and values ---------------------------------------------------------------------
+
+def viewer_settings(current, wanted, what):
+    """The switches the seed owns over the stored options: even the configuration PATCH replaces the entire object."""
+    if current is not None and not isinstance(current, dict):
+        raise SeedError(f"{what}: OpenAPI viewer configuration is not an object")
+    return {**(current or {}), **wanted}
+
 
 def slug(words):
     """What the platform makes of a path segment: lower case, any run of other characters one dash."""
@@ -762,22 +770,26 @@ class Portals:
             tree.items[page["id"]] = page
         changed |= self.page_text(env, f"{title} page of {api['name']} in {env} ({folder.sources[api['crossId']]})", page, kind,
                                   doc, "the platform refuses it")   # before it is published: the platform's sample is never shown
+        if title == OPENAPI_TITLE:
+            changed |= self.openapi_viewer(env, what, page)
         if not (page.get("published") and page.get("visibility") == want["visibility"] and page.get("order") == ASYNCAPI_ORDER):
             self.put(env, what, page, {"published": True, "visibility": want["visibility"], "order": ASYNCAPI_ORDER})
             changed = True
-        if title == OPENAPI_TITLE:
-            changed |= self.openapi_viewer(env, what, page)
         return page["id"], changed
 
     def openapi_viewer(self, env, what, page):
         """Swagger with Try it out, aimed at the API's gateway entrypoints. A second run writes nothing when that is already set.
-        The configuration is read back with the page. This platform answers 405 to a GET of the configuration itself."""
+        Read the configuration with the page (GET of the configuration itself is not offered), and keep unrelated options
+        because PATCH replaces the configuration rather than merging it."""
         content = f"{self.v2(env)}/portal-page-contents/{page['portalPageContentId']}"
         stored = self.ask(what, self.console, "GET", content).json()
-        current = stored.get("configuration") if isinstance(stored, dict) else None
-        if isinstance(current, dict) and all(current.get(key) == value for key, value in OPENAPI_VIEWER.items()):
+        if not isinstance(stored, dict):
+            raise SeedError(f"{what}: OpenAPI page content is not an object")
+        current = stored.get("configuration")
+        wanted = viewer_settings(current, OPENAPI_VIEWER, what)
+        if current == wanted:
             return False
-        self.ask(what, self.console, "PATCH", f"{content}/configuration", json=dict(OPENAPI_VIEWER), idempotent=True)
+        self.ask(what, self.console, "PATCH", f"{content}/configuration", json=wanted, idempotent=True)
         return True
 
     def page_text(self, env, what, page, kind, text, refusal):
@@ -816,7 +828,7 @@ class Portals:
                 page = next((p for p in live if p.get("type") == kind and p.get("name") == title), None)
                 body = {"type": kind, "name": title, "visibility": API_PAGE_VISIBILITY, "homepage": homepage, "content": content}
                 if kind == "SWAGGER":
-                    body["configuration"] = dict(SWAGGER_VIEWER)
+                    body["configuration"] = viewer_settings(page.get("configuration") if page else None, SWAGGER_VIEWER, label)
                 if page and page["id"] not in mine and not claimed(SECTION, "portal-api-page", label):
                     raise SeedError(f"{label}: the page is taken by one the seed did not create")
                 if not page:
@@ -834,7 +846,7 @@ class Portals:
                         note(own)
                     same = (page.get("content"), page.get("visibility"), bool(page.get("homepage"))) == (content, API_PAGE_VISIBILITY, homepage)
                     if kind == "SWAGGER":
-                        same = same and page.get("configuration") == SWAGGER_VIEWER
+                        same = same and page.get("configuration") == body["configuration"]
                     if not same:
                         page = self.refusable(label, "PUT", f"{address}/{page['id']}", {**body, "order": page.get("order", 0)})
                         changed = True
