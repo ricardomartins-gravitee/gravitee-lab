@@ -35,6 +35,9 @@ To create a separate instance, open a playground and choose
 - *Clone Shared* or *Clone <name>* copies the selected running instance's current data. The copy has separate storage
   and ports and stays stopped when copying finishes. Start resumes the copy without replaying its seed.
 
+Start and Apply show requirement warnings with their names and guidance before confirmation, as for Shared Lab.
+An external prerequisite marked *Not checked* is a warning; a sandbox that cannot be prepared remains blocked.
+
 Every clone copies the selected source's complete volumes and mounted files, along with its resolved configuration
 and exact container images. **Cloning Shared includes all data in the Shared Lab, including other playgrounds.**
 It captures all configured services that have containers there. To copy only a private instance's data, clone that named

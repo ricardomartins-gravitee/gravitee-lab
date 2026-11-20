@@ -5,14 +5,14 @@ import { Ev, installDom, reply, text, isOff, offWhy } from "./dom-stub.mjs";
 
 mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
 const calls = [];
-let payload, holdRead = null, readFailure = false;
+let payload, requirements, holdRead = null, readFailure = false;
 const job = { id: "abcdef12", for: "playground:local/a", verb: "stop", title: "Cleanup", done: false, ok: null, phases: [], progress: null };
 const page = installDom({ fetch: async (path, options = {}) => {
   if (readFailure && !options.body && path.startsWith('/api/runtimes')) throw new Error('Offline');
   if (!options.body && holdRead && path.startsWith("/api/runtimes")) await holdRead;
   const body = options.body ? JSON.parse(options.body) : null;
   calls.push({ path, body });
-  const value = /\/api\/(?:playgrounds|runtimes)\/.+\/check/.test(path) ? { checks: [], dialog: { starts: [] } }
+  const value = /\/api\/(?:playgrounds|runtimes)\/.+\/check/.test(path) ? requirements
     : path.startsWith("/api/runtimes/") && body?.check ? { fingerprint: "reviewed-resources", removes: {
     containers: ["own-app"], networks: ["own-net"], volumes: body.operation === "data" ? ["own-volume"] : [],
     folders: body.operation === "data" ? [".lab/runtimes/own"] : [],
@@ -40,6 +40,7 @@ async function show(rows = [privateRow], playground = null) {
   store.error = null;
   store.offline = false;
   calls.length = 0;
+  requirements = { checks: [], dialog: { starts: [] }, blocked: null };
   payload = { default: "independent", runtimes: structuredClone(rows), shared_storage: [{ kind: "Images", bytes: 9000 }], problems: [] };
   root = page.doc.createElement("section");
   page.doc.body.append(root);
@@ -159,6 +160,48 @@ test("Apply opens its scoped confirmation before sending a change", async () => 
   assert.deepEqual(posts(), []);
   await choice(false);
   close();
+});
+
+test("Start and Apply show named requirement warnings and help, and wait for confirmation", async () => {
+  const { independentAction } = await import("../../../web/js/dialogs/runtimes.js");
+  for (const verb of ["start", "apply"]) {
+    await show();
+    requirements.checks = [{ name: 'Model downloads <img src="x">', state: "warn", detail: "Not checked",
+      help: "The gateway downloads its models on first deployment" }];
+    const item = store.state.playgrounds[0];
+    let asked = independentAction(item, verb);
+    await flush();
+    assert.match(text(page.ids["choice-list"]), /Model downloads <img src="x">/);
+    assert.match(text(page.ids["choice-list"]), /Not checked/);
+    assert.match(text(page.ids["choice-list"]), /first deployment/);
+    assert.equal(page.ids["choice-list"].querySelectorAll("img").length, 0, "warning text is escaped");
+    assert.deepEqual(posts(), [], "a warning does not start anything before confirmation");
+    await choice(false);
+    await asked;
+    assert.deepEqual(posts(), [], "canceling starts nothing");
+    asked = independentAction(item, verb);
+    await flush();
+    await choice(true);
+    await asked;
+    const route = verb === "start" ? "/api/playgrounds/local/a/start" : "/api/runtimes/local/a/apply";
+    assert.deepEqual(posts().map(({ path, body }) => [path, body]), [[route, {}]], "only the selected sandbox changes");
+    close();
+  }
+});
+
+test("a sandbox preparation error still prevents confirmation and any action request", async () => {
+  const { independentAction } = await import("../../../web/js/dialogs/runtimes.js");
+  for (const verb of ["start", "apply"]) {
+    await show();
+    requirements = { checks: [{ name: "Model downloads", state: "warn", detail: "Not checked" },
+      { name: "Sandbox", state: "warn", detail: "Unsupported mount" }], dialog: null, blocked: "Unsupported mount" };
+    page.ids["choice-title"].textContent = "Previous dialog";
+    await independentAction(store.state.playgrounds[0], verb);
+    assert.equal(text(page.ids["choice-title"]), "Previous dialog", "no confirmation opens for an invalid plan");
+    assert.match(text(page.ids.toasts), /Unsupported mount/);
+    assert.deepEqual(posts(), []);
+    close();
+  }
 });
 
 test("container-only cleanup keeps data and sends exactly the reviewed fingerprint", async () => {

@@ -208,6 +208,42 @@ class RuntimeState(Case):
         with self.assertRaisesRegex(ValueError, "Unknown sandbox action"):
             runtimes.action(self.project, self.rid, "rebuild")
 
+    def test_requirement_warnings_remain_visible_without_blocking_only_the_selected_sandbox(self):
+        self.patch(independent, "read", return_value=None)
+        self.patch(independent, "plan", return_value={"starts": []})
+        self.patch(independent, "change_plan", return_value={"restarts": []})
+        host = self.patch(runtimes.playgrounds, "_host_checks")
+        license = self.patch(runtimes.playgrounds, "_license_checks", return_value=[
+            {"name": "License", "state": "warn", "detail": "License not set"}])
+        for detail in ("Not checked", "Not reachable"):
+            host.return_value = [{"name": "Model downloads", "state": "warn", "detail": detail,
+                                  "help": "The gateway downloads its models on first deployment"}]
+            for operation in ("start", "apply"):
+                with self.subTest(detail=detail, operation=operation):
+                    result = runtimes.check(self.project, self.rid, operation)
+                    self.assertIsNone(result["blocked"])
+                    self.assertEqual(result["checks"][1:], host.return_value + license.return_value)
+                    action = self.patch(independent, operation, return_value="private-job")
+                    self.assertEqual(runtimes.action(self.project, self.rid, operation), "private-job")
+                    action.assert_called_once_with(self.rid)
+
+    def test_a_failed_sandbox_plan_still_blocks_actions_even_with_advisory_warnings(self):
+        self.patch(independent, "read", return_value=None)
+        self.patch(independent, "plan", side_effect=ValueError("Unsupported mount"))
+        self.patch(independent, "change_plan", side_effect=ValueError("Unsupported mount"))
+        self.patch(runtimes.playgrounds, "_host_checks", return_value=[
+            {"name": "Model downloads", "state": "warn", "detail": "Not checked"}])
+        self.patch(runtimes.playgrounds, "_license_checks", return_value=[])
+        for operation in ("start", "apply", "update"):
+            with self.subTest(operation=operation):
+                result = runtimes.check(self.project, self.rid, operation)
+                self.assertEqual(result["blocked"], "Unsupported mount")
+                self.assertIsNone(result["dialog"])
+                action = self.patch(independent, operation)
+                with self.assertRaisesRegex(ValueError, "Unsupported mount"):
+                    runtimes.action(self.project, self.rid, operation)
+                action.assert_not_called()
+
     def test_clone_rejects_other_playgrounds_before_registering_or_starting_anything(self):
         before = runtime_settings.instances()
         self.patch(runtimes, "JOBS").current = None

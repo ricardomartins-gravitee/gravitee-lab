@@ -53,9 +53,11 @@ export async function independentAction(item, verb) {
     if (["start", "apply"].includes(verb)) {
       const path = verb === "start" ? `/api/playgrounds/${item.id}/check` : `/api/runtimes/${item.id}/check?action=${verb}`;
       const checks = await api(path);
-      const blocked = checks.checks.find((row) => row.state === "warn");
-      if (blocked) throw new Error(blocked.detail);
+      if (checks.blocked != null) throw new Error(checks.blocked);
       rows = planRows(checks.dialog || {});
+      rows.push(...checks.checks.filter((row) => row.state === "warn").map((row) => ({
+        label: row.name, items: [row.detail], hint: row.help, note: true,
+      })));
       if (checks.dialog?.scope) rows.push({ label: label, items: [checks.dialog.scope], note: true });
       rows.push({ label: "Keeps", items: ["All its data", "Other playgrounds and the shared platform"], note: true });
     } else {
