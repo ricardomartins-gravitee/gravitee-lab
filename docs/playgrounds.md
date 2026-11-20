@@ -515,6 +515,43 @@ labels: [assistant, tools]
 categories: ['${DEMO_CATEGORY_ID}']
 ```
 
+A plain studio (`plan` and `tools`, without `access`) can also carry `upstreamAuth` and `flows`:
+
+```yaml
+upstreamAuth:
+  - api: Acme Customers API
+    type: api-key
+    apiKeyHeader: X-Gravitee-Api-Key
+    apiKey: '${ACME_CUSTOMERS_TOOL_KEY}'
+flows:
+  - name: Tool calls
+    enabled: true
+    selectors: [{type: MCP, methods: [tools/call]}]
+    request:
+      - policy: authz-pep
+        enabled: true
+        configuration:
+          subjectType: User
+          subjectExpr: "{#context.attributes['user']}"
+          resourceType: MCPTool
+          resourceExpr: "{#context.attributes['mcp_tool_name']}"
+          actionExpr: "{#context.attributes['mcp_tool_name']}"
+          denyStatus: 403
+    response: []
+```
+
+`upstreamAuth` uses the same shape as a studio with `access`: each entry names an API whose tools were imported into the
+catalog and supplies its `type: api-key`, `apiKeyHeader` and quoted `apiKey`. All four fields are required; unknown fields,
+unknown APIs and incomplete keys stop the seed before its first change. The key is sent when the studio is created and
+when *Edit tools* changes are brought back to the file. Changing a key or plan replaces the studio.
+
+`flows` is the full list of flow objects stored by the v2 API. Changing only flows updates the existing API without
+replacing the studio; `flows: []` clears them. Leave either key out to keep the existing behavior. The seeder corrects a
+loopback tool target to `GATEWAY_INTERNAL_URL`, preserving its API path and query, after saving the specification and
+before writing flows. The gateway address comes from the seed service's environment, never from the studio file. Both
+studio shapes get this target correction, followed by one deployment when needed. A matching key, flow list and target
+make the next run write nothing.
+
 Add `tags` to an `aim/workspaces/*.yaml` file to set its workspace tags. Leave the key out to preserve existing tags,
 or set `tags: []` to clear them:
 
