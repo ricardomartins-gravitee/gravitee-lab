@@ -555,6 +555,7 @@ def studio_problems(spec):
     try:
         apim.primary_owner(spec, "MCP studio")
         aim_proxies.studio_fields(spec, "MCP studio")
+        aim_proxies.read_upstream_auth(spec, "MCP studio")
     except common.SeedError as e:
         owner_errors.append(str(e))
     given = [spec[key] for key in aim_proxies.VERSION_KEYS if key in spec]
