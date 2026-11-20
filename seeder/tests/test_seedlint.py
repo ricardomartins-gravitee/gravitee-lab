@@ -274,6 +274,19 @@ class Studios(Made):
         folder = self.playground({**GOOD, "seed/aim/mcp-proxies/desk.yaml": STUDIO + "subscriptions: [{plan: 3}]\n"})
         self.assertEqual(seedlint.problems(folder), [])
 
+    def test_tool_keys_and_flows_use_the_same_validation_as_the_seed(self):
+        auth = "upstreamAuth: [{api: Clients API, type: api-key, apiKeyHeader: X-Tool-Key, apiKey: demo}]\n"
+        self.assertEqual(self.studio(auth + "flows: [{name: Tools, request: []}]\n"), [])
+        self.assertEqual(self.studio("upstreamAuth: []\nflows: []\n"), [])
+        for text in (auth.replace("apiKeyHeader: X-Tool-Key, ", ""), auth.replace("type: api-key", "type: unknown"),
+                     auth.replace("apiKey: demo", "apiKey: ''"), auth.replace("apiKey: demo", "apiKey: 123"),
+                     auth.replace("apiKey: demo", "apiKey: demo, unknown: value"), "upstreamAuth: {}\n",
+                     "flows: {}\n", "flows: [not-a-flow]\n"):
+            with self.subTest(text=text):
+                found = self.studio(text)
+                self.assertEqual(len(found), 1, found)
+                self.assertEqual(found[0][:2], ("studio", "desk.yaml"))
+
 
 class Documents(Made):
 

@@ -4,6 +4,7 @@ the three steps of the proxy, a second run that writes nothing, what is put back
 import itertools
 import json
 import re
+import yaml
 
 from lab_seeder import aim_proxies
 from lab_seeder import common
@@ -621,6 +622,178 @@ class Studios(WithStudio):
         with self.assertRaisesRegex(common.SeedError, "/acme-bakery/toolkit is the path of 'Theirs', which the seed did not create"):
             self.seed()
         self.assertEqual(self.platform.sent("DELETE", re.compile(AIM + "/mcp-proxies/.*")), [])
+
+
+class PlainStudioToolSetup(Seed):
+    """Tool keys, raw flows and the target Gravitee derives again when a studio specification is saved."""
+
+    KEY = {"api": "Orchid Customers API", "type": "api-key", "apiKeyHeader": "X-Gravitee-Api-Key", "apiKey": "tool-key"}
+    FLOWS = [{"name": "Tool calls", "enabled": True, "selectors": [{"type": "MCP", "methods": ["tools/call"]}],
+              "request": [{"policy": "authz-pep", "enabled": True, "configuration": {"denyStatus": 403}}], "response": []}]
+    TARGET = "http://localhost:43182/customers?region=eu"
+
+    def setUp(self):
+        super().setUp()
+        self.world = studio_test.World(studio_test.Studios.OPERATIONS)
+        self.platform.add(self.world.routes())
+        self.platform.add({("POST", AIM + "/mcp-studios"): self.create,
+                           ("PUT", re.compile(AIM + "/mcp-studios/[^/]+/specification")): self.specification})
+        self.env(GATEWAY_INTERNAL_URL="http://gateway:8082/")
+        self.file(upstreamAuth=[self.KEY], flows=self.FLOWS)
+
+    def file(self, **extra):
+        self.seed_files({"aim/studios/tools.yaml": studio_test.OLD_STUDIO.replace("fga: true", "fga: false")
+                         + (yaml.safe_dump(extra) if extra else "")})
+
+    def seed(self):
+        aim_proxies.seed()
+
+    def reset_target(self, studio_id):
+        self.world.apis[studio_id]["endpointGroups"] = [{"type": "tools-http", "endpoints": [
+            {"configuration": {"target": self.TARGET}},
+            {"configuration": {"target": "https://tools.example.test/remote"}}]}]
+
+    def create(self, call):
+        response = self.world.create(call)
+        self.reset_target(response[1]["id"])
+        return response
+
+    def specification(self, call):
+        response = self.world.set_specification(call)
+        self.reset_target(ids(call)[0])
+        self.world.apis[ids(call)[0]]["flows"] = []
+        return response
+
+    def api(self):
+        [api] = self.world.apis.values()
+        return api
+
+    def rewrite_tools(self):
+        self.world.studios["studio-1"]["tools"].append({"id": "tool-searchCustomers", "alias": "extra"})
+        self.platform.calls.clear()
+        self.seed()
+
+    def test_a_plain_studio_sends_the_tool_key_on_create_and_on_a_tool_rewrite(self):
+        self.seed()
+        [created] = self.platform.sent("POST", AIM + "/mcp-studios")
+        expected = [{"catalogSourceId": "source-apim-customers",
+                     "upstreamAuth": {key: value for key, value in self.KEY.items() if key != "api"}}]
+        self.assertEqual(created.json["upstreamAuth"], expected)
+        self.assertNotIn("flows", created.json)
+        self.rewrite_tools()
+        [rewritten] = self.platform.sent("PUT", AIM + "/mcp-studios/studio-1/specification")
+        self.assertEqual(rewritten.json["upstreamAuth"], expected)
+        self.assertEqual(list(self.world.studios), ["studio-1"])
+
+    def test_flows_follow_the_corrected_target_and_deploy_once_after_a_specification_save(self):
+        self.seed()
+        self.assertEqual(self.platform.changes(), [("POST", AIM + "/mcp-studios"), ("PUT", V2 + "/apis/studio-1"),
+                                                  ("PUT", V2 + "/apis/studio-1"),
+                                                  ("POST", V2 + "/apis/studio-1/deployments")])
+        self.rewrite_tools()
+        self.assertEqual(self.platform.changes(), [("PUT", AIM + "/mcp-studios/studio-1/specification"),
+                                                  ("PUT", V2 + "/apis/studio-1"), ("PUT", V2 + "/apis/studio-1"),
+                                                  ("POST", V2 + "/apis/studio-1/deployments")])
+        routed, flowed = self.platform.sent("PUT", V2 + "/apis/studio-1")
+        self.assertEqual(routed.json["flows"], [])
+        self.assertEqual(flowed.json["flows"], self.FLOWS)
+        for call in (routed, flowed):
+            self.assertEqual(call.json["endpointGroups"][0]["endpoints"][0]["configuration"]["target"],
+                             "http://gateway:8082/customers?region=eu")
+            self.assertEqual(call.json["endpointGroups"][0]["endpoints"][1]["configuration"]["target"],
+                             "https://tools.example.test/remote")
+            self.assertTrue(set(call.json).isdisjoint(aim_proxies.STUDIO_API_READ_ONLY))
+            self.assertEqual((call.json["visibility"], call.json["lifecycleState"]), ("PUBLIC", "STARTED"))
+        self.platform.calls.clear()
+        self.seed()
+        self.assertEqual(self.platform.changes(), [])
+
+    def test_loopback_hosts_keep_the_path_and_query_and_other_targets_stay_unchanged(self):
+        for target in ("http://localhost:43182/customers?region=eu", "http://127.0.0.1:8082/customers?region=eu"):
+            with self.subTest(target=target):
+                self.assertEqual(aim_proxies.gateway_target(target, "http://gateway:8082/"),
+                                 "http://gateway:8082/customers?region=eu")
+        for target in ("https://tools.example.test/remote", "http://gateway:8082/customers"):
+            self.assertEqual(aim_proxies.gateway_target(target, "http://gateway:8082"), target)
+
+    def test_a_second_run_makes_no_write_when_the_key_flows_and_target_match(self):
+        self.seed()
+        self.platform.calls.clear()
+        self.seed()
+        self.assertEqual(self.platform.changes(), [])
+
+    def test_a_key_change_replaces_the_studio_but_a_flow_change_does_not(self):
+        self.seed()
+        before = aim_proxies.recorded_digest("studio-1")
+        self.file(upstreamAuth=[self.KEY], flows=[])
+        self.platform.calls.clear()
+        self.seed()
+        self.assertEqual(list(self.world.studios), ["studio-1"])
+        self.assertEqual(aim_proxies.recorded_digest("studio-1"), before)
+        self.assertEqual(self.api()["flows"], [])
+        self.assertEqual(self.platform.changes(), [("PUT", V2 + "/apis/studio-1"),
+                                                  ("POST", V2 + "/apis/studio-1/deployments")])
+        self.file(upstreamAuth=[{**self.KEY, "apiKey": "changed-tool-key"}], flows=[])
+        self.seed()
+        self.assertEqual(list(self.world.studios), ["studio-2"])
+        self.assertNotEqual(aim_proxies.recorded_digest("studio-2"), before)
+
+    def test_omitted_keys_preserve_the_creation_body_digest_and_existing_flows(self):
+        self.file()
+        self.seed()
+        [created] = self.platform.sent("POST", AIM + "/mcp-studios")
+        self.assertNotIn("upstreamAuth", created.json)
+        self.assertEqual(aim_proxies.recorded_digest("studio-1"), aim_proxies.digest_of(created.json))
+        self.api()["flows"] = self.FLOWS
+        self.platform.calls.clear()
+        self.seed()
+        self.assertEqual(self.platform.changes(), [])
+        self.assertEqual(self.api()["flows"], self.FLOWS)
+
+    def test_bad_keys_and_flows_fail_before_any_change_without_showing_the_key(self):
+        bad = [None, {}, [None], [{**self.KEY, "unknown": True}], [{**self.KEY, "type": "unknown"}],
+               [{key: value for key, value in self.KEY.items() if key != "apiKeyHeader"}],
+               [{**self.KEY, "apiKey": ""}], [{**self.KEY, "apiKey": 123}], [self.KEY, self.KEY],
+               [{**self.KEY, "api": "Unknown API"}]]
+        for entry in bad:
+            with self.subTest(entry=entry):
+                self.file(upstreamAuth=entry)
+                self.platform.calls.clear()
+                with self.assertRaises(common.SeedError) as error:
+                    self.seed()
+                self.assertNotIn(self.KEY["apiKey"], str(error.exception))
+                self.assertEqual(self.platform.changes(), [])
+        for flows in (None, {}, [None], ["flow"]):
+            with self.subTest(flows=flows):
+                self.file(flows=flows)
+                with self.assertRaisesRegex(common.SeedError, "flows is a list of flow objects"):
+                    self.seed()
+                self.assertEqual(self.platform.changes(), [])
+
+    def test_an_invalid_key_stops_before_replacing_a_studio_or_changing_a_proxy(self):
+        self.seed()
+        self.file(upstreamAuth=[{**self.KEY, "apiKey": ""}])
+        self.seed_files({"aim/mcp-proxies/other.yaml": "server: Not in the catalog\n"})
+        self.platform.calls.clear()
+        with self.assertRaises(common.SeedError):
+            self.seed()
+        self.assertEqual(self.platform.changes(), [])
+        self.assertEqual(list(self.world.studios), ["studio-1"])
+
+    def test_a_missing_internal_address_leaves_the_target_alone(self):
+        self.env(GATEWAY_INTERNAL_URL="")
+        self.seed()
+        self.assertEqual(self.api()["endpointGroups"][0]["endpoints"][0]["configuration"]["target"], self.TARGET)
+
+    def test_the_access_path_routes_its_target_too_and_the_next_run_writes_nothing(self):
+        self.seed_files({"aim/studios/tools.yaml": studio_test.STUDIO})
+        self.env(**studio_test.SETTINGS)
+        self.seed()
+        self.assertEqual(self.api()["endpointGroups"][0]["endpoints"][0]["configuration"]["target"],
+                         "http://gateway:8082/customers?region=eu")
+        self.platform.calls.clear()
+        self.seed()
+        self.assertEqual(self.platform.changes(), [])
 
 
 class Removal(WithStudio):
