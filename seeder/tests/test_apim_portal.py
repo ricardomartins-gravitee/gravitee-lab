@@ -931,10 +931,10 @@ class Documents(Portals):
         self.assertLess(changes.index(("PATCH", content + "/configuration")), changes.index(("PUT", ITEMS + "/" + page["id"])))
         [configured] = self.sent("PATCH", content + "/configuration")
         self.assertEqual(configured, {"viewer": "SWAGGER", "tryIt": True, "tryItAnonymous": False,
-                                      "entrypointsAsServers": True, "contextPathAsServerPath": True})
+                                      "entrypointsAsServers": True, "contextPathAsServerPath": True, "tryItURL": ""})
         own = self.own(0)["OpenAPI"]["configuration"]
         self.assertEqual(own, {"viewer": "Swagger", "tryIt": "true", "tryItAnonymous": "false",
-                              "entrypointsAsServers": "true", "contextPathAsServerPath": "true"})
+                              "entrypointsAsServers": "true", "contextPathAsServerPath": "true", "tryItURL": ""})
         self.assertFalse(any(c.method == "GET" and c.path.endswith("/configuration") for c in self.platform.calls))
 
     def test_openapi_options_survive_a_configuration_repair_and_a_document_update(self):
@@ -975,8 +975,8 @@ class Documents(Portals):
         self.seeded()
         page = self.child(0, "OpenAPI")
         content_id = page["portalPageContentId"]
-        for side, fields in (("navigation", ("viewer", "tryIt", "tryItAnonymous", "entrypointsAsServers", "contextPathAsServerPath")),
-                             ("api", ("viewer", "tryIt", "tryItAnonymous", "entrypointsAsServers", "contextPathAsServerPath"))):
+        for side, fields in (("navigation", ("viewer", "tryIt", "tryItAnonymous", "entrypointsAsServers", "contextPathAsServerPath", "tryItURL")),
+                             ("api", ("viewer", "tryIt", "tryItAnonymous", "entrypointsAsServers", "contextPathAsServerPath", "tryItURL"))):
             for field in fields:
                 with self.subTest(side=side, field=field):
                     settings = (self.world.viewers["mallard"][content_id] if side == "navigation"
@@ -986,6 +986,20 @@ class Documents(Portals):
                               if side == "navigation" else ("PUT", self.address(0, "OpenAPI")))
                     self.assertEqual(self.run_seed(), [wanted])
                     self.assertEqual(self.run_seed(), [])
+
+    def test_gateway_entrypoints_clear_a_previously_saved_manual_server_url(self):
+        self.document(text=OPENAPI_DOC)
+        self.seeded()
+        page = self.child(0, "OpenAPI")
+        content_id = page["portalPageContentId"]
+        navigation = self.world.viewers["mallard"][content_id]
+        own = self.own(0)["OpenAPI"]["configuration"]
+        navigation["tryItURL"] = own["tryItURL"] = "https://old.example.test/manual"
+        self.assertEqual(self.run_seed(), [("PATCH", f"{V2}/mallard/portal-page-contents/{content_id}/configuration"),
+                                          ("PUT", self.address(0, "OpenAPI"))])
+        self.assertEqual((self.world.viewers["mallard"][content_id]["tryItURL"],
+                          self.own(0)["OpenAPI"]["configuration"]["tryItURL"]), ("", ""))
+        self.assertEqual(self.run_seed(), [])
 
     def test_missing_configuration_is_upgraded_without_recreating_pages(self):
         self.document(text=OPENAPI_DOC)
