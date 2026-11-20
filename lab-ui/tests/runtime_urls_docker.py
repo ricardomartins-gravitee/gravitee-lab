@@ -18,6 +18,19 @@ from lab_ui.docker import compose, storage
 
 
 class RuntimeUrlsDocker(unittest.TestCase):
+    def ready(self, container, script, description):
+        """A failed probe needs the disposable database's error before cleanup removes its evidence."""
+        deadline = time.monotonic() + 90
+        while True:
+            rc, out, err = compose.run(["docker", "exec", container, "mongosh", "--norc", "--quiet", "--eval", script], timeout=15)
+            if not rc:
+                return out
+            state = storage.inspect("container", [container])[0]["State"]
+            if not state["Running"] or time.monotonic() >= deadline:
+                _, logs, log_error = compose.run(["docker", "logs", "--tail", "50", container], timeout=15)
+                self.fail(f"{description} did not start: {json.dumps(state)}\nLast probe: {out}{err}\n{logs}{log_error}")
+            time.sleep(1)
+
     def test_only_the_copied_database_changes_and_bson_credentials_survive(self):
         with tempfile.TemporaryDirectory(prefix="lab-clone-urls-") as temp, patch.object(paths, "ROOT", Path(temp)):
             root = Path(temp)
@@ -60,13 +73,7 @@ class RuntimeUrlsDocker(unittest.TestCase):
                     "--mount", "type=volume,source=" + volumes[0] + ",target=/data/db", "mongo:8.0.34",
                     "mongod", "--bind_ip", "127.0.0.1", "--wiredTigerCacheSizeGB", "0.25"])
                 containers.append(cid)
-                deadline = time.monotonic() + 90
-                while True:
-                    rc, _, _ = compose.run(["docker", "exec", cid, "mongosh", "--quiet", "--eval", "db.runCommand({ping:1})"], timeout=15)
-                    if not rc:
-                        break
-                    self.assertLess(time.monotonic(), deadline, "The isolated MongoDB did not start")
-                    time.sleep(1)
+                self.ready(cid, "db.runCommand({ping:1})", "The isolated MongoDB")
 
                 def mongo(script):
                     return runtime_clones._execute(["docker", "exec", cid, "mongosh", "--norc", "--quiet", "--eval", script])
@@ -91,14 +98,8 @@ class RuntimeUrlsDocker(unittest.TestCase):
                     "--env", "GLIBC_TUNABLES=glibc.pthread.rseq=1", "--mount", "type=volume,source=" + volumes[1] + ",target=/data/db",
                     image, "mongod", "--bind_ip", "127.0.0.1", "--wiredTigerCacheSizeGB", "0.25"])
                 containers.append(copied)
-                deadline = time.monotonic() + 90
-                while True:
-                    rc, out, _ = compose.run(["docker", "exec", copied, "mongosh", "--norc", "--quiet", "--eval",
-                        'print(EJSON.stringify(db.getSiblingDB("copied").apps.findOne(),null,0,{relaxed:false}))'], timeout=15)
-                    if not rc:
-                        break
-                    self.assertLess(time.monotonic(), deadline, "The copied MongoDB did not start")
-                    time.sleep(1)
+                out = self.ready(copied, 'print(EJSON.stringify(db.getSiblingDB("copied").apps.findOne(),null,0,{relaxed:false}))',
+                                 "The copied MongoDB")
                 expected = json.loads(original)
                 expected["url"] = "http://localhost:28083/callback"
                 expected["nested"]["definition"] = '{"target":"http://host.docker.internal:28082/api"}'
