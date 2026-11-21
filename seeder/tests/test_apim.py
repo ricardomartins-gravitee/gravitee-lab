@@ -47,7 +47,7 @@ class Apim:
 
     def __init__(self):
         self.ids = itertools.count(1)
-        self.apis, self.applications, self.subscriptions, self.settings = {}, {}, {}, {}
+        self.apis, self.applications, self.subscriptions, self.settings, self.groups = {}, {}, {}, {}, {}
         self.deployed = []
 
     def new(self, kind):
@@ -169,6 +169,18 @@ class Apim:
         self.subscriptions[call.path.split("/")[-2]]["status"] = "CLOSED"
         return 204
 
+    def list_groups(self, call):
+        return 200, {"data": list(self.groups.values()), "pagination": {"pageCount": 1}}
+
+    def create_group(self, call):
+        group_id = self.new("group")
+        self.groups[group_id] = {**call.json, "id": group_id, "lifecycleState": "UNDEPLOYED"}
+        return 201, self.groups[group_id]
+
+    def deploy_group(self, call):
+        self.groups[call.path.split("/")[-2]]["lifecycleState"] = "DEPLOYED"
+        return 202, {}
+
     def routes(self):
         api = V2 + "/apis/[^/]+"
         return {
@@ -188,6 +200,9 @@ class Apim:
             ("GET", re.compile(api + "/subscriptions")): self.subscriptions_of,
             ("POST", re.compile(api + "/subscriptions")): self.subscribe,
             ("POST", re.compile(api + "/subscriptions/[^/]+/_close")): self.close_subscription,
+            ("GET", V2 + "/shared-policy-groups"): self.list_groups,
+            ("POST", V2 + "/shared-policy-groups"): self.create_group,
+            ("POST", re.compile(V2 + "/shared-policy-groups/[^/]+/_deploy")): self.deploy_group,
             ("GET", V1 + "/applications"): self.applications_named,
             ("POST", V1 + "/applications"): self.create_application,
             ("PUT", re.compile(V1 + "/applications/[^/]+")): self.update_application,
@@ -2378,3 +2393,43 @@ class PrimaryOwnersOfAnEnvironment(Estates):
         with self.assertRaisesRegex(common.SeedError, "newt/apis/batch-status.json: primaryOwner"):
             self.run_seed()
         self.assertEqual(self.platform.changes(), [])
+
+
+GROUP = {
+    "crossId": "subscriber-controls",
+    "name": "Subscriber controls",
+    "description": "Reads only, 60 calls a minute, and 5000 calls a day",
+    "prerequisiteMessage": "Deploy this group before the APIs that use it.",
+    "apiType": "PROXY",
+    "phase": "REQUEST",
+    "steps": [{"name": "Reads only", "policy": "resource-filtering", "enabled": True, "configuration": {"whitelist": []}}],
+}
+NOTICES = {"api": {"id": "notice-id", "type": "PROXY", "name": "Platform Notices API",
+                   "listeners": [{"paths": [{"path": "/platform-notices/"}]}]},
+           "plans": [{"name": "API Key", "flows": [{"name": "Subscriber controls", "request": [
+               {"name": "Subscriber controls", "enabled": True, "policy": "shared-policy-group-policy",
+                "configuration": {"sharedPolicyGroupCrossId": "subscriber-controls"}}]}]}]}
+
+
+class SharedPolicyGroups(Playground):
+    """A shared policy group is deployed before an API that names it, and a second run leaves both."""
+
+    def test_a_group_is_deployed_and_the_api_imports_its_id(self):
+        self.seed_files({"apim/shared-policy-groups/subscriber-controls.json": json.dumps(GROUP),
+                         "apim/apis/notices.json": json.dumps(NOTICES)})
+        self.run_seed()
+        group_id = next(iter(self.apim.groups))
+        step = self.apim.apis["notice-id"]["definition"]["plans"][0]["flows"][0]["request"][0]
+        self.assertEqual(step["configuration"], {"sharedPolicyGroupId": "subscriber-controls"})
+        self.assertEqual(self.apim.groups[group_id]["lifecycleState"], "DEPLOYED")
+        self.assertEqual(self.record("Subscriber controls")["id"], group_id)
+        self.apim.groups[group_id]["steps"][0]["configuration"]["useKeyOnly"] = False
+        self.assertEqual(self.run_seed(), [])
+
+    def test_an_api_that_names_no_group_of_the_seed_stops_before_the_platform(self):
+        broken = copy.deepcopy(NOTICES)
+        broken["plans"][0]["flows"][0]["request"][0]["configuration"]["sharedPolicyGroupCrossId"] = "missing"
+        self.seed_files({"apim/apis/notices.json": json.dumps(broken)})
+        with self.assertRaisesRegex(common.SeedError, "notices.json: missing is no shared policy group"):
+            self.run_seed()
+        self.assertEqual(self.platform.calls, [])
