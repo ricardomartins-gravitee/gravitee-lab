@@ -436,11 +436,12 @@ is safe. [`seeder/README.md`](../seeder/README.md) describes the engine.
 ### Files
 
 Seed files use each product's own format, so they come from an export and go back the same way. They are `.yaml`,
-except API exports, which are `.json` (`seed/apim/apis/*.json`, and the `apis/*.json` of an environment).
+except API exports and shared policy groups, which are `.json` (in `apis/` and `shared-policy-groups/` of `seed/apim/` or an environment).
 
 | Folder | Format | Created through |
 |---|---|---|
 | `seed/apim/apis/*.json` | APIM API export (v4 definition) | `_import/definition` |
+| `seed/apim/shared-policy-groups/*.json`, `seed/environments/<id>/shared-policy-groups/*.json` | Shared policy groups deployed before their APIs | APIM v2 Management API |
 | `seed/apim/settings.yaml`, `applications/*.yaml`, `subscriptions/*.yaml` | Environment settings, applications, subscriptions | APIM Management API |
 | `seed/environments/<id>/environment.yaml` | The id, name and description of an environment of its own | Nothing: the seed [never creates it](#environments-of-its-own) |
 | `seed/environments/<id>/settings.yaml`, `apis/*.json`, `applications/*.yaml`, `subscriptions/*.yaml` | As `seed/apim/`, for that environment | APIM Management API |
@@ -483,6 +484,42 @@ Leave the key out to keep the current owner. With the key present, let the seede
 update or replacement, and when the definition is already up to date; an owner that already matches needs no transfer.
 Changing only the owner replaces no API or studio. Removing the key transfers nothing back, and the ownership transfer
 adds nothing to `created.json`.
+
+A shared policy group lives in `shared-policy-groups/*.json` beside the APIs that use it. Keep its `crossId` stable:
+this is the gateway identity, while its management id belongs to one environment. For example:
+
+```json
+{
+  "crossId": "subscriber-controls",
+  "name": "Subscriber controls",
+  "apiType": "PROXY",
+  "phase": "REQUEST",
+  "steps": [{"name": "Rate limit", "policy": "rate-limit", "enabled": true,
+             "configuration": {"rate": {"limit": 60, "periodTime": 1, "periodTimeUnit": "MINUTES"}}}]
+}
+```
+
+`description`, `prerequisiteMessage` and `steps` are optional; omitted descriptions are empty, omitted steps are an empty
+list, and an omitted step `enabled` is true. A step may carry its policy's `configuration`, `condition` and `description`.
+Use `PROXY` with `REQUEST` or `RESPONSE`, or `MESSAGE` with those phases, `PUBLISH` or `SUBSCRIBE`.
+In an API common flow or plan flow of the matching phase, refer to the group with:
+
+```json
+{"name": "Subscriber controls", "policy": "shared-policy-group-policy", "enabled": true,
+ "configuration": {"sharedPolicyGroupCrossId": "subscriber-controls"}}
+```
+
+The seed checks every reference before changes, deploys the group before importing its APIs, and sends that crossId as
+`sharedPolicyGroupId`. Each environment needs its own group file; the same crossId may be used in several environments.
+An undeployed or pending group is deployed on Re-seed. Changed steps update and deploy the group in place without
+reimporting unchanged APIs. Platform-added step defaults do not cause repeated writes. A group with that crossId that the
+seed did not create is an error. Changing `crossId`, `apiType` or `phase` requires removing the recorded group first;
+removal checks the remaining v4 API definitions and plan flows in that environment before undeploying an owned group.
+A group still referenced by another API stays deployed and retains its ownership record. If definitions cannot be
+verified, removal stops before touching the group. The seed login needs visibility into the environment's APIs and read
+access to their definitions. Removal also recovers an incomplete group create by its recorded crossId and name.
+If the create cannot yet be confirmed, it keeps the recovery note for a later run. Omitting the folder makes no group
+request when seeding.
 
 A studio file (`seed/aim/studios/`) says its tools, its plan or its `access`, and its authorization check. Three keys
 serve the lessons:
@@ -605,6 +642,7 @@ seed/environments/<id>/
   users.yaml            the users that groups name
   groups/<hrid>.yaml    one group each
   apis/*.json           API exports
+  shared-policy-groups/*.json  Shared policy groups of this environment
   applications/*.yaml
   subscriptions/*.yaml
   portal/               theme.yaml, portal.yaml, pages/*.yaml, content/*, listings/*.yaml, api-overview.md,
@@ -731,6 +769,8 @@ not set`, and a variable a seed file uses with no value stops it with the file's
 The seed records what it creates, never what existed, in `.state/created.json` of its folder (git-ignored). It
 replaces or deletes only what that record says it created:
 
+- A shared policy group is recorded by its management id and environment; its crossId identifies it to the gateway.
+  A removal undeploys and deletes it after the APIs that reference it.
 - An API at the same path as one of its own, an APIM application, a Gamma object, a policy or a dashboard with the same
   name as one of its own, that it did not create, is an error. So is an authorization engine configured otherwise,
   which is a warning when the engine is marked `optional`.
