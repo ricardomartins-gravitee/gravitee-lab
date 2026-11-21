@@ -3,13 +3,15 @@
 import { $, $$, esc, icon, setHTML, loading, api, store, router, recallObject, remember, bareTag, ofPlatform } from "../core.js";
 import { confirmDialog, confirmPlan, openMenu, paintLinks, progressBar, GAP, fileButtons,
   keyed, dockerDown, onKnown, serviceVersion, serviceCells, serviceOpen, actionButton,
-  paintActions, showing, noteBadge, itemLink, statusHtml, holdOff } from "../components/ui.js";
+  paintActions, showing, noteBadge, itemLink, statusHtml, holdOff, containerActions } from "../components/ui.js";
 import { runJob, runPlatform, showOutput } from "../activity/jobs.js";
 import { recordName } from "../platform/places.js";
 import { onCloud, coreOf, runCore, gatewayWhy } from "../platform/core-choice.js";
 import { selectLogs } from "./logs.js";
 import { selectProduct } from "./plugins.js";
 import { openFile, openSettings } from "../dialogs/editor.js";
+import { Combo } from "../components/combo.js";
+import { independentAction } from "../dialogs/runtimes.js";
 import { License } from "../dialogs/license.js";
 
 // An action of the platform in the head: it shows on its button as it works
@@ -23,10 +25,10 @@ const headButton = (verb, label, glyph, title = "") => actionButton({ key: "plat
 // neither Restart, Update nor the menu, which are the Containers page's. One head, one set of buttons on one key: both pages
 // start and stop the platform the same way, and show the same progress. As in every head, the primary (Start or Apply) is the
 // last button, before the menu.
-export const platformHead = (title, { lean = false } = {}) => `
+export const platformHead = (title, { lean = false, scope = "" } = {}) => `
   <div class="page-head">
     <div class="page-title"><h1>${title}</h1></div>
-    <div class="page-actions"${lean ? " data-lean" : ""}>
+    <div class="page-actions"${lean ? " data-lean" : ""}>${scope ? `<span class="sub">${esc(scope)}</span>` : ""}
       ${headButton("stop", lean ? "Stop all" : "Stop", "stop")}${lean ? "" : `
       ${headButton("restart", "Restart", "restart", "Restart as it is")}
       ${headButton("update", "Update", "download", "Pull and recreate")}`}
@@ -39,6 +41,13 @@ export const platformHead = (title, { lean = false } = {}) => `
 
 const SKELETON = `
   ${platformHead("Containers")}
+  <div class="container-context">
+    <span id="container-runtime-label">Show containers for</span>
+    <button class="combo-btn" data-container-runtime aria-label="Show containers for" aria-labelledby="container-runtime-label container-runtime-value" aria-haspopup="dialog">
+      <span class="value" id="container-runtime-value">Shared Lab</span>${icon("chevron")}</button>
+    <span data-container-source></span><a class="text-link" href="#/sandboxes">Manage sandboxes</a>
+  </div>
+  <div data-container-head hidden></div><p class="empty" data-container-missing hidden>Sandbox unavailable</p>
   <div class="stack-layout">
     <div class="card">
       <div class="cols stack-head" aria-hidden="true"><span></span><span>Service</span><span>State</span><span>Version</span><span>Ports</span><span>Uptime</span><span></span></div>
@@ -61,6 +70,7 @@ const CONFIRM = {
   reset: { title: "Reset", text: "Deletes every container and volume", word: "reset", action: "Reset", danger: true },
 };
 
+let selectedRuntime = null, shownState = null;
 let page = null;   // the section of the page
 let groups = [];   // the groups drawn last, which the buttons act on
 // group -> expanded. The groups shape the page: the browser remembers which are open, unlike the detail of a list row
@@ -70,7 +80,7 @@ const shut = recallObject("shut");
 
 // A service shows when it should run or still has a container, or says that it needs a license; only a container has
 // logs
-const created = (service) => service.state.key !== "absent";
+const created = (service) => !["absent", "unknown"].includes(service.state.key);
 const exists = (service) => !!service && (service.on || created(service) || service.needs_license);
 
 // The platform's groups in their declared order, then its own add-ons (Gravitee's) that are on or still run, in the order of the
@@ -108,7 +118,7 @@ const restarting = (key) => showing(key, "restart");
 // not answer.
 const QUIET = new Set(["stopped", "off", "absent", "done", "exited"]);
 function stateCell(st, key) {
-  if (dockerDown() || !st.label) return "<span></span>";
+  if (dockerDown() && !selectedRuntime || !st.label) return "<span></span>";
   const moving = ["starting", "stopping"].includes(st.key);
   return `<span class="s-state">${statusHtml(st.key, st.label, { quiet: QUIET.has(st.key), extra: moving ? progressBar(key) : "" })}</span>`;
 }
@@ -118,7 +128,7 @@ function stateCell(st, key) {
 // apps has nothing to start or restart here. Nor has a group of services that need a license and have none: none is on.
 function groupActions(g, services) {
   const running = services.some((s) => s.state.running), logs = services.some(created) && "logs";
-  const own = g.kind !== "playground" || g.unit.apps.length > 0;
+  const own = (g.kind !== "playground" || g.unit.apps.length > 0) && services.some((service) => service.role !== "seed");
   const restart = own && (running || restarting(g.key)) && "restart";
   return [logs, restart, running ? "stop" : own && services.some((s) => s.on) && "start"];
 }
@@ -127,18 +137,15 @@ function groupActions(g, services) {
 // its uptime while it runs, its actions. A one-shot that ended well did its part: it has no Start. A playground's
 // seed has neither Start nor Restart: its playground's Re-seed runs it again.
 function containerHtml(name, state) {
-  const service = state.services[name], st = service.state, key = `service:${name}`, seed = service.role === "seed";
-  const restart = !seed && (st.running || restarting(key)) && "restart";
-  const actions = [created(service) && "logs", restart,
-    st.running ? "stop" : !seed && service.on && st.key !== "done" && "start"];
+  const service = state.services[name], st = service.state, key = `service:${name}`;
   return `
     <li class="container cols" data-service="${esc(name)}">
       <span></span>
-      <span class="s-name"><span class="c-name" data-tip="${esc([`${service.label} (${name})`, service.description].filter(Boolean).join(": "))}">${esc(service.label)}</span><span class="c-id">${esc(name)}</span>${service.note_apply ? "" : noteBadge(service)}</span>
+      <span class="s-name"><span class="c-name" data-tip="${esc([`${service.label} (${service.runtime?.service || name})`, service.description].filter(Boolean).join(": "))}">${esc(service.label)}</span><span class="c-id">${esc(service.runtime ? service.container : name)}</span>${service.note_apply ? "" : noteBadge(service)}</span>
       ${stateCell(st, key)}
       ${serviceCells(service)}
       <span class="s-uptime"></span>
-      <span class="row-icons">${serviceOpen(name)}${GAP}${GAP}${actions.map((act) => rowButton(act, key, service.label)).join("")}</span>
+      <span class="row-icons">${serviceOpen(name)}${GAP}${GAP}${containerActions(name, service)}</span>
     </li>`;
 }
 
@@ -148,7 +155,8 @@ const isOpen = (g) => forced(g) || !!folds[g.key];
 // A band folds the groups under it, unless one of them is in an issue: what is wrong is not hidden
 const under = { [CORE]: (g) => g.inside, [ADDONS]: (g) => g.inside && g.kind === "addon" };
 const bandForced = (key) => groups.some((g) => under[key](g) && forced(g));
-const bandOpen = (key) => !shut[key] || bandForced(key);
+const bandKey = (key) => selectedRuntime ? `${selectedRuntime}:${key}` : key;
+const bandOpen = (key) => !shut[bandKey(key)] || bandForced(key);
 
 // The ports a group publishes, in the Ports column of its row: the first, and how many more, all of them in its tooltip
 function portsOf(services) {
@@ -201,7 +209,7 @@ function groupHtml(g, state) {
       <span class="s-name"><span class="g-name">${g.kind === "group" ? esc(unit.name) : itemLink(unit)}</span>${note}${output}${registry}</span>
       ${stateCell(unit.state, g.key)}
       <span class="s-version" ${version.title ? `data-tip="${esc(version.title)}"` : ""}>${esc(version.text)}</span>${portsOf(services)}<span class="s-uptime"></span>
-      <span class="row-icons">${plugins}${g.kind === "group" ? GAP + GAP : fileButtons(unit)}${groupActions(g, services).map((act) => rowButton(act, g.key, unit.name)).join("")}</span>
+      <span class="row-icons">${plugins}${g.kind === "group" || unit.runtime ? GAP + GAP : fileButtons(unit)}${groupActions(g, services).map((act) => rowButton(act, g.key, unit.runtime ? `${unit.name} (${state.platform.name})` : unit.name)).join("")}</span>
     </div>
     ${isOpen(g) ? `<ul class="containers">${g.services.map((n) => containerHtml(n, state)).join("")}</ul>` : ""}`;
 }
@@ -209,6 +217,7 @@ function groupHtml(g, state) {
 // The line of the core, above its groups: the platform's name, its license as a pill that leads to the license (its tooltip says until
 // when, or a popover what is not saved yet), and its files in the places of a group's
 function coreHtml(state) {
+  if (selectedRuntime) return `${bandToggle(CORE, state.platform.name)}<span class="core-name">${esc(state.platform.name)}</span>`;
   return `${bandToggle(CORE, state.platform.name)}<span class="core-name">${esc(state.platform.name)}${License.pill()}</span>
     <span class="row-icons">${GAP}${fileButtons(state.platform)}${GAP}${GAP}${GAP}</span>`;
 }
@@ -249,7 +258,7 @@ function renderGroups(state) {
   });
   // Uptimes tick on their own: written apart, a tick replaces no row (hover and focus stay). A container in an issue has
   // none, its State says which (it keeps restarting, it is unhealthy). Without Docker, nothing is said.
-  for (const li of $$(".container", page)) {
+  for (const li of $$(".groups .container", page)) {
     const { state: st, uptime } = state.services[li.dataset.service];
     $(".s-uptime", li).textContent = dockerDown() || !st.running || st.key === "issue" ? "" : uptime;
   }
@@ -299,11 +308,51 @@ export function paintHead(root, { platform }) {
   }
 }
 
+function runtimeHead(scope) {
+  const root = $("[data-container-head]", page);
+  const verbs = scope ? [...(scope.running || scope.active ? ["stop"] : ["start"]), ...(scope.running ? ["restart", "update"] : []), ...(scope.initialized ? ["apply"] : [])] : [];
+  setHTML(root, scope ? `<div class="page-actions">${scope.source ? `<a class="btn" href="#/playgrounds/${esc(scope.id)}">Open sandbox</a>` : ""}${verbs.map((verb) => actionButton({
+    key: `playground:${scope.id}`, verb, label: verb[0].toUpperCase() + verb.slice(1), icon: verb === "start" ? "play" : verb === "update" ? "download" : verb,
+    cls: `btn${verb === (scope.running ? "apply" : "start") ? " primary" : ""}`, attrs: `data-container-action="${verb}" data-busy aria-label="${esc(`${verb[0].toUpperCase() + verb.slice(1)} ${scope.name}`)}"`,
+  })).join("")}</div>` : "");
+  for (const button of $$("[data-container-action]", root)) {
+    const verb = button.dataset.containerAction;
+    const reason = store.wait(true) || scope.problem || (verb !== "stop" && !scope.source ? "Catalog source unavailable" : "");
+    holdOff(button, !!reason, reason || "");
+  }
+}
+
 function render(state) {
-  paintHead(page, state);
-  renderGroups(state);
-  renderLinks(state);
+  const scope = selectedRuntime && state.runtime_scopes?.[selectedRuntime];
+  $(".page-head > .page-actions", page).hidden = !!selectedRuntime;
+  $("[data-container-head]", page).hidden = !scope;
+  $("[data-container-missing]", page).hidden = !selectedRuntime || !!scope;
+  $(".stack-layout", page).hidden = !!selectedRuntime && !scope;
+  setHTML($("#container-runtime-value", page), esc(scope?.name || (selectedRuntime ? "Sandbox unavailable" : "Shared Lab")));
+  setHTML($("[data-container-source]", page), scope ? `<span class="sub">${esc(scope.playground_name)}${scope.source ? "" : ", Source unavailable"}</span>` : "");
+  if (selectedRuntime) runtimeHead(scope);
+  else paintHead(page, state);
+  if (selectedRuntime && !scope) return;
+  const names = new Set(scope?.services || []);
+  shownState = scope ? { ...state, addons: [], playgrounds: [],
+    services: Object.fromEntries(Object.entries(state.services).filter(([key]) => names.has(key))),
+    links: state.links.filter((link) => names.has(link.service)), platform: { ...state.platform, name: scope.name, groups: scope.groups } }
+    : { ...state, playgrounds: state.playgrounds.filter((item) => !item.runtime?.parent) };
+  renderGroups(shownState);
+  renderLinks(shownState);
   paintActions(page);
+}
+
+function chooseRuntime(button) {
+  const scopes = Object.values(store.state.runtime_scopes || {});
+  const parents = [...new Set(scopes.map((scope) => scope.playground))];
+  Combo.open(button, { plain: true, current: selectedRuntime || "shared",
+    groups: (query) => [{ label: "", items: [{ value: "shared", name: "Shared Lab" }] }, ...parents.map((parent) => ({
+      label: scopes.find((scope) => scope.playground === parent).playground_name,
+      items: scopes.filter((scope) => scope.playground === parent).map((scope) => ({ value: scope.id, name: scope.name, meta: "Sandbox" })),
+    }))].map((group) => ({ ...group, items: group.items.filter((item) => `${group.label} ${item.name}`.toLowerCase().includes(query)) })),
+    choose: (value) => router.go(value === "shared" ? "#/containers" : `#/containers/${encodeURIComponent(value)}`),
+  });
 }
 
 // --- Actions ----------------------------------------------------------------------------
@@ -315,8 +364,10 @@ const stays = (state) => state.playgrounds.flatMap((p) => (p.deployed || []).map
 // What Reset says: that it turns off the playground that is on (`reset_turns_off`), what its seed created being gone
 // with the volumes, and what stays in a platform
 function resetConfirm(state) {
-  const off = state.platform.reset_turns_off, left = stays(state);
-  const text = [CONFIRM.reset.text + (off ? `, and turns off ${off}` : ""), left.length && `Stays: ${left.join(", ")}`];
+  const off = state.platform.reset_turns_off, privateOnes = state.playgrounds.filter((p) => p.runtime?.prepared);
+  const left = [...stays(state), ...privateOnes.map((p) => p.name + " (sandbox)")];
+  const scope = privateOnes.length ? "Deletes the shared platform’s containers and volumes" : CONFIRM.reset.text;
+  const text = [scope + (off ? `, and turns off ${off}` : ""), left.length && `Stays: ${left.join(", ")}`];
   return { ...CONFIRM.reset, text: text.filter(Boolean).join(". ") };
 }
 
@@ -365,12 +416,12 @@ async function act(button) {
     return router.go("#/logs");
   }
   if (service) {
-    if (action === "start" && !(await confirmStart(store.service(service).label, store.service(service)))) return;
+    if (action === "start" && !(await confirmStart(shownState.services[service].name || shownState.services[service].label, shownState.services[service]))) return;
     return runJob(() => api(`/api/services/${service}/${action}`, {}), { key: `service:${service}`, verb: action });
   }
   const { unit } = g;
-  if (action === "start" && !(await confirmStart(unit.name, unit))) return;
-  const path = g.kind === "group" ? `/api/groups/${unit.id}/${action}` : `/api/${g.kind}s/${unit.id}/containers/${action}`;
+  if (action === "start" && !(await confirmStart(unit.runtime ? `${unit.name} (${store.state.runtime_scopes[unit.runtime].name})` : unit.name, unit))) return;
+  const path = unit.runtime ? `/api/runtimes/${unit.runtime}/groups/${unit.id}/${action}` : g.kind === "group" ? `/api/groups/${unit.id}/${action}` : `/api/${g.kind}s/${unit.id}/containers/${action}`;
   runJob(() => api(path, {}), { key: g.key, verb: action });
 }
 
@@ -388,7 +439,7 @@ function toggle(key) {
 }
 
 function foldBand(key) {
-  shut[key] = !shut[key];
+  shut[bandKey(key)] = !shut[bandKey(key)];
   remember("shut", JSON.stringify(shut));
   store.notify();
 }
@@ -400,7 +451,13 @@ function init(section) {
     const on = (selector) => e.target.closest(selector);
     // The chip, on what the license gives; a note that says what is wrong with it, on the form that takes a new one
     if (on("[data-license]")) return License.show({ form: on("[data-license]").dataset.license === "form" });
-    if (onHeadClick(e)) return;
+    if (on("[data-container-runtime]")) return chooseRuntime(on("[data-container-runtime]"));
+    if (on("[data-container-action]")) {
+      const scope = store.state.runtime_scopes?.[selectedRuntime];
+      if (scope) return independentAction({ ...scope, runtime: scope }, on("[data-container-action]").dataset.containerAction);
+      return;
+    }
+    if (!selectedRuntime && onHeadClick(e)) return;
     if (on("[data-output]")) return showOutput(on("[data-output]").dataset.output);
     if (on("[data-plugins]")) {
       selectProduct(on("[data-plugins]").dataset.plugins);
@@ -426,4 +483,4 @@ function init(section) {
   });
 }
 
-export const stackPage = { id: "stack", pattern: /^#\/containers$/, nav: "stack", title: "Containers", init, render };
+export const stackPage = { id: "stack", pattern: /^#\/containers(?:\/(.+))?$/, nav: "stack", title: "Containers", init, render, show: ([id] = []) => { selectedRuntime = id ? decodeURIComponent(id) : null; } };

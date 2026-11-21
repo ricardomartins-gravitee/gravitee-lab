@@ -661,6 +661,85 @@ and "Unreachable", after the server's own note. They are drawn by the page from 
 choice lives in this browser, and each leads to the form or the row that fixes it. Nothing is said for This machine, a
 place gone with its platform, or a place not read yet.
 
+### Sandboxes
+
+Ordinary playgrounds always use Shared. Explicitly created, named children own independent Compose projects; several
+children of the same source can run concurrently. Each child has a stable identity and its own page and actions, so
+opening a different sandbox never redirects an in-flight action or stops another instance. The catalog list contains
+source playgrounds; children appear in their source's More > Sandboxes dialog and on the Sandboxes page. No default/mode settings are exposed.
+The child's header links Playgrounds, then its source playground, then shows its own title and Sandbox badge together.
+Breadcrumb links share one type size; long source names truncate and the title/badge group can wrap onto its own line.
+
+The machine registry maps each child identity to a source and a display name. Legacy private projects are registered
+with an alias to their original storage identity: migration never moves data, changes a Docker project or allocates
+new ports. Fresh creation records only a stopped definition; first Start captures configuration and inputs.
+The creation form's Start from picker also offers running Shared and named instances of this source only. It lists
+unavailable sources with their reason and disables submission for them. Opening from a named child's inventory selects
+that child; opening from the source defaults to Fresh. A clone says that its writers pause briefly and that its copy stays stopped.
+
+`catalogs/runtime_clones.py` copies verified private storage with read-only helper mounts and a new, empty destination.
+Every container this job pauses is resumed in a `finally` path, including after partial pause or copy failures.
+Application writers pause before containers with a declared `io.gravitee.snapshot.flush` hook; each hook runs as argv
+inside its verified container, then that store pauses. Stores unpause before writers. Legacy records inherit only core
+hooks whose image matches the running image. Hook failure aborts the copy and resumes already paused writers.
+Shared and private cloning use the same storage snapshot path. Shared captures the whole project's storage and existing
+services, including other playgrounds' data, as the creation form says before submission. The compiler isolates ports,
+networks and mounts without filtering database resources. After the source resumes, `catalogs/runtime_urls.py` runs
+declared `x-gravitee.snapshot.<service>.relocate` commands on copied mounts, without networking or published ports. This
+Compose extension does not change source container hashes or require their recreation. The core MongoDB
+hook translates source-local URL strings using the actual published port map, without replacing documents or BSON values.
+Failure keeps the clone incomplete. No cloned application starts during relocation. Exact image IDs are recorded and given private
+local tags; builds and pulls cannot change the clone at first Start. Incomplete targets keep `clone_pending`, stay stopped
+and refuse Start, Apply and Update; their normal cleanup remains scoped to their own storage.
+
+`server/runtimes.py` overlays private sandbox state and stable, scoped service keys on the shared state. Its actions
+resolve those keys back to a validated sandbox before invoking Compose. The compiler in `catalogs/independent.py`
+reuses the standalone dependency selector; every command supplies both a private Compose file and project name.
+Configuration and copied inputs are retained until Apply; Update refreshes the configured image references. Ports stay assigned. Writable binds, volume and network names, built image
+tags, persona cookies and management API relays are private. Read-only text inputs and console URLs use the assigned
+loopback ports. Existing catalog and worktree links are read, never replaced.
+
+Start initializes once, then resumes without replaying one-shots. Stop retains storage. Sandbox menus reuse Apply and Update.
+Apply refreshes saved source configuration and read-only inputs, retaining writable storage and ports; only running services
+are recreated, with changed read-only input consumers forced to recreate. Failed services restart only when their dependencies
+are available, using the existing service-state rules. Stopped services retain their state and use the
+saved configuration at the next Start. Update uses the captured configuration and selected image references, pulling registry
+images and refreshing clone-owned aliases without retagging a source sandbox’s aliases. Neither action runs seeds or starts
+stopped containers. Restart targets running services only. Re-seed remains the explicit seed replay on the sandbox page.
+Active sandbox metadata holds dependent catalogs against replacement or removal, including after a partial start.
+Platform controls remain scoped to the shared project. The private sandbox group exposes its own services in Containers;
+resource use includes active private projects. An unreadable private record is a problem of that playground and holds
+its actions, rather than hiding the whole Lab.
+
+Sandboxes is a Configure page for instance creation, cloning and cleanup. Its table groups independent instances by
+source playground and shows state and storage, with Containers and Open sandbox links. It shares its component with
+More > Sandboxes. Shared has no duplicate management row. Storage details retain assigned ports, captured versions and
+image references. Machine-wide image and build-cache usage is shown once. `/api/runtimes` runs only while a management
+view is open; storage scans never hold the normal state stream.
+
+Containers opens on Shared Lab, with one Show containers for picker. `#/containers/<sandbox id>` identifies an explicit private view;
+Back, Forward and reload restore that target. Opening the ordinary menu link returns to Shared. Selection changes no
+machine settings or running services. Its groups, service rows, header actions and consoles all belong to the chosen
+instance. Private groups and services use stable keys containing that sandbox's identity; the server validates group
+membership against captured service names. Group Restart retains stopped services, and group Start never replays seeds.
+Group expansion is independent between sandboxes. The private view offers no editor of Shared files or plugins.
+
+The state carries saved inspection scopes, including instances whose catalog source is unavailable. These scopes have
+no volume scan, settings or secret values. When Docker is unavailable, saved identities and port assignments remain
+visible with unavailable live state; metadata damage remains a separate error. Docker unavailability adds no repeated
+per-sandbox errors and never leaves an inventory showing Reading sandboxes after its request ends. Unknown or deleted
+sandbox addresses never fall back to Shared controls. Start, Stop, Restart, Apply and Update retain their meaning;
+Re-seed stays on the sandbox's playground page, and cleanup stays in sandbox management.
+
+`catalogs/runtime_storage.py` binds cleanup previews to explicit Docker identities and a fingerprint of the private
+filesystem tree. Both confirmation and execution recheck ownership and stopped state. Container removal keeps volumes
+and initialized metadata; readiness tolerates removed completed one-shots on resume. Data deletion removes only the
+selected sandbox's volumes and generated folder, with a fixed helper bound to that folder and its verified manifest.
+The cleanup labels state their scope: Delete containers, keep data; Delete data, keep sandbox; Delete sandbox and data.
+The menu hint and both confirmation stages use the same action text and describe the next Start.
+Catalog source, links, other projects, images and caches are retained. Shared image/cache usage is machine-wide and is
+never added to every sandbox's total. Unreadable storage remains unknown and is reported, rather than counted as zero.
+
 ### Playgrounds
 
 - A playground's first Start sets it up, in phases: Plugins, Apps and services ("Platform, apps and services" when the
@@ -1595,6 +1674,14 @@ dark, at 1440 and 900 px wide.
       reads Running; once a license is saved, it is a group as any other and Start runs it. With a license, the License dialog keeps
       no empty cell for the ways to get one, and the packs stay beside the facts.
     - The platform stopped, an add-on running alone: the head has Stop, Restart and Update.
+   - Open Sandboxes: private instances are grouped by source, with no Shared row or unrelated Shared Start/Apply.
+     Open Containers from an instance: only its services, ports, consoles and actions are drawn. Choose Shared, then
+     Back: the previous instance and its expanded groups return. An unknown sandbox address never shows Shared controls.
+   - With Docker off, the inventory settles on saved names and unavailable live values, with one Docker notice. Inspect
+     an instance whose source is unavailable: captured ports remain; mutation controls are disabled with their reason.
+   - At phone width, management actions wrap below each sandbox and remain visible without horizontal scrolling.
+     Container ports remain visible below names. Verify both themes and keyboard selection of the Show containers for picker.
+
 12. **Apply needed.** A version saved on Images while its container runs: the rows and the banner's notice, on every page but Containers, show the badge "Apply needed" (the notice its count; no page has it beside its title); hover it, tab to it (its name for a screen reader holds
     the reason) and tap it on a touch screen: the popover is one table, the tags that run and those saved under *Running* and
     *Saved* (an older one saved in amber), or the names of the settings that changed, and what Apply does; Apply's dialog says what

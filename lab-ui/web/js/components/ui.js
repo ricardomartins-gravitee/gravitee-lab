@@ -297,6 +297,7 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (!anchor) return;
   if (e.key === "Escape") {
+    e.preventDefault();   // Close this menu without also canceling a modal that contains it.
     const button = anchor;
     closeMenu();
     button.focus();
@@ -864,6 +865,21 @@ export function originLink(item) {
 // A service's version, as text: the tag its container runs, else the one saved, without the system it is built on (as every page says a
 // version); what the version column of the Stack is as wide as
 export const serviceVersion = (service) => (service.built ? "local build" : bareTag(service.running_tag || service.tag || ""));
+
+// Shared and private containers offer the same lifecycle controls; seeds run through Re-seed.
+export function containerActions(name, service, { attribute = "data-act" } = {}) {
+  const st = service.state, key = `service:${name}`, seed = service.role === "seed";
+  const actions = [!["absent", "unknown"].includes(st.key) && "logs", !seed && (st.running || showing(key, "restart")) && "restart",
+    st.running ? "stop" : !seed && service.on && st.key !== "done" && "start"];
+  return actions.map((act) => {
+    if (!act) return GAP;
+    const label = act === "logs" ? "Logs" : act === "restart" ? "Restart" : act === "start" ? "Start" : "Stop";
+    const attrs = `${attribute}="${act}" data-tip="${label}" aria-label="${esc(act === "logs" ? `Logs of ${service.label}` : `${label} ${service.label}`)}"`;
+    if (act === "logs") return `<button class="icon-btn" ${attrs}>${icon("logs")}</button>`;
+    return actionButton({ key, verb: act === "restart" ? act : ["stop", "start"], icon: act === "start" ? "play" : act,
+      cls: "icon-btn", attrs: `data-busy${act === "start" ? "" : '="name"'} ${attrs}` });
+  }).join("");
+}
 
 // How another container of the lab reaches a service: its name and the port inside it, not the one published ("In the
 // lab: malt-box:80"), which the endpoint of an API made in a platform's console needs. Said only while a platform is

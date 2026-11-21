@@ -88,6 +88,9 @@ class LabUI(Case):
     """The handler listening on a free port."""
 
     def setUp(self):
+        # These cases exercise the shared handler. Private runtimes have their own fixtures.
+        self.patch(api.runtimes.runtime_settings, "read", return_value={"schema": 1, "default": "shared", "playgrounds": {}})
+        self.patch(api.runtimes.independent, "read", return_value=None)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), api.Handler)
         self.server.daemon_threads = True
         threading.Thread(target=self.server.serve_forever, args=(0.01,), daemon=True).start()   # stops at once
@@ -375,7 +378,8 @@ class State(LabUI):
         self.patch(api.updates, "describe", return_value=self.lab)
         self.more = {"root": str(paths.ROOT), "agent": self.agent, "skills": {"addon": ".agents/skills/new-addon/SKILL.md"},
                      "core": {"place": "machine", "chosen": False}, "lab": self.lab, "kept_settings": [],
-                     "git": {"available": True, "version": "2.43.2"}, "catalogs": self.rows, "content": self.content}
+                     "git": {"available": True, "version": "2.43.2"}, "catalogs": self.rows, "content": self.content,
+                     "runtime_scopes": {}}
         self.patch(api, "JOBS", Jobs())
         self.patch(api.compose, "CACHE", compose.Cache())
         self.patch(api.compose, "project_name", return_value="gravitee")
@@ -1492,6 +1496,8 @@ class StartsAreVerified(GatewayCase):
     # The routes that start containers of what is on already: they take no plan and put no unit in the on file (8.5 gates the
     # plan of a start), and say so here. A route that is new and starts something is not among them: it joins the table
     NO_PLAN = {
+        f"/api/runtimes/{api.UNIT}/(start|stop|restart|apply|update)": "private runtime commands never change the on file; independent.plan verifies the catalog closure",
+        f"/api/runtimes/{api.UNIT}/groups/{api.ID}/{api.DO}": "only captured private members, no dependencies or seed replay; membership is checked against the explicit runtime",
         f"/api/(addon|playground)s/{api.UNIT}/containers/{api.DO}": "the containers of an item that is on, as the files say now",
         f"/api/groups/{api.ID}/{api.DO}": "the containers of a group of the platform",
         f"/api/services/{api.SERVICE}/{api.DO}": "one service that is on",
@@ -1961,6 +1967,7 @@ class Startup(Case):
 
     def setUp(self):
         self.folder(paths)
+        self.patch(api.runtimes.runtime_settings, "initialize")
         self.events = []
         events = self.events
 

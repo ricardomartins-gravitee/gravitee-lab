@@ -368,7 +368,7 @@ test("its Start, Apply and Stop are the Containers page's, button for button and
   assert.deepEqual(["start", "stop"].map((verb) => text(section.querySelector(`[data-stack="${verb}"] .pbtn-face`))), ["Start all", "Stop all"]);
   assert.deepEqual(["start", "stop"].map((verb) => text(containers.querySelector(`[data-stack="${verb}"] .pbtn-face`))), ["Start", "Stop"]);
   assert.ok(section.querySelectorAll(".page-actions [data-act-for]").every((button) => button.dataset.actFor === "platform"));
-  assert.equal(containers.querySelectorAll(".page-actions button").length, 6, "the Containers page keeps every action");
+  assert.equal(containers.querySelectorAll(".page-head .page-actions button").length, 6, "the Containers page keeps every action");
   assert.equal(containers.querySelector("[data-more]").getAttribute("aria-label"), "More");
   dashboardPage.hide();
 });
@@ -391,11 +391,14 @@ test("with the platform stopped the banner leaves its Start to the head, and the
     return banner();
   };
   assert.deepEqual(drawn(lab({ core: "stopped" }), "dashboard"), []);
+  assert.deepEqual(drawn(lab({ core: "stopped" }), "runtimes"), [], "instance management offers no unrelated Shared Start");
+  assert.equal(text(page.ids["health-text"]), "Shared stopped");
   assert.deepEqual(drawn(lab({ core: "stopped" }), "playgrounds"), ["Gravitee platform is stopped Start"], "any other page has it");
   const why = "API Management: 4.12.20 is saved, 4.13.0-alpha.4 still runs.";
   const late = lab({ platform: { apply: { needed: true, restarts: [], starts: [], dialog: null },
     behind: [{ kind: "group", id: "api-management", name: "API Management", reason: why, causes: [] }] } });
   assert.deepEqual(drawn(late, "stack"), [], "Containers shows it in its table");
+  assert.deepEqual(drawn(late, "runtimes"), [], "instance management offers no unrelated Shared Apply");
   // One notice: its headline, a summary that names no product, whose popover says which and why, and Apply
   for (const id of ["dashboard", "playgrounds", "images", "plugins"]) assert.deepEqual(drawn(late, id), ["Apply needed 1 container differs from what is saved Apply"], id);
   // Its name starts with the words it shows, so that a voice that says them finds it

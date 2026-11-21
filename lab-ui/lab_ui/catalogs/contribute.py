@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
 from urllib.parse import quote
 
-from ..library import check, layers, moves, personal, project as projects, tested
+from ..library import check, layers, moves, personal, project as projects, runtime_settings, tested
 from ..docker import compose
 from .. import paths
 from . import defaults, gitx, install, manifest, meta as block, registry, renames, resolve, store as bare, trust, understood
@@ -1686,6 +1686,8 @@ def use_catalog_version(project: dict, kind: str, uid: str) -> dict:
     personal copy is deleted. Answers {"id": the catalog's id}. `held` (409) while either is on or runs. ValueError when the
     personal item has no twin or its file is gone, when the twin cannot run here (the personal copy is the one that works),
     and when anything of the folder could not be moved to where it is kept: then nothing is deleted."""
+    if runtime_settings.holds(kind, uid):
+        raise CatalogError("held", "Stop the independent playground using this item first.", 409)
     file, name, slug = _own(project, kind, uid, "replaced")
     twin = ((project.get(kind + "s") or {}).get(uid) or {}).get("twin")
     there = twin.get("id") if isinstance(twin, dict) else None

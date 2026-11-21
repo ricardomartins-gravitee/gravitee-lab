@@ -7,13 +7,13 @@ pages following it share."""
 import http.client
 import json
 import os
-import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 from ..docker import compose, images
-from ..library import project as projects
+from ..docker.storage import size
+from ..library import project as projects, runtime_settings
 from ..library.versions import judge, channel, latest, order, parse
 
 DOCKER_TTL = 60       # seconds what Docker holds is kept: a quick back and forth does not read it again
@@ -23,21 +23,9 @@ RETRY = 60            # seconds before a registry that did not answer is asked a
 LOAD_TTL = 1          # seconds a reading of the load is kept
 NAMES_TTL = 10        # seconds the names of the lab's containers are kept
 TYPES = ("images", "containers", "volumes", "cache")   # what `docker system df` counts, in the order it lists them
-# Docker writes sizes in powers of 1000 (`system df`: 58.89GB) or of 1024 (`stats`: 731.8MiB)
-UNITS = {"B": 1,
-         **{unit: 1000 ** power for power, unit in enumerate(["kB", "MB", "GB", "TB", "PB"], 1)},
-         **{unit: 1024 ** power for power, unit in enumerate(["KiB", "MiB", "GiB", "TiB", "PiB"], 1)}}
-SIZE = re.compile(r"\s*(\d+(?:\.\d+)?)\s*([A-Za-z]+)")
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 # Sizes and Docker
-# ---------------------------------------------------------------------------------------------------------------------
-
-def size(text):
-    """The bytes of a size as Docker writes it ("58.89GB", "731.8MiB", "42.7GB (72%)", "0B"); 0 for anything else."""
-    found = SIZE.match(text or "")
-    return int(round(float(found.group(1)) * UNITS[found.group(2)])) if found and found.group(2) in UNITS else 0
 
 
 def _object(text):
@@ -222,14 +210,15 @@ def lab_names():
     """The names of the containers of this project, which is the lab's: what Docker runs for something else is not its
     load. Kept a few seconds; None when they cannot be told, and the load is then every container's."""
     def ask():
-        rc, out, err = compose.run(["docker", "ps", "--filter", f"label=com.docker.compose.project={compose.project_name()}",
-                                    "--format", "{{.Names}}"], timeout=10)
+        names = sorted({compose.project_name(), *runtime_settings.active_projects()})
+        filters = [part for name in names for part in ("--filter", f"label=com.docker.compose.project={name}")]
+        rc, out, err = compose.run(["docker", "ps", *filters, "--format", "{{.Names}}"], timeout=10)
         if rc != 0:
             raise compose.ComposeError(err.strip())
         return set(out.split())
     try:
         return compose.CACHE.get("dashboard:names", NAMES_TTL, ask)
-    except compose.ComposeError:
+    except (compose.ComposeError, OSError, ValueError):
         return None
 
 
