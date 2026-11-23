@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .. import paths, products
-from ..docker import compose, images
+from ..docker import compose, images, seed_image
 from ..docker.jobs import JOBS, JobFailed
 from ..library import layers, model, plugins, runtime_settings, tested
 from . import service as catalog_service, standalone
@@ -441,7 +441,12 @@ def _plugins(pid, value, job):
     return changed
 
 
-def start(pid):
+def _seed_command(job, pid, seed, repository, *args, remove=False):
+    files = seed_image.files(job, repository, seed, args=command(pid)[len(compose.COMPOSE):], remove=remove)
+    return [*compose.COMPOSE, *files, *args]
+
+
+def start(pid, *, published_seeder=None):
     def run(job):
         job.step("Prepare sandbox")
         value = prepare(pid)
@@ -450,7 +455,7 @@ def start(pid):
         if not value["initialized"]:
             _plugins(pid, value, job)
             job.step("Start sandbox platform and apps")
-            job.exec(command(pid, "up", "-d", "--build"))
+            job.exec(_seed_command(job, pid, value["seed"], published_seeder, "up", "-d", "--build"))
         else:
             lasting = [key for key in value["services"] if key not in value["oneshots"]]
             job.step("Resume sandbox platform and apps")
@@ -632,14 +637,15 @@ def _tested(pid, value):
     tested.remember(pid, proof["versions"], identities)
 
 
-def stop(pid, remove=False):
+def stop(pid, remove=False, *, published_seeder=None):
     value = read(pid)
     if not value:
         raise ValueError("This sandbox has not been started")
     def run(job):
         if remove and value["seed"]:
             job.step("Delete what its seed created")
-            job.exec(command(pid, "run", "--rm", "--no-deps", value["seed"], "--remove"))
+            job.exec(_seed_command(job, pid, value["seed"], published_seeder,
+                                  "run", "--rm", "--no-deps", value["seed"], "--remove", remove=True))
             value["initialized"] = False
             _write(folder(pid) / "runtime.json", value)
         job.step("Stop sandbox platform and apps")
@@ -650,13 +656,16 @@ def stop(pid, remove=False):
                       changes={"stop": [["playground", pid]]})
 
 
-def reseed(pid):
+def reseed(pid, *, published_seeder=None):
     value = read(pid)
     if not value or not value["seed"] or not describe(pid)["running"]:
         raise ValueError("Start this sandbox before re-seeding")
-    return JOBS.start("Re-seed " + _label(pid), [command(pid, "run", "--rm", "--no-deps", value["seed"]),
-                      lambda job: _tested(pid, value)],
-                      key=f"playground:{pid}", verb="reseed")
+    phase = "Run the seed"
+    def run(job):
+        job.step(phase)
+        job.exec(_seed_command(job, pid, value["seed"], published_seeder, "run", "--rm", "--no-deps", value["seed"]))
+        _tested(pid, value)
+    return JOBS.start("Re-seed " + _label(pid), [run], key=f"playground:{pid}", verb="reseed", phases=[phase])
 
 
 def created(pid):

@@ -264,17 +264,20 @@ def action(project, pid, operation, body=None):
     body = body or {}
     if body.get("place") not in (None, "machine"):
         raise ValueError("A sandbox runs only on this machine")
+    published_seeder = project.get("published_seeder")
     if operation in ("start", "apply", "update"):
         if (independent.read(pid) or {}).get("clone_pending"):
             raise ValueError("This clone is incomplete; delete it and create a new sandbox")
         result = check(project, pid, operation=operation)
         if result["blocked"] is not None:
             raise ValueError(result["blocked"])
-        return {"start": independent.start, "apply": independent.apply, "update": independent.update}[operation](pid)
+        if operation == "start":
+            return independent.start(pid, published_seeder=published_seeder)
+        return {"apply": independent.apply, "update": independent.update}[operation](pid)
     if operation == "stop":
-        return independent.stop(pid, remove=bool(body.get("remove")))
+        return independent.stop(pid, remove=bool(body.get("remove")), published_seeder=published_seeder)
     if operation == "reseed":
-        return independent.reseed(pid)
+        return independent.reseed(pid, published_seeder=published_seeder)
     if operation == "restart":
         return independent.restart(pid)
     raise ValueError("Unknown sandbox action")

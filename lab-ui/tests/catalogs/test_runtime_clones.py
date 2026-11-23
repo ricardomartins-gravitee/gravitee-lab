@@ -15,7 +15,7 @@ from unittest.mock import Mock, call
 from lab_ui import paths
 from lab_ui.catalogs import independent, runtime_clones, runtime_storage, runtime_urls, standalone
 from lab_ui.library import runtime_settings
-from lab_ui.docker import compose, storage
+from lab_ui.docker import compose, seed_image, storage
 from lab_ui.docker.jobs import JobFailed
 from tests import Case
 from tests.fixtures import have_compose
@@ -82,6 +82,29 @@ class Clones(Case):
         config["x-gravitee"] = {"snapshot": {"db": {"relocate": ["relocate"]}}}
         file.write_text(json.dumps(config))
         self.assertEqual(compose.config_hashes(["-f", str(file)]), before)
+
+    @unittest.skipUnless(have_compose(), "Docker Compose is needed to verify container configuration hashes")
+    def test_a_published_seed_must_match_the_captured_container_configuration(self):
+        file = self.root / "compose.json"
+        repository = "ghcr.io/example/lab/seeder"
+        image = repository + ":source-" + "a" * 64
+        config = {"services": {"seed": {"image": "local-seeder", "build": {"context": str(self.root / "seeder")},
+                                        "labels": {"io.gravitee.role": "seed"}},
+                               "app": {"image": "app:1"}}}
+        file.write_text(json.dumps(config))
+        files = ["-f", str(file)]
+        normal = compose.config_hashes(files)
+        started = compose.config_hashes(seed_image.override(files, {"seed": image}))
+        self.assertNotEqual(normal["seed"], started["seed"])
+        self.assertEqual(normal["app"], started["app"])
+        container = {"Config": {"Image": image, "Labels": {
+            "com.docker.compose.service": "seed", "com.docker.compose.config-hash": started["seed"]}}}
+        published = runtime_clones._published_seeds(config, [container], repository)
+        self.assertEqual(published, {"seed": image})
+        self.assertEqual(compose.config_hashes(seed_image.override(files, published)), started)
+        self.assertEqual(runtime_clones._published_seeds(config, [container], repository + "-other"), {})
+        config["services"]["seed"]["build"]["context"] = str(self.root / "custom")
+        self.assertEqual(runtime_clones._published_seeds(config, [container], repository), {})
 
     def test_running_image_uses_its_immutable_id_when_docker_can_resolve_it(self):
         run = self.patch(compose, "run", return_value=(0, "sha256:running\n", ""))
