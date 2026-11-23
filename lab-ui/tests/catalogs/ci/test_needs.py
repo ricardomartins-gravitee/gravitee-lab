@@ -203,8 +203,10 @@ class Needs(unittest.TestCase):
         code, out, _ = self.stage(folder, into, runner=runner)
         self.assertEqual(code, 1)
         self.assertIn("could not read https://github.com/acme/hub.git", out)
-        for text in ("user:example", "\x1b", needs.KEY):
+        for text in ("user:example", "\x1b"):
             self.assertNotIn(text, out)
+        self.assertIn("public: true", out)
+        self.assertIn("NEEDS_DEPLOY_KEY", out)
 
 
 if __name__ == "__main__":

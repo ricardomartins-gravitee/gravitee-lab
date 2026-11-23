@@ -118,8 +118,9 @@ STAGES = (
     ("TS02", WARNING, "test", "{app} has no tests. Fix: COPY tests ./tests in the Dockerfile and add some."),
     ("ND01", ERROR, "needs", "{ids}: this catalog needs these private catalogs and the secret NEEDS_DEPLOY_KEY is not set. Fix: give the repository a "
                              "read-only deploy key of theirs: make settings prints the commands."),
-    ("ND02", ERROR, "needs", "{name} ({repository}) could not be fetched or linked: {why}. Fix: check access to the repository "
-                             "and that ref names a commit of it."),
+    ("ND02", ERROR, "needs", "{name} ({repository}) could not be fetched or linked: {why}. Fix: set "
+                             "NEEDS_DEPLOY_KEY for a private dependency or public: true for a public one, then check access to "
+                             "the repository and that ref names a commit of it."),
     ("SM01", ERROR, "smoke", "{service} was not healthy after 240 s"),
     ("SM02", ERROR, "smoke", "{service} exited with {code}"),
     ("SM03", WARNING, "smoke", "{unit} was not tried: it needs settings or a license."),

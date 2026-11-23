@@ -26,6 +26,7 @@ from lab_ui.catalogs.tree import FolderTree, ListTree
 from tests import Case
 from tests.data.standard import support
 from tests.data.standard.support import LAB_COMMIT, NEWER_COMMIT, params, render
+from tests.workflow_helpers import READS_UNITS
 
 LEVEL = standard.LEVEL   # the level this Lab ships: what a test of the current level reads
 
@@ -141,13 +142,11 @@ class Template(unittest.TestCase):
             "versions": {"plan": "Plan the jobs", "try": "Try it", "record": "Write the versions that passed"},
         }
         # These commands resolve catalog units; metadata-only commands (the PR gate, release guard, and seed lint) do not.
-        reads_units = re.compile(r"\bcatalog\.py\s+(?:check|index|link|ci\s+(?:plan|manifests|build|test|smoke|scan-built|"
-                                 r"scan-published|publish-plan|publish|release-notes|e2e-plan|versions-plan|versions-record|versions-release))\b")
         found = set()
         for path, data in files.items():
             if path.startswith(".github/workflows/") and path.endswith(".yml"):
                 for job, runner in yaml.safe_load(data)["jobs"].items():
-                    if any(reads_units.search(step.get("run", "")) for step in runner.get("steps", [])):
+                    if any(READS_UNITS.search(step.get("run", "")) for step in runner.get("steps", [])):
                         found.add((Path(path).stem, job))
         self.assertEqual(found, {(workflow, job) for workflow, consumers in cases.items() for job in consumers})
         for workflow, consumers in cases.items():
@@ -165,19 +164,50 @@ class Template(unittest.TestCase):
                     self.assertLess(fetch, names.index(consumer))
                     if workflow == "e2e" and job == "e2e":
                         self.assertLess(names.index("The change is the one that was read"), fetch)
-                    self.assertEqual(steps[checkout].get("with", {}).get("key"), "${{ secrets.LAB_DEPLOY_KEY }}")
+                    self.assertEqual(steps[checkout].get("with", {}).get("key"), None if latest else "${{ secrets.LAB_DEPLOY_KEY }}")
                     self.assertEqual(steps[fetch]["run"], "python3 -I lab/lab-ui/catalog.py ci needs catalog")
-                    self.assertNotIn("if", steps[fetch])
+                    if latest:
+                        self.assertEqual(steps[fetch].get("if"), "${{ steps.compatible.outputs.public == 'true' }}")
+                    else:
+                        self.assertNotIn("if", steps[fetch])
                     self.assertNotIn("continue-on-error", steps[fetch])
                     self.assertNotIn("NEEDS_DEPLOY_KEY", json.dumps(document.get("env", {})))
                     self.assertNotIn("NEEDS_DEPLOY_KEY", json.dumps(runner.get("env", {})))
                     for step in steps[:fetch] + steps[fetch + 1:]:
                         self.assertNotIn("NEEDS_DEPLOY_KEY", json.dumps(step))
                     if latest:
-                        self.assertEqual(steps[checkout].get("with"), {"key": "${{ secrets.LAB_DEPLOY_KEY }}", "latest": "true"})
+                        self.assertEqual(steps[checkout].get("with"), {"latest": "true"})
                     else:
                         self.assertEqual(steps[checkout].get("with", {}).get("latest", "false"), "false")
-                    self.assertEqual(steps[fetch].get("env"), {"NEEDS_DEPLOY_KEY": "${{ secrets.NEEDS_DEPLOY_KEY }}"})
+                    self.assertEqual(steps[fetch].get("env"), None if latest else {"NEEDS_DEPLOY_KEY": "${{ secrets.NEEDS_DEPLOY_KEY }}"})
+                    if latest:
+                        self.assertNotIn("secrets.", json.dumps(runner))
+
+
+    def test_newest_lab_checks_public_dependencies_and_skips_private_ones_without_secrets(self):
+        bash = support.need("bash")
+        support.need("jq")
+        script = blank(render(**EVERYTHING)[".github/workflows/nightly.yml"].decode(),
+                       "name: Whether the newest Lab can read the catalog")
+        cases = [({}, "true"), ({"needs": {}}, "true"),
+                 ({"needs": {"public": {"public": True}}}, "true"),
+                 ({"needs": {"private": {}}}, "false"),
+                 ({"needs": {"public": {"public": True}, "private": {"public": False}}}, "false"),
+                 ({"needs": []}, None)]
+        for settings, expected in cases:
+            with self.subTest(settings=settings), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                support.write(root, {"catalog/.github/standard.json": json.dumps(settings).encode()})
+                output = root / "outputs"
+                done = subprocess.run([bash, "-e", "-c", script], cwd=root,
+                                      env={**os.environ, "GITHUB_OUTPUT": str(output)}, capture_output=True, text=True)
+                if expected is None:
+                    self.assertNotEqual(done.returncode, 0)
+                else:
+                    self.assertEqual(done.returncode, 0, done.stderr)
+                    self.assertEqual(output.read_text(), "public=" + expected + "\n")
+                    if expected == "false":
+                        self.assertIn("Newest Lab skipped", done.stdout)
 
 
 class Golden(Case):

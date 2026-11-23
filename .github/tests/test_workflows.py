@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
 # The rules every workflow keeps are the Lab's own (the catalog standard's): one module for this test and for
 # `catalog.py check`, which applies them to the workflows of a catalog
 sys.path.insert(0, str(ROOT / "lab-ui"))
+sys.path.insert(0, str(ROOT / "lab-ui" / "tests"))
+from workflow_helpers import READS_UNITS  # noqa: E402
 from lab_ui.catalogs.rules.workflows import GENERIC, problems  # noqa: E402
 
 FILES = sorted([*(ROOT / ".github" / "workflows").glob("*.yml"), *(ROOT / ".github" / "actions").glob("*/action.yml")])
@@ -72,13 +74,10 @@ class WorkflowsTest(unittest.TestCase):
         readers = {"catalog": {"check": "Check the catalog"},
                    "e2e": {"plan": "Link the catalog into the engine", "manifests": "Link the catalog into the engine",
                            "e2e": "Link the catalog into the engine"}}
-        reads_units = re.compile(r"\b(?:catalog\.py\s+(?:check|index|link|ci\s+(?:plan|manifests|build|test|smoke|scan-built|"
-                                 r"scan-published|publish-plan|publish|release-notes|e2e-plan|versions-plan|versions-record|versions-release))\b|"
-                                 r"e2e_matrix\.py|image_manifests\.py|server\.py\s+--e2e)")
         found = set()
         for file in (ROOT / ".github/workflows").glob("*.yml"):
             for job, body in jobs(file.read_text(encoding="utf-8")).items():
-                if any(reads_units.search(step) for step in steps(body)):
+                if any(READS_UNITS.search(step) for step in steps(body)):
                     found.add((file.stem, job))
         self.assertEqual(found, {(workflow, job) for workflow, consumers in readers.items() for job in consumers})
         for workflow, consumers in readers.items():

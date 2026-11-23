@@ -12,7 +12,7 @@
     ".github/rulesets/tags.json": "fa140a3e577ff1d3161a1bad7ce323e6fc16a4392aab9539baf5cb9be8ce86c6",
     ".github/workflows/ci.yml": "e764f1c718bf16ff900f5ff3f7cd4d4bfd0d37d14f01a8fc2b63b31e738dab18",
     ".github/workflows/e2e.yml": "873eada1a60f3bfc5b7b49907a44cbd15e257f16f848433a33437ad7d4eb1828",
-    ".github/workflows/nightly.yml": "9e43b3178d1db2f58bae6b924b059867b826f9802bf00e1eec85031a3cc7813b",
+    ".github/workflows/nightly.yml": "78df295eae552eaf6a037ef1655c6e8511a664b4f082cffa07b2df9b2da6da45",
     ".github/workflows/publish.yml": "1f057c670108ddb35f60141fb7af65be5082ac76d88606c93ff91ee4165f8ce9",
     ".github/workflows/versions.yml": "4085a823dfd93b74d0cbbb6c69247a0e689522080c54a843110b1ae8176a833b"
   }

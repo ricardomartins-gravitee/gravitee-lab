@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from lab_ui.catalogs.rules import workflows as wf
+from tests.workflow_helpers import READS_UNITS
 
 HERE = Path(__file__).resolve().parents[2]
 MANAGED = HERE.parent / "templates" / "catalog" / "managed"
@@ -574,8 +575,6 @@ class Passing(unittest.TestCase):
         }
         cli = "python3 -I lab/lab-ui/catalog.py "
         command = cli + "ci needs catalog"
-        reads_units = re.compile(r"\bcatalog\.py\s+(?:check|index|link|ci\s+(?:plan|manifests|build|test|smoke|scan-built|"
-                                 r"scan-published|publish-plan|publish|release-notes|e2e-plan|versions-plan|versions-record|versions-release))\b")
         for file, jobs in readers.items():
             workflow = yaml.load(text_of(file), Loader=yaml.BaseLoader)
             for job, (consumer, best_effort) in jobs.items():
@@ -591,26 +590,31 @@ class Passing(unittest.TestCase):
                         self.assertLess(gate, setup)
                     else:
                         self.assertEqual(setup, checkout + 1)
-                    first_reader = next(i for i, step in enumerate(steps) if reads_units.search(step.get("run", "")))
+                    first_reader = next(i for i, step in enumerate(steps) if READS_UNITS.search(step.get("run", "")))
                     self.assertLess(setup, first_reader)
                     self.assertLess(setup, next(i for i, step in enumerate(steps) if step.get("name") == consumer))
-                    self.assertEqual(steps[checkout].get("with", {}).get("key"), "${{ secrets.LAB_DEPLOY_KEY }}")
+                    latest = job == "verify-latest"
+                    self.assertEqual(steps[checkout].get("with", {}).get("key"), None if latest else "${{ secrets.LAB_DEPLOY_KEY }}")
                     self.assertEqual(steps[setup]["name"], "Catalogs it needs")
                     self.assertEqual(steps[setup]["run"], command)
-                    self.assertNotIn("if", steps[setup])
+                    if latest:
+                        self.assertEqual(steps[setup].get("if"), "${{ steps.compatible.outputs.public == 'true' }}")
+                        self.assertNotIn("secrets.", repr(reader))
+                    else:
+                        self.assertNotIn("if", steps[setup])
                     self.assertNotIn("continue-on-error", steps[setup])
                     if job == "verify-latest":
-                        self.assertEqual(steps[checkout].get("with"), {"key": "${{ secrets.LAB_DEPLOY_KEY }}", "latest": "true"})
+                        self.assertEqual(steps[checkout].get("with"), {"latest": "true"})
                     else:
                         self.assertEqual(steps[checkout].get("with", {}).get("latest", "false"), "false")
                     self.assertNotIn("needs_deploy_key", repr(workflow.get("env", {})).lower())
                     self.assertNotIn("needs_deploy_key", repr(reader.get("env", {})).lower())
-                    self.assertEqual(steps[setup].pop("env"), {"NEEDS_DEPLOY_KEY": "${{ secrets.NEEDS_DEPLOY_KEY }}"})
+                    self.assertEqual(steps[setup].pop("env", None), None if latest else {"NEEDS_DEPLOY_KEY": "${{ secrets.NEEDS_DEPLOY_KEY }}"})
                     for step in steps[:setup] + steps[setup + 1:]:
                         self.assertNotIn("needs_deploy_key", repr(step).lower())
                     if best_effort:
                         step, = [step for step in steps[setup + 1:] if step.get("run") == cli + best_effort]
-                        condition = "${{ !cancelled() && steps.%s.outcome == 'success' }}" % steps[setup]["id"]
+                        condition = "${{ !cancelled() && " + ("steps.compatible.outputs.public == 'true' && " if latest else "") + "steps.%s.outcome == 'success' }}" % steps[setup]["id"]
                         self.assertEqual(step.get("if"), condition)
                     if file == "ci" and job == "static":
                         plan, = [step for step in steps if step.get("name") == "What the change touches"]

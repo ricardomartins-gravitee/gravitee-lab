@@ -613,7 +613,7 @@ Every rule that `catalog.py check` and the stages of `catalog.py ci` can print, 
 
 *Error.* Needs stage of `catalog.py ci`.
 
-- **Message**: {name} ({repository}) could not be fetched or linked: {why}. Fix: check access to the repository and that ref names a commit of it.
+- **Message**: {name} ({repository}) could not be fetched or linked: {why}. Fix: set NEEDS_DEPLOY_KEY for a private dependency or public: true for a public one, then check access to the repository and that ref names a commit of it.
 
 ## Smoke stage
 

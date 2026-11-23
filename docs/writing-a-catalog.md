@@ -148,10 +148,7 @@ or set it to `false`: the setup step uses `NEEDS_DEPLOY_KEY`, a read-only deploy
 `LAB_DEPLOY_KEY` in the Actions and the Dependabot stores. `make settings` audits both. Build, test and runtime steps
 receive no dependency key. Move the pinned commit by hand when the other catalog moves.
 
-All generated catalog workflows, including **Newest Lab**, support private dependencies. A private Lab uses `LAB_DEPLOY_KEY`
-only for its checkout; leave that secret empty for a public Lab. After a Lab release ships this change, upgrade the Lab pin
-and managed files together with `catalog.py upgrade --lab-ref latest --write`. The Lab's own verification of proposed engine
-code stays keyless and requires public dependencies ([End-to-end runs](maintaining.md#end-to-end-runs)).
+Pinned-Lab workflows support private dependencies. A private Lab uses `LAB_DEPLOY_KEY` only for its checkout, and a private dependency uses `NEEDS_DEPLOY_KEY` only for its setup. **Newest Lab** runs unreviewed Lab code with no secrets: it fetches public dependencies and skips its checks when the catalog declares a private one. Engine-verification workflows also stay keyless and require public dependencies ([End-to-end runs](maintaining.md#end-to-end-runs)).
 
 ## Try it in the Lab
 
