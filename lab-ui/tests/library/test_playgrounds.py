@@ -981,6 +981,22 @@ class Playgrounds(Case):
         self.assertEqual(self.written, [])
         kept.assert_called_once_with(self.project, "welcome")   # the seed ended well: it works on the versions it runs on
 
+    def test_start_and_reseed_both_run_the_selected_seed_with_its_image_override(self):
+        self.state = on(self.project, playground="welcome")
+        self.containers = running(*CORE, "agent-lens", "hello-app")
+        self.project["published_seeder"] = "ghcr.io/example/lab/seeder"
+        self.patch(plugins, "install_steps", return_value=([], [], {}))
+        override = ["-f", "docker-compose.yml", "-f", ".lab/on.yml", "-f", "seed-image.yml"]
+        selected = self.patch(playgrounds.seed_image, "files", return_value=override)
+        for action, options in ((lambda: playgrounds.start(self.project, "welcome", []), []),
+                                (lambda: playgrounds.reseed(self.project, "welcome"), ["--force-recreate"])):
+            action()
+            _, steps, _ = self.started(self.jobs)
+            _, commands = ran(steps)
+            self.assertIn([*COMPOSE, *override, "up", "-d", *options, "--no-deps", "seed"], commands)
+        self.assertEqual([call.args[1:] for call in selected.call_args_list],
+                         [("ghcr.io/example/lab/seeder", "seed")] * 2)
+
     def test_reseed_is_there_once_the_seed_ended_well(self):
         # Its image built and its container made again, which Compose prints; the container is ready once the seed
         # ended well, which Docker says once its output ends. Following it is the second half, counted once over

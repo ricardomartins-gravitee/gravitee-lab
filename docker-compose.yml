@@ -8,6 +8,7 @@ x-gravitee:
   contract_min: 1   # The oldest level still read: grows when something is removed or changed
   seeder:
     image: ghcr.io/gravitee-io-labs/gravitee-lab/seeder   # The seeder image, built from ./seeder: the only image a seed service may have
+    published: ghcr.io/ricardomartins-gravitee/gravitee-lab/seeder   # Prefer the image built from these seeder sources
 
 x-license: &license
   gravitee_license_key: ${GRAVITEE_LICENSE:-}   # Enterprise license (base64)
