@@ -157,11 +157,11 @@ Conflicts are listed in a failed run's summary. Resolve those on a branch based 
 reported upstream tag there, and open a fork PR. The workflow uses one branch per release and respects previously
 opened or dismissed PRs. Fork version publication still goes through **Fork release**, described below.
 
-For the built-in GitHub token, allow Actions to create pull requests in the fork's Actions settings. GitHub may require
-approval to start PR checks created by that token. For upstream releases that change workflow files, configure a
-fork-scoped `FORK_SYNC_TOKEN` with Contents, Pull requests and Workflows write access. A token with those permissions
-can also start the PR's usual CI. The sync job uses it only to prepare the review branch and PR. Enable the scheduled
-workflow in Actions if GitHub disabled scheduled runs for the fork.
+The schedule can preview updates using the read-only GitHub token. To publish the branches and open PRs automatically,
+set a repository secret named `FORK_SYNC_TOKEN`. Use an expiring fine-grained token limited to this fork, with Contents,
+Pull requests and Workflows write access. Workflows access lets GitHub accept upstream changes to workflow files. Only
+the sync step uses this credential. An explicit **Preview** run stays read-only even when the secret exists. Enable the
+scheduled workflow in Actions if GitHub disabled scheduled runs for the fork.
 
 ### Releasing a fork
 

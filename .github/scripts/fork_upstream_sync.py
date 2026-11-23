@@ -105,6 +105,8 @@ def sync(repository, preview):
 
     if preview:
         report(f"{tag} merges cleanly into fork main at {base}. Preview commit: {candidate}.")
+        if os.environ.get("FORK_SYNC_CAN_PUBLISH") == "false":
+            report("Set FORK_SYNC_TOKEN in the fork to enable automatic update pull requests.")
         return
     if run("git", "ls-remote", "origin", "refs/heads/main").split()[0] != base:
         raise ValueError("Fork main moved while preparing the update. Run again on the new tip.")
