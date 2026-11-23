@@ -395,10 +395,12 @@ class LabImagesTest(ShellTest):
         stub.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$STUB_LOG"\n', encoding="utf-8")
         stub.chmod(0o755)
         done = self.execute(script(step_with(jobs(text)["images"], "buildx build")),
-                            {"GITHUB_REPOSITORY": "Owner/Lab", "GITHUB_SHA": "0123456789", "GITHUB_SERVER_URL": "https://git.example"})
+                            {"GITHUB_REPOSITORY": "Owner/Lab", "GITHUB_SHA": "0123456789", "GITHUB_SERVER_URL": "https://git.example",
+                             "SOURCE_TAG": "source-" + "a" * 64})
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(self.called(), ["buildx", "build", "--platform", "linux/amd64,linux/arm64", "--push",
                                          "-t", "ghcr.io/owner/lab/seeder:latest", "-t", "ghcr.io/owner/lab/seeder:sha-0123456",
+                                         "-t", "ghcr.io/owner/lab/seeder:source-" + "a" * 64,
                                          "--label", "org.opencontainers.image.licenses=AGPL-3.0-only",
                                          "--label", "org.opencontainers.image.source=https://git.example/Owner/Lab", "seeder"])
 

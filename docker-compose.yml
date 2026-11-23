@@ -8,6 +8,7 @@ x-gravitee:
   contract_min: 1   # The oldest level still read: grows when something is removed or changed
   seeder:
     image: ghcr.io/gravitee-io-labs/gravitee-lab/seeder   # The seeder image, built from ./seeder: the only image a seed service may have
+    published: ghcr.io/ricardomartins-gravitee/gravitee-lab/seeder   # Prefer the image built from these seeder sources
   snapshot:
     mongodb:
       relocate: [sh, /gravitee-lab-clone/mongodb.sh]   # Offline command on the clone's copied storage, never the source
