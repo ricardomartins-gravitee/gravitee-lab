@@ -13,7 +13,7 @@ from unittest.mock import Mock
 from lab_ui import paths
 from lab_ui.library import runtime_settings
 from lab_ui.catalogs import independent, standalone
-from lab_ui.docker import compose
+from lab_ui.docker import compose, seed_image
 from tests import Case
 
 
@@ -228,6 +228,30 @@ class Independent(Case):
         self.assertEqual(worker.exec.call_args.args[0][-1], "stop")
         self.assertNotIn("down", worker.exec.call_args.args[0])
         self.assertTrue(job.called)
+
+    def test_seed_actions_apply_the_published_image_only_to_the_selected_runtime(self):
+        pid = "local/a"
+        repository = "ghcr.io/example/lab/seeder"
+        value = self.prepare(pid)
+        jobs = self.patch(independent, "JOBS")
+        self.patch(independent, "_wait")
+        self.patch(independent, "_tested")
+        self.patch(independent, "describe", return_value={"running": True})
+        base = independent.command(pid)
+        override = ["-f", str(self.root / "published.yml")]
+        choose = self.patch(seed_image, "files", return_value=[*base[len(compose.COMPOSE):], *override])
+        self.assertEqual(value["seed"], "a-seed")
+        for action, options, args, remove in (
+                (independent.start, {}, ["up", "-d", "--build"], False),
+                (independent.reseed, {}, ["run", "--rm", "--no-deps", "a-seed"], False),
+                (independent.stop, {"remove": True}, ["run", "--rm", "--no-deps", "a-seed", "--remove"], True)):
+            with self.subTest(action=action.__name__):
+                worker = Mock()
+                action(pid, published_seeder=repository, **options)
+                _, steps, _ = self.started(jobs)
+                steps[0](worker)
+                choose.assert_called_with(worker, repository, "a-seed", args=base[len(compose.COMPOSE):], remove=remove)
+                self.assertEqual(worker.exec.call_args_list[0].args[0], [*base, *override, *args])
 
     def test_seed_endpoints_cannot_target_a_shared_or_remote_management_api(self):
         seed = self.inputs["local/a"][0]["services"]["a-seed"]

@@ -429,9 +429,10 @@ is safe. [`seeder/README.md`](../seeder/README.md) describes the engine.
   Containers page. A command that names no service (`make all`, `make start`, `make restart`, a plain
   `docker compose up`) runs it again, which is why running it twice must be safe.
 - **Published seeder**. When the Lab provides a published seeder, Start and Re-seed pull the image built from the same
-  seeder sources before running the seed. This works with existing playgrounds that build the Lab's seeder. If there is
-  no matching image, the UI uses the playground's configured build. Direct Docker Compose commands use the catalog's
-  Compose file as written.
+  seeder sources before running the seed in Shared Lab or a sandbox created from scratch. This works with existing
+  playgrounds that build the Lab's seeder. If there is no matching image, the UI uses the playground's configured
+  build. A sandbox cloned from a running playground captures the source's seed image. Direct Docker Compose commands
+  use the catalog's Compose file as written.
 - **Endpoints, never container names.** A seed talks to endpoints. Its files hold no address and no container name: they
   use `${VAR}`, and the seed service sets each one, to a container name in the lab. The seeder reads every endpoint
   from its settings, so the same files can seed another platform. The *Seed files* job of a catalog's CI (`seedlint.py`) fails on a variable no

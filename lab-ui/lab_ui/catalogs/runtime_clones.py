@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from .. import paths
-from ..docker import compose, storage
+from ..docker import compose, seed_image, storage
 from ..docker.jobs import JOBS, JobFailed
 from ..library import runtime_settings
 from . import independent, runtime_storage, runtime_urls, standalone
@@ -259,6 +259,17 @@ def _same_paused_resources(before, after):
     return observed == expected
 
 
+def _published_seeds(config, inspected, repository):
+    images = {}
+    for row in inspected:
+        container = row["Config"]
+        key = container["Labels"]["com.docker.compose.service"]
+        image = container.get("Image")
+        if seed_image.published_reference(repository, image) and seed_image.builds_engine(config["services"].get(key, {})):
+            images[key] = image
+    return images
+
+
 def _snapshot(job, project, source, target, config):
     source_config = copy.deepcopy(config)
     private = runtime_settings.mode(source) == "independent"
@@ -270,7 +281,9 @@ def _snapshot(job, project, source, target, config):
     # Freeze the running images, even when the source's mutable local tag changes later.
     inspected = storage.inspect("container", [row["id"] for row in rows["containers"]])
     files = independent.command(source)[len(compose.COMPOSE):] if private else ["-f", paths.CORE_FILE, "-f", paths.ON_FILE]
-    hashes = compose.config_hashes(files)
+    # The published seed starts with a temporary override. Its container records the reference that was used.
+    published = _published_seeds(config, inspected, project.get("published_seeder"))
+    hashes = compose.config_hashes(seed_image.override(files, published))
     if hashes is None or any(hashes.get(row["Config"]["Labels"]["com.docker.compose.service"])
                              != row["Config"]["Labels"].get("com.docker.compose.config-hash") for row in inspected):
         raise ValueError("The source configuration differs from its containers; apply its settings before cloning")
@@ -284,7 +297,7 @@ def _snapshot(job, project, source, target, config):
     actual = {}
     for row in inspected:
         key = row["Config"]["Labels"]["com.docker.compose.service"]
-        actual[key] = _running_image(row, config["services"][key]["image"])
+        actual[key] = _running_image(row, published.get(key) or config["services"][key]["image"])
     for key, service in config["services"].items():
         if key not in actual:
             actual[key] = storage.inspect("image", [service["image"]])[0]["Id"]
@@ -329,12 +342,15 @@ def _snapshot(job, project, source, target, config):
         value["binds"] = {key: str(new / Path(path).relative_to(root)) for key, path in value["binds"].items()}
     references = (original.get("snapshot") or {}).get("references") if private else None
     value["snapshot"] = {"scope": "runtime", "images": actual, "references": references or {
-        key: service.get("image", "") for key, service in source_config["services"].items()}}
+        key: published.get(key, service.get("image", "")) for key, service in source_config["services"].items()}}
     built = {service.get("image") for service in source_config["services"].values() if service.get("build")}
     value["snapshot"]["local"] = (original.get("snapshot") or {}).get("local", []) if private and original.get("snapshot") else sorted(
-        key for key, service in source_config["services"].items() if service.get("build") or service.get("image") in built
-        or service.get("pull_policy") == "never" or (value["services"].get(key, {}).get("display") or {}).get("built"))
+        key for key, service in source_config["services"].items() if key not in published and
+        (service.get("build") or service.get("image") in built or service.get("pull_policy") == "never"
+         or (value["services"].get(key, {}).get("display") or {}).get("built")))
     for key, service in value["services"].items():
+        if key in published:
+            service["display"]["built"] = False
         service["image"] = config["services"][key].get("image", "")
         service["ports"] = [str(port["published"]) for port in config["services"][key].get("ports", [])]
         service["targets"] = {str(port["published"]): str(port["target"]) for port in config["services"][key].get("ports", [])}

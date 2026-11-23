@@ -209,6 +209,8 @@ class RuntimeState(Case):
             runtimes.action(self.project, self.rid, "rebuild")
 
     def test_requirement_warnings_remain_visible_without_blocking_only_the_selected_sandbox(self):
+        registry = "ghcr.io/example/lab/seeder"
+        self.project["published_seeder"] = registry
         self.patch(independent, "read", return_value=None)
         self.patch(independent, "plan", return_value={"starts": []})
         self.patch(independent, "change_plan", return_value={"restarts": []})
@@ -225,7 +227,8 @@ class RuntimeState(Case):
                     self.assertEqual(result["checks"][1:], host.return_value + license.return_value)
                     action = self.patch(independent, operation, return_value="private-job")
                     self.assertEqual(runtimes.action(self.project, self.rid, operation), "private-job")
-                    action.assert_called_once_with(self.rid)
+                    options = {"published_seeder": registry} if operation == "start" else {}
+                    action.assert_called_once_with(self.rid, **options)
 
     def test_a_failed_sandbox_plan_still_blocks_actions_even_with_advisory_warnings(self):
         self.patch(independent, "read", return_value=None)
