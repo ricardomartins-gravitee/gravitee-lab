@@ -1,7 +1,10 @@
-"""The AI catalog: credentials, providers, models, MCP servers, documents, skills, agents and the tools of an API, seeded
-against a memory that behaves like Gamma where it matters: one manual source, a duplicate entity id refused, an object
-stored with less and more than it was sent, a secret never given back."""
+"""The AI catalog: credentials, providers, model sources, models, the providers of an LLM proxy, MCP servers, documents, skills,
+agents, the tools of an API and workflow tools, seeded against a memory that behaves like Gamma where it matters: one manual
+source and one source of each model kind, a duplicate entity id refused, a model in use that cannot be deleted, an object
+stored with less and more than it was sent, a secret never given back, the endpoints of an LLM proxy rewritten from its
+providers, a governance kept in the shape Gamma keeps, and a copy of the providers that only a delete through Gamma takes."""
 
+import copy
 import io
 import itertools
 import json
@@ -14,11 +17,15 @@ import requests
 import yaml
 
 from lab_seeder import aim_catalog
+from lab_seeder import apim
 from lab_seeder import common, versions
 from lab_seeder.testkit import PLAYGROUNDS, Response, Seed
 from tests import doubling
 
 SCOPE = "/gamma/organizations/DEFAULT/environments/DEFAULT/modules/aim"
+V2 = "/management/v2/organizations/DEFAULT/environments/DEFAULT"
+GOVERNANCE = {"aliasOnly": False, "prefixPolicy": {"policy": "PREFIXED_BOTH"}, "modelPattern": ""}   # Gamma's, when none is sent
+CREDENTIAL_KEYS = {"API_KEY": "apiKey", "BEARER": "bearer"}   # the key of the secret a provider of a source sends, by its auth
 MCP = "http://bakery-mcp:8000"
 MOVED = "http://127.0.0.1:8000"
 AGENT = "http://bakery-agent:8000"
@@ -41,6 +48,11 @@ def last(call):
     return call.path.rsplit("/", 1)[1]
 
 
+def v2(pattern=""):
+    """A route of API Management's v2 API, `*` standing for an id."""
+    return re.compile(re.escape(V2) + pattern.replace("*", "[^/]+"))
+
+
 def listing(rows):
     rows = list(rows)
     return 200, {"data": rows, "pagination": {"page": 1, "perPage": 200, "totalCount": len(rows)}}
@@ -53,9 +65,11 @@ class World:
 
     def __init__(self):
         self.ids = itertools.count(1)
-        self.legacy_surfaces = True
+        self.legacy_surfaces = False
         self.credentials, self.secrets, self.providers, self.sources, self.items = {}, {}, {}, {}, {}
         self.apis = {}   # id -> {"name": ..., "operations": [...], "errors": [...]}
+        self.workflows = {}
+        self.proxies, self.entities = {}, {}   # LLM proxies as Gamma holds them, and the APIs of API Management, by id
         self.mcp = {"name": "Acme Bakery MCP", "protocol": "2025-11-25", "pages": 1, "sse": False, "session": None,
                     "tools": [{"name": "get_balance", "description": "Balance", "title": "Get balance",
                                "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": True}},
@@ -152,12 +166,17 @@ class World:
     # --- Sources and items ----------------------------------------------------------------------
 
     def create_source(self, call):
-        manual = next((s for s in self.sources.values() if s["sourceKind"] == "manual"), None)
-        if call.json["sourceKind"] == "manual" and manual:
-            return 200, manual
+        kind = call.json["sourceKind"]
+        same = next((s for s in self.sources.values() if s["sourceKind"] == kind), None)
+        if same and (kind == "manual" or kind.startswith("llm.provider.")):   # one of each: a create gives it back, unchanged
+            return 200, same
         source = {"id": self.new(), **call.json}
         self.sources[source["id"]] = source
         return 201, source
+
+    def replace_source(self, call):
+        self.sources[last(call)]["definition"] = call.json["definition"]
+        return 200, self.sources[last(call)]
 
     def delete_source(self, call):
         self.sources.pop(last(call), None)
@@ -188,8 +207,101 @@ class World:
         item.update({k: call.json[k] for k in ("metadata", "extensions") if k in call.json})
         return 200, item
 
+    def in_use(self, model_id):
+        return any(m["catalogId"] == model_id for p in self.proxies.values() for provider in p["providers"]
+                   for m in provider.get("models", []) if provider["kind"] == "catalog")
+
     def delete_item(self, call):
+        if self.in_use(last(call)):
+            return 409, {"code": "model.in_use", "message": "This model is referenced by one or more LLM proxies"}
         return 204 if self.items.pop(last(call), None) else 404
+
+    # --- LLM proxies and their APIs -------------------------------------------------------------
+
+    def add_proxy(self, api_id, name):
+        """An LLM proxy as an import of its file leaves it: inline providers, and an endpoint of each in its API."""
+        auth = {"type": "API_KEY", "headerName": "x-api-key", "apiKey": "file-key"}
+        self.proxies[api_id] = {"id": api_id, "name": name, "providers": [
+            {"kind": "inline", "name": "anthropic", "routingName": "anthropic", "authentication": auth, "models": []}]}
+        self.entities[api_id] = {"id": api_id, "name": name, "type": "LLM_PROXY", "deploymentState": "DEPLOYED",
+                                 "flows": [{"name": "Protections"}], "endpointGroups": [{"name": "models", "endpoints": [
+                                     {"name": "anthropic", "secondary": False, "configuration": {"provider": "ANTHROPIC", "authentication": auth}},
+                                     {"name": "on-prem", "secondary": True, "configuration": {"provider": "OPEN_AI_COMPATIBLE"}}]}]}
+
+    def save_providers(self, call):
+        """PUT /llm-proxies/{id}/providers: the list replaces what Gamma holds, which it gives back with the routing name it
+        gives each (its source's id), and the endpoints of the API are written from it, named so, each keeping the
+        `secondary` of an endpoint of its name. The flows stay."""
+        proxy = self.proxies[call.path.split("/")[-2]]
+        api = self.entities[proxy["id"]]
+        held = {e["name"]: e for e in api["endpointGroups"][0]["endpoints"]}
+        stored, endpoints = [], []
+        for provider in call.json["providers"]:
+            source = self.sources[provider["catalogSourceId"]]
+            definition, credentials = source["definition"], provider["credentials"]
+            key = CREDENTIAL_KEYS.get(definition["authMethod"]["type"])
+            if key and key not in credentials:
+                return 400, {"message": f"$.authentication: required property '{key}' not found"}
+            if any(self.items[m["catalogId"]]["sourceId"] != source["id"] for m in provider["models"]):
+                return 400, {"message": "Catalog model does not belong to source", "technicalCode": "catalog_reference_mismatch"}
+            models = [{k: v for k, v in m.items() if v is not None} for m in provider["models"]]
+            governance = self.governance_as_stored(provider.get("modelGovernance"))
+            if governance is None:
+                return 500, {"message": "An unexpected error occurred"}
+            stored.append({"kind": "catalog", "catalogSourceId": source["id"], "credentials": credentials, "routingName": source["id"],
+                           "models": models, "modelGovernance": governance})
+            endpoints.append({"name": source["id"], "secondary": held.get(source["id"], {}).get("secondary", False), "configuration": {
+                "provider": definition["format"], "target": definition["baseUrl"],
+                "authentication": {**{k: v for k, v in definition["authMethod"].items() if k in ("type", "headerName")}, **credentials},
+                "models": [{"name": self.items[m["catalogId"]]["definition"]["queryName"], **{k: v for k, v in m.items() if k != "catalogId"}}
+                           for m in models]}})
+        proxy["providers"] = stored
+        self.write_endpoints(api, endpoints)
+        return 200, copy.deepcopy(proxy)
+
+    @staticmethod
+    def governance_as_stored(governance):
+        """What Gamma keeps of a governance: with no pattern (none or blank) the registered models and "" for the pattern,
+        with one the models that match it and never aliasOnly. A governance without a prefix policy fails (None)."""
+        if governance is None:
+            return GOVERNANCE
+        if not governance.get("prefixPolicy"):
+            return None   # a NullPointerException
+        pattern = governance.get("modelPattern")
+        if pattern is None or not pattern.strip():
+            return {"aliasOnly": bool(governance.get("aliasOnly")), "prefixPolicy": governance["prefixPolicy"], "modelPattern": ""}
+        return {"aliasOnly": False, "prefixPolicy": governance["prefixPolicy"], "modelPattern": pattern}
+
+    def stop(self, call):
+        return (200, {}) if call.path.split("/")[-2] in self.entities else (404, {"message": "Api not found"})
+
+    def delete_entity(self, call):
+        """DELETE of the API through API Management: Gamma's copy of its providers stays."""
+        return 204 if self.entities.pop(last(call), None) else 404
+
+    def delete_deployable(self, call):
+        """DELETE /deployable/{id}?kind=LLM, the console's delete: the API goes, and Gamma's copy with it."""
+        if call.params.get("kind") != "LLM" or last(call) not in self.entities:
+            return 404, {"message": "Deployable not found"}
+        self.entities.pop(last(call))
+        self.proxies.pop(last(call), None)
+        return 204
+
+    @staticmethod
+    def write_endpoints(api, endpoints):
+        if api["endpointGroups"][0]["endpoints"] != endpoints:
+            api["endpointGroups"][0]["endpoints"] = endpoints
+            api["deploymentState"] = "NEED_REDEPLOY"
+
+    def update_entity(self, call):
+        api = self.entities[last(call)]
+        if call.json != api:
+            api.update({k: v for k, v in call.json.items() if k != "deploymentState"}, deploymentState="NEED_REDEPLOY")
+        return 200, copy.deepcopy(api)
+
+    def deploy(self, call):
+        self.entities[call.path.split("/")[-2]]["deploymentState"] = "DEPLOYED"
+        return 202, {}
 
     # --- MCP servers ----------------------------------------------------------------------------
 
@@ -264,6 +376,33 @@ class World:
             created.append(self.add_item("mcp-tool", entity_id, source["id"], tool["definition"]))
         return 201, {"data": created}
 
+    def create_workflow(self, call):
+        workflow = {"id": self.new(), "status": "DRAFT", "entityId": f"workflow-tool.{slug(call.json['name'])}", **call.json}
+        self.workflows[workflow["id"]] = workflow
+        return 201, workflow
+
+    @staticmethod
+    def validate_workflow(call):
+        if "not arazzo" in call.json["draftArazzo"]:
+            return 200, {"valid": False, "issues": [{"path": "workflows[0]", "message": "steps is required"}]}
+        return 200, {"valid": True, "issues": []}
+
+    def publish_workflow(self, call):
+        workflow = self.workflows[call.path.split("/")[-2]]
+        workflow["status"] = "ACTIVE"
+        tool = self.add_item("mcp-tool", f"mcp-tool.{slug(workflow['name'])}", "workflow-source", {},
+                             metadata={"workflowToolId": workflow["id"]})
+        workflow["publishedMcpToolId"] = tool["id"]
+        return 200, {"tool": workflow, "deployedToGateway": False, "mustBeResavedIn": []}
+
+    def delete_workflow(self, call):
+        workflow = self.workflows.pop(last(call), None)
+        if workflow is None:
+            return 404
+        for item in [i for i in self.items.values() if i.get("metadata", {}).get("workflowToolId") == workflow["id"]]:
+            del self.items[item["id"]]
+        return 204
+
     # --- The routes -----------------------------------------------------------------------------
 
     def routes(self):
@@ -280,7 +419,19 @@ class World:
             ("GET", SCOPE + "/catalog/sources"):
                 lambda call: listing(s for s in self.sources.values() if s["sourceKind"] == call.params["sourceKind"]),
             ("POST", SCOPE + "/catalog/sources"): self.create_source,
+            ("PUT", path("/catalog/sources/*")): self.replace_source,
             ("DELETE", path("/catalog/sources/*")): self.delete_source,
+            ("GET", SCOPE + "/llm-proxies"): lambda call: (200, {"content": [{"id": p["id"], "name": p["name"]} for p in self.proxies.values()],
+                                                               "pageNumber": 1, "totalElements": len(self.proxies)}),
+            ("GET", path("/llm-proxies/*")): lambda call: (200, copy.deepcopy(self.proxies[last(call)])) if last(call) in self.proxies
+                                                     else (404, {"message": "LLM proxy not found"}),
+            ("PUT", path("/llm-proxies/*/providers")): self.save_providers,
+            ("GET", v2("/apis/*")): lambda call: (200, copy.deepcopy(self.entities[last(call)])),
+            ("PUT", v2("/apis/*")): self.update_entity,
+            ("POST", v2("/apis/*/_stop")): self.stop,
+            ("DELETE", v2("/apis/*")): self.delete_entity,
+            ("DELETE", path("/deployable/*")): self.delete_deployable,
+            ("POST", v2("/apis/*/deployments")): self.deploy,
             ("POST", path("/catalog/sources/*/imports/mcp-server")): self.import_server,
             ("GET", SCOPE + "/catalog/items"):
                 lambda call: listing(i for i in self.items.values() if i["sourceId"] == call.params["sourceId"]),
@@ -290,6 +441,12 @@ class World:
             ("POST", SCOPE + "/catalog/api-tools/_generateCapabilities"): self.generate,
             ("POST", SCOPE + "/catalog/mcp-tools/_importFromApis"): self.import_tools,
             ("DELETE", path("/mcp-proxies/*")): lambda call: (204, None),
+            ("GET", SCOPE + "/workflow-tools"): lambda call: listing(self.workflows.values()),
+            ("POST", SCOPE + "/workflow-tools"): self.create_workflow,
+            ("POST", SCOPE + "/workflow-tools/validate"): self.validate_workflow,
+            ("POST", path("/workflow-tools/*/publish")): self.publish_workflow,
+            ("GET", path("/workflow-tools/*")): lambda call: (200, self.workflows[last(call)]),
+            ("DELETE", path("/workflow-tools/*")): self.delete_workflow,
             ("POST", MCP): self.rpc,
             ("GET", CARD): lambda call: (200, self.card),
         }
@@ -411,6 +568,7 @@ class Credentials(Catalog):
 
     def test_the_demo_build_keeps_its_required_usage_surfaces(self):
         versions.note(versions.APIM, ["4.13.0-amp-demo-SNAPSHOT"])
+        self.world.legacy_surfaces = True
         self.run_seed()
         [call] = self.platform.sent("POST", SCOPE + "/auth-profiles")
         self.assertEqual(call.json["allowedUsageSurfaces"], aim_catalog.USAGE_SURFACES)
@@ -1052,6 +1210,514 @@ class ApiTools(Catalog):
         self.assertEqual(self.sent("GET", "/catalog/api-tools/sources"), [])
 
 
+WORKFLOW = """\
+name: order_cake
+description: Checks the shop, then places the order
+sources:
+  - {source: bakery, api: Acme Bakery Open API, headerName: X-Gravitee-Api-Key, apiKey: "${BAKERY_TOOL_KEY}"}
+arazzo: |
+  arazzo: 1.1.0
+  info: {title: Order a cake, version: 1.0.0}
+  sourceDescriptions:
+    - {name: bakery, url: "apim://api/<api:Acme Bakery Open API>", type: openapi}
+  workflows:
+    - workflowId: order
+      steps:
+        - {stepId: shop, operationId: getBranch}
+canvas: |
+  {"version": 1, "meta": {"sources": [{"apiId": "<api:Acme Bakery Open API>", "sourceRef": "bakery"}]}}
+"""
+
+
+class WorkflowTools(Catalog):
+    """A workflow tool is made as the console makes one from an Arazzo document, then published to the catalog."""
+
+    def setUp(self):
+        super().setUp()
+        self.world.apis["api-1"] = {"name": "Acme Bakery Open API", "operations": ["getBranch"]}
+        self.env(BAKERY_TOOL_KEY="bakery-key")
+        self.seed_files({"aim/workflow-tools/order.yaml": WORKFLOW})
+
+    def made(self):
+        [workflow] = self.world.workflows.values()
+        return workflow
+
+    def test_it_is_made_with_a_credential_per_source_its_document_and_canvas_then_published(self):
+        changes = self.run_seed()
+        self.assertEqual(changes, [("POST", "/workflow-tools/validate"), ("POST", "/auth-profiles"),
+                                   ("POST", "/workflow-tools"), ("POST", f"/workflow-tools/{self.made()['id']}/publish")])
+        [credential] = self.world.credentials.values()
+        self.assertEqual((credential["name"], credential["strategy"]), ("order_cake · bakery", "API_KEY"))
+        self.assertEqual(self.world.secrets[credential["id"]], {"type": "api-key", "headerName": "X-Gravitee-Api-Key", "value": "bakery-key"})
+        workflow = self.made()
+        self.assertIn("apim://api/api-1", workflow["draftArazzo"])
+        self.assertEqual(json.loads(workflow["graphState"])["meta"]["sources"][0]["apiId"], "api-1")
+        self.assertEqual(workflow["sourceAuth"], [{"sourceRef": "bakery", "apiEntityId": "api-1", "authProfileId": credential["id"]}])
+        self.assertEqual(workflow["status"], "ACTIVE")
+        self.assertEqual([i["entityId"] for i in self.world.of_kind("mcp-tool")], ["mcp-tool.order_cake"])
+        self.assertEqual(sorted(x["kind"] for x in self.records()), ["workflow-credential", "workflow-tool"])
+
+    def test_a_second_run_writes_nothing(self):
+        self.run_seed()
+        self.assertEqual(self.run_seed(), [])
+
+    def test_one_made_but_not_published_is_published(self):
+        self.run_seed()
+        self.made()["status"] = "DRAFT"
+        self.assertEqual(self.run_seed(), [("POST", f"/workflow-tools/{self.made()['id']}/publish")])
+
+    def test_a_document_that_changed_releases_the_studios_and_is_made_again_with_new_credentials(self):
+        self.run_seed()
+        common.record("aim-proxies", "studio", "MCP studios", "Acme Bakery Toolkit", "studio-1", digest="x")
+        old, [old_credential] = self.made()["id"], list(self.world.credentials)
+        self.seed_files({"aim/workflow-tools/order.yaml": WORKFLOW.replace("Checks the shop", "Checks the branch")})
+        self.assertEqual(self.run_seed()[:4], [("POST", "/workflow-tools/validate"), ("DELETE", "/mcp-proxies/studio-1"),
+                                               ("DELETE", f"/workflow-tools/{old}"), ("DELETE", f"/auth-profiles/{old_credential}")])
+        self.assertEqual(self.made()["description"], "Checks the branch, then places the order")
+        self.assertEqual(len(self.world.credentials), 1)
+        self.assertEqual(len(self.records()), 2)
+
+    def test_a_document_the_platform_refuses_stops_the_seed_with_its_issues_before_anything_is_made(self):
+        self.seed_files({"aim/workflow-tools/order.yaml": WORKFLOW.replace("arazzo: 1.1.0", "arazzo: 1.1.0\n  x-note: not arazzo")})
+        with self.assertRaisesRegex(common.SeedError, "Workflow 'order_cake': the platform refuses its document: workflows\\[0\\]: steps is required"):
+            self.run_seed()
+        self.assertEqual((self.world.workflows, self.world.credentials), ({}, {}))
+
+    def test_a_name_a_studio_would_refuse_stops_the_seed_before_anything_is_made(self):
+        self.seed_files({"aim/workflow-tools/order.yaml": WORKFLOW.replace("name: order_cake", "name: Order a cake")})
+        with self.assertRaisesRegex(common.SeedError, "Workflow 'Order a cake': its name is the name of its MCP tool"):
+            self.run_seed()
+        self.assertEqual(self.platform.changes(), [])
+
+    def test_a_source_the_document_does_not_describe_stops_the_seed(self):
+        self.seed_files({"aim/workflow-tools/order.yaml": WORKFLOW.replace("{source: bakery,", "{source: shop,")})
+        with self.assertRaisesRegex(common.SeedError, "the document has no source 'shop' at apim://api/<api:Acme Bakery Open API>"):
+            self.run_seed()
+
+    def test_an_api_no_source_names_stops_the_seed(self):
+        self.seed_files({"aim/workflow-tools/order.yaml": WORKFLOW.replace('"<api:Acme Bakery Open API>", "sourceRef"', '"<api:Other API>", "sourceRef"')})
+        with self.assertRaisesRegex(common.SeedError, "the canvas names the API 'Other API', which no source of the file is"):
+            self.run_seed()
+
+    def test_a_document_that_is_no_yaml_or_no_mapping_stops_the_seed_on_one_line(self):
+        for arazzo, why in (("arazzo: |\n  arazzo: 1.1.0\n  info: [unclosed\n", "The document of the workflow 'order_cake': it is not valid YAML"),
+                            ("arazzo: |\n  - just a list\n", "Workflow 'order_cake': its arazzo is no Arazzo document"),
+                            ("arazzo: [not, a, text]\n", "Workflow 'order_cake': arazzo and canvas are texts"),
+                            ("arazzo: |\n  sourceDescriptions: 5\n", "sourceDescriptions is a list of sources"),
+                            ("arazzo: |\n  sourceDescriptions: [{name: [x], url: y}]\n", "sourceDescriptions is a list of sources")):
+            with self.subTest(why=why):
+                self.seed_files({"aim/workflow-tools/order.yaml": WORKFLOW.split("arazzo: |")[0] + arazzo})
+                with self.assertRaisesRegex(common.SeedError, why):
+                    self.run_seed()
+                self.assertEqual(self.platform.changes(), [])
+
+    def test_a_credential_left_by_a_workflow_the_platform_refused_goes_and_is_made_again(self):
+        self.platform.add({("POST", SCOPE + "/workflow-tools"): lambda call: (400, {"message": "sourceAuth refused"})})
+        with self.assertRaises(common.HttpError):
+            self.run_seed()
+        [left] = self.world.credentials
+        self.platform.add({("POST", SCOPE + "/workflow-tools"): self.world.create_workflow})
+        self.assertIn(("DELETE", f"/auth-profiles/{left}"), self.run_seed())
+        [credential] = self.world.credentials
+        self.assertEqual(self.made()["sourceAuth"][0]["authProfileId"], credential)
+        self.assertEqual(sorted((x["kind"], x["id"]) for x in self.records()),
+                         [("workflow-credential", credential), ("workflow-tool", self.made()["id"])])
+
+    def test_a_credential_whose_answer_was_lost_is_the_seeds_at_the_next_run_and_is_made_again(self):
+        def made(call):
+            self.world.create_credential(call)
+            raise requests.ReadTimeout("slow")
+        self.platform.add({("POST", SCOPE + "/auth-profiles"): made})
+        with self.assertRaises(common.SeedError):
+            self.run_seed()
+        [lost] = self.world.credentials
+        self.platform.add({("POST", SCOPE + "/auth-profiles"): self.world.create_credential})
+        self.run_seed()
+        self.assertNotIn(lost, self.world.credentials)
+        self.assertEqual(len(self.world.credentials), 1)
+        self.assertIn("! order_cake · bakery: made by an earlier seed that lost the platform's answer", self.output())
+
+    def test_a_credential_of_that_name_that_the_seed_did_not_create_stops_the_seed_and_is_left_alone(self):
+        self.world.credentials["theirs"] = {"id": "theirs", "name": "order_cake · bakery", "strategy": "API_KEY"}
+        with self.assertRaisesRegex(common.SeedError, "The workflow credential 'order_cake · bakery' exists and was not created by this playground"):
+            self.run_seed()
+        self.assertIn("theirs", self.world.credentials)
+        self.assertEqual(self.world.workflows, {})
+
+    def test_a_workflow_of_that_name_that_the_seed_did_not_create_stops_the_seed_and_is_left_alone(self):
+        self.world.workflows["theirs"] = {"id": "theirs", "name": "order_cake", "status": "ACTIVE"}
+        with self.assertRaisesRegex(common.SeedError, "The workflow tool 'order_cake' exists and was not created by this playground"):
+            self.run_seed()
+        self.assertIn("theirs", self.world.workflows)
+
+    def test_a_removal_deletes_the_workflow_then_its_credential(self):
+        self.run_seed()
+        self.platform.calls.clear()
+        aim_catalog.remove(common.created())
+        self.assertEqual([re.sub(r"/[^/]+$", "", p.replace(SCOPE, "")) for m, p in self.platform.changes() if m == "DELETE"],
+                         ["/workflow-tools", "/auth-profiles"])
+        self.assertEqual((self.world.workflows, self.world.credentials, self.world.of_kind("mcp-tool")), ({}, {}, []))
+
+
+ANTHROPIC_SOURCE = """\
+name: Anthropic
+kind: anthropic
+baseUrl: http://relay:8000/anthropic
+format: ANTHROPIC
+auth: {type: API_KEY, headerName: x-api-key}
+"""
+ONPREM_SOURCE = """\
+name: On-prem
+kind: ollama
+baseUrl: http://relay:8000/ollama/v1
+format: OPEN_AI_COMPATIBLE
+auth: {type: BEARER}
+"""
+HAIKU = """\
+entityId: claude-haiku
+source: Anthropic
+definition: {name: Claude Haiku, queryName: claude-haiku-5-5, pricing: {inputPer1M: 1, outputPer1M: 5, currency: USD}}
+"""
+GEMMA = """\
+entityId: gemma
+source: On-prem
+definition: {name: Gemma, queryName: "gemma4:e4b", pricing: {inputPer1M: 0, outputPer1M: 0, currency: USD}}
+"""
+PROXY = """\
+api: LLM Gateway
+providers:
+  - source: Anthropic
+    credentials: {apiKey: "${ANTHROPIC_API_KEY}"}
+    models:
+      - {model: claude-haiku, aliases: [fast]}
+  - source: On-prem
+    credentials: {bearer: ollama}
+    secondary: true
+    models:
+      - {model: gemma, aliases: [fast, smart], parametersOverride: '{"reasoning_effort": "none"}'}
+"""
+MODEL_FILES = {"aim/model-sources/anthropic.yaml": ANTHROPIC_SOURCE, "aim/model-sources/on-prem.yaml": ONPREM_SOURCE,
+               "aim/models/claude-haiku.yaml": HAIKU, "aim/models/gemma.yaml": GEMMA}
+
+
+class ModelSources(Catalog):
+    """A model source, one of each kind, and the models that go into it."""
+
+    def setUp(self):
+        super().setUp()
+        self.seed_files(MODEL_FILES)
+
+    def source(self, kind):
+        return next(s for s in self.world.sources.values() if s["sourceKind"] == f"llm.provider.{kind}")
+
+    def test_each_is_created_of_its_kind_with_its_definition_and_recorded(self):
+        self.assertEqual(self.run_seed()[:2], [("POST", "/catalog/sources"), ("POST", "/catalog/sources")])
+        self.assertEqual(self.source("anthropic")["definition"], {
+            "type": "llm-provider", "name": "Anthropic", "baseUrl": "http://relay:8000/anthropic", "format": "ANTHROPIC",
+            "authMethod": {"type": "API_KEY", "headerName": "x-api-key"}})
+        self.assertEqual([(x["name"], x["id"]) for x in self.records("model-source")],
+                         [("Anthropic", self.source("anthropic")["id"]), ("On-prem", self.source("ollama")["id"])])
+
+    def test_a_model_that_names_a_model_source_goes_into_it_and_its_record_says_which(self):
+        self.run_seed()
+        source = self.source("anthropic")
+        self.assertEqual(self.world.named("model", "claude-haiku")["sourceId"], source["id"])
+        [record] = [x for x in self.records("model") if x["name"] == "Claude Haiku"]
+        self.assertEqual(record["modelSource"], source["id"])
+        self.assertFalse([s for s in self.world.sources.values() if s["sourceKind"] == "manual"])
+
+    def test_a_second_run_writes_nothing(self):
+        self.run_seed()
+        self.assertEqual(self.run_seed(), [])
+
+    def test_a_source_that_changed_is_replaced_whole_and_keeps_its_id(self):
+        self.run_seed()
+        source = self.source("anthropic")
+        self.seed_files({"aim/model-sources/anthropic.yaml": ANTHROPIC_SOURCE.replace("relay:8000", "relay:9000")})
+        self.assertEqual(self.run_seed(), [("PUT", f"/catalog/sources/{source['id']}")])
+        self.assertEqual(self.source("anthropic")["definition"]["baseUrl"], "http://relay:9000/anthropic")
+        self.assertEqual(self.run_seed(), [])
+
+    def test_a_source_renamed_is_one_record_under_its_new_name(self):
+        self.run_seed()
+        self.seed_files({"aim/model-sources/anthropic.yaml": ANTHROPIC_SOURCE.replace("name: Anthropic", "name: Claude")
+                         .replace("source: Anthropic", "source: Claude"), "aim/models/claude-haiku.yaml": HAIKU.replace("source: Anthropic", "source: Claude")})
+        self.run_seed()
+        self.assertEqual([x["name"] for x in self.records("model-source")], ["On-prem", "Claude"])
+
+    def test_a_source_whose_kind_changed_is_deleted_with_its_models_which_are_made_again_in_the_new_one(self):
+        self.run_seed()
+        old = self.source("ollama")
+        self.seed_files({"aim/model-sources/on-prem.yaml": ONPREM_SOURCE.replace("kind: ollama", "kind: vllm")})
+        self.run_seed()
+        new = self.source("vllm")
+        self.assertNotIn(old["id"], self.world.sources)
+        self.assertEqual(self.world.named("model", "gemma")["sourceId"], new["id"])
+        self.assertEqual([(x["name"], x["id"]) for x in self.records("model-source")], [("Anthropic", self.source("anthropic")["id"]),
+                                                                                       ("On-prem", new["id"])])
+        self.assertEqual(self.run_seed(), [])
+
+    def test_a_source_renamed_and_of_another_kind_at_once_is_its_file_so_the_old_one_goes_with_its_models(self):
+        self.run_seed()
+        old = self.source("ollama")
+        self.seed_files({"aim/model-sources/on-prem.yaml": ONPREM_SOURCE.replace("kind: ollama", "kind: vllm")
+                         .replace("name: On-prem", "name: Local"), "aim/models/gemma.yaml": GEMMA.replace("source: On-prem", "source: Local")})
+        self.run_seed()
+        new = self.source("vllm")
+        self.assertNotIn(old["id"], self.world.sources)
+        self.assertEqual(self.world.named("model", "gemma")["sourceId"], new["id"])
+        self.assertEqual([(x["name"], x["id"], x["file"]) for x in self.records("model-source")],
+                         [("Anthropic", self.source("anthropic")["id"], "anthropic.yaml"), ("Local", new["id"], "on-prem.yaml")])
+        self.assertEqual(self.run_seed(), [])
+
+    def test_a_source_recorded_before_the_record_named_its_file_gets_its_file_and_nothing_is_written(self):
+        self.run_seed()
+        common.save_created([{k: v for k, v in x.items() if k != "file"} for x in common.created()])
+        self.assertEqual(self.run_seed(), [])
+        self.assertEqual([x["file"] for x in self.records("model-source")], ["anthropic.yaml", "on-prem.yaml"])
+
+    def test_a_source_of_that_kind_the_seed_did_not_create_stops_the_seed_and_is_left_alone(self):
+        theirs = {"id": "theirs", "sourceKind": "llm.provider.anthropic", "definition": {"type": "llm-provider", "name": "Mine"}}
+        self.world.sources["theirs"] = copy.deepcopy(theirs)
+        with self.assertRaisesRegex(common.SeedError, r"The model source llm.provider.anthropic \(Anthropic\) exists and was not created"):
+            self.run_seed()
+        self.assertEqual(self.world.sources["theirs"], theirs)
+        self.assertEqual([m for m, _ in self.platform.changes() if m in ("PUT", "DELETE")], [])
+
+    def test_two_sources_of_one_kind_stop_the_seed_before_any_call(self):
+        self.seed_files({"aim/model-sources/other.yaml": ONPREM_SOURCE.replace("On-prem", "Other")})
+        self.platform.calls.clear()
+        with self.assertRaisesRegex(common.SeedError, "'On-prem' and 'Other' are both of kind ollama"):
+            aim_catalog.seed_model_sources(None)
+        self.assertEqual(self.platform.calls, [])
+
+    def test_what_gamma_does_not_take_stops_the_seed_before_any_call(self):
+        for text, why in ((ANTHROPIC_SOURCE.replace("format: ANTHROPIC", "format: CLAUDE"), "format 'CLAUDE' is not one of"),
+                          (ANTHROPIC_SOURCE.replace("type: API_KEY", "type: OAUTH"), "its type one of NONE"),
+                          (ANTHROPIC_SOURCE.replace(", headerName: x-api-key", ""), "names the header of the key"),
+                          (ANTHROPIC_SOURCE.replace("headerName: x-api-key", 'headerName: " "'), "names the header of the key"),
+                          (ANTHROPIC_SOURCE.replace("x-api-key}", "x-api-key, prefix: Key}"), "auth cannot say prefix"),
+                          (ONPREM_SOURCE.replace("{type: BEARER}", "{type: BEARER, headerName: Authorization}"),
+                           "only an API_KEY auth names a header, a BEARER one does not"),
+                          (ONPREM_SOURCE.replace("{type: BEARER}", "{type: NONE, headerName: X-Key}"), "a NONE one does not"),
+                          (ANTHROPIC_SOURCE.replace("kind: anthropic", "kind: Anthropic AI"), "its kind is made of"),
+                          (ANTHROPIC_SOURCE.replace("baseUrl: http://relay:8000/anthropic\n", ""), "baseUrl missing")):
+            with self.subTest(why=why):
+                self.seed_files({"aim/model-sources/anthropic.yaml": text})
+                with self.assertRaisesRegex(common.SeedError, why):
+                    aim_catalog.model_sources()
+                self.seed_files({"aim/model-sources/anthropic.yaml": ANTHROPIC_SOURCE})
+
+    def test_a_model_whose_source_changed_is_moved_by_a_put_and_keeps_its_id(self):
+        self.run_seed()
+        model = self.world.named("model", "claude-haiku")
+        self.seed_files({"aim/models/claude-haiku.yaml": HAIKU.replace("source: Anthropic", "source: Acme")})
+        self.assertEqual(self.run_seed(), [("POST", "/catalog/sources"), ("PUT", f"/catalog/models/{model['id']}")])
+        manual = next(s for s in self.world.sources.values() if s["sourceKind"] == "manual")
+        self.assertEqual((model["sourceId"], self.world.named("model", "claude-haiku")["id"]), (manual["id"], model["id"]))
+        [record] = [x for x in self.records("model") if x["name"] == "Claude Haiku"]
+        self.assertNotIn("modelSource", record)
+
+    def test_a_skipped_source_skips_its_models_rather_than_seeding_them_elsewhere(self):
+        self.seed_files({"aim/model-sources/on-prem.yaml": "needs: ONPREM_URL\n" + ONPREM_SOURCE})
+        self.run_seed()
+        self.assertIsNone(self.world.named("model", "gemma"))
+        self.assertIn("Skipped On-prem: ONPREM_URL is not set", self.output())
+        self.assertIn("Skipped Gemma: its model source On-prem is skipped", self.output())
+
+    def test_a_removal_deletes_the_sources_with_their_models_and_never_a_model_an_llm_proxy_uses(self):
+        self.run_seed()
+        self.world.proxies["p"] = {"id": "p", "name": "x", "providers": [
+            {"kind": "catalog", "models": [{"catalogId": self.world.named("model", "claude-haiku")["id"]}]}]}
+        self.platform.calls.clear()
+        aim_catalog.remove(common.created())
+        self.assertEqual([re.sub(r"/[^/]+$", "", p.replace(SCOPE, "")) for m, p in self.platform.changes() if m == "DELETE"],
+                         ["/catalog/sources", "/catalog/sources"])
+        self.assertEqual((self.records(), self.world.of_kind("model")), ([], []))
+        self.assertIn("✓ Deleted model 'Claude Haiku' with its model source", self.output())
+
+
+class LlmProxies(Catalog):
+    """The providers of an LLM proxy of seed/apim, from the model sources: what Gamma holds of them and the endpoints of
+    the API it writes from them."""
+
+    def setUp(self):
+        super().setUp()
+        self.seed_files({**MODEL_FILES, "aim/llm-proxies/llm-gateway.yaml": PROXY})
+        self.env(ANTHROPIC_API_KEY="sk-ant-test")
+        self.world.add_proxy("api-llm", "LLM Gateway")
+        common.record("apim", "api", "APIs", "LLM Gateway", "api-llm")   # what apim.py records of the API it imported
+
+    def api(self):
+        return self.world.entities["api-llm"]
+
+    def v2_changes(self):
+        return [(m, p.replace(V2, "")) for m, p in self.platform.changes() if p.startswith(V2)]
+
+    def test_the_providers_are_saved_from_the_catalog_then_the_api_is_deployed(self):
+        self.assertIn(("PUT", "/llm-proxies/api-llm/providers"), self.run_seed())
+        anthropic, onprem = (next(s["id"] for s in self.world.sources.values() if s["sourceKind"] == f"llm.provider.{k}")
+                             for k in ("anthropic", "ollama"))
+        [call] = self.sent("PUT", "/llm-proxies/*/providers")
+        self.assertEqual(call.json, {"providers": [
+            {"kind": "catalog", "catalogSourceId": anthropic, "credentials": {"apiKey": "sk-ant-test"},
+             "models": [{"catalogId": self.world.named("model", "claude-haiku")["id"], "aliases": ["fast"]}]},
+            {"kind": "catalog", "catalogSourceId": onprem, "credentials": {"bearer": "ollama"},
+             "models": [{"catalogId": self.world.named("model", "gemma")["id"], "aliases": ["fast", "smart"],
+                         "parametersOverride": '{"reasoning_effort": "none"}'}]}]})
+        self.assertEqual([(e["name"], e["secondary"]) for e in self.api()["endpointGroups"][0]["endpoints"]],
+                         [(anthropic, False), (onprem, True)])
+        self.assertEqual(self.v2_changes(), [("PUT", "/apis/api-llm"), ("POST", "/apis/api-llm/deployments")])
+        self.assertEqual(self.api()["deploymentState"], "DEPLOYED")
+        self.assertNotIn("sk-ant-test", self.output())
+
+    def test_a_second_run_writes_nothing(self):
+        self.run_seed()
+        self.platform.calls.clear()
+        aim_catalog.seed()
+        self.assertEqual(self.platform.changes(), [])
+        self.assertIn("✓ Providers of the LLM proxy LLM Gateway up to date", self.output())
+
+    def test_a_change_of_the_file_or_of_a_key_is_a_save_and_a_deployment(self):
+        for files, env in (({"aim/llm-proxies/llm-gateway.yaml": PROXY.replace("aliases: [fast]}", "aliases: [quick]}")}, {}),
+                           ({}, {"ANTHROPIC_API_KEY": "sk-ant-rotated"})):
+            with self.subTest(files=list(files), env=list(env)):
+                self.run_seed()
+                self.seed_files(files)
+                self.env(**env)
+                self.assertEqual([c for c in self.run_seed() if c[0] != "GET"], [("PUT", "/llm-proxies/api-llm/providers")])
+                self.assertEqual(self.v2_changes()[-1], ("POST", "/apis/api-llm/deployments"))
+
+    def test_an_api_imported_again_from_its_file_gets_its_providers_again_though_gamma_still_holds_them(self):
+        self.run_seed()
+        self.world.add_proxy("api-llm", "LLM Gateway")
+        self.world.proxies["api-llm"]["providers"] = copy.deepcopy(self.sent("PUT", "/llm-proxies/*/providers")[0].json["providers"])
+        self.assertEqual(self.run_seed(), [("PUT", "/llm-proxies/api-llm/providers")])
+
+    def test_a_model_source_that_changed_is_saved_again_into_the_endpoints(self):
+        self.run_seed()
+        self.seed_files({"aim/model-sources/anthropic.yaml": ANTHROPIC_SOURCE.replace("relay:8000", "relay:9000")})
+        self.assertEqual([path for _, path in self.run_seed()][-1], "/llm-proxies/api-llm/providers")
+        self.assertEqual(self.api()["endpointGroups"][0]["endpoints"][0]["configuration"]["target"], "http://relay:9000/anthropic")
+
+    def test_an_api_that_waits_for_a_deployment_is_deployed_and_nothing_else_is_written(self):
+        self.run_seed()
+        self.api()["deploymentState"] = "NEED_REDEPLOY"
+        self.assertEqual(self.run_seed(), [])
+        self.assertEqual(self.v2_changes(), [("POST", "/apis/api-llm/deployments")])
+
+    def test_a_governance_the_file_gives_is_sent_and_kept(self):
+        governance = {"aliasOnly": False, "prefixPolicy": {"policy": "NO_PREFIX"}, "modelPattern": ""}
+        self.seed_files({"aim/llm-proxies/llm-gateway.yaml": PROXY.replace(
+            "    secondary: true\n", f"    secondary: true\n    governance: {json.dumps(governance)}\n")})
+        self.run_seed()
+        self.assertEqual(self.world.proxies["api-llm"]["providers"][1]["modelGovernance"], governance)
+        self.assertEqual(self.run_seed(), [])
+
+    def test_a_governance_is_sent_in_the_shape_gamma_keeps_so_a_second_run_writes_nothing(self):
+        no_prefix = {"policy": "NO_PREFIX"}
+        cases = (({"prefixPolicy": no_prefix}, {"aliasOnly": False, "prefixPolicy": no_prefix, "modelPattern": ""}),
+                 ({"aliasOnly": True, "prefixPolicy": no_prefix, "modelPattern": "  "},
+                  {"aliasOnly": True, "prefixPolicy": no_prefix, "modelPattern": ""}),
+                 ({"prefixPolicy": no_prefix, "modelPattern": "gemma*"},
+                  {"aliasOnly": False, "prefixPolicy": no_prefix, "modelPattern": "gemma*"}))
+        for given, kept in cases:
+            with self.subTest(given=given):
+                self.seed_files({"aim/llm-proxies/llm-gateway.yaml": PROXY.replace(
+                    "    secondary: true\n", f"    secondary: true\n    governance: {json.dumps(given)}\n")})
+                self.run_seed()
+                self.assertEqual(self.sent("PUT", "/llm-proxies/*/providers")[-1].json["providers"][1]["modelGovernance"], kept)
+                self.assertEqual(self.world.proxies["api-llm"]["providers"][1]["modelGovernance"], kept)
+                self.assertEqual(self.run_seed(), [])
+
+    def test_the_proxy_is_recorded_under_the_id_of_its_api_and_counts_as_nothing(self):
+        self.run_seed()
+        self.assertEqual([(x["name"], x["id"], x["count"]) for x in self.records("llm-proxy")], [("LLM Gateway", "api-llm", 0)])
+        self.run_seed()
+        self.assertEqual(len(self.records("llm-proxy")), 1)
+        self.seed_files({"aim/llm-proxies/llm-gateway.yaml": PROXY.replace("api: LLM Gateway", "api: Company LLM proxy")})
+        self.world.proxies["api-llm"]["name"] = "Company LLM proxy"
+        common.record("apim", "api", "APIs", "Company LLM proxy", "api-llm")
+        self.run_seed()
+        self.assertEqual([(x["name"], x["id"]) for x in self.records("llm-proxy")], [("Company LLM proxy", "api-llm")])
+
+    def removed(self):
+        """A removal of the catalog, then of API Management, as seed.py runs them: the subscriptions of the API, then the API."""
+        common.record("apim", "subscription", "subscriptions", "LLM Gateway / Help center", "sub-1", api="api-llm")
+        self.platform.add({("GET", V2 + "/apis"): listing([]),
+                           ("POST", v2("/apis/*/subscriptions/*/_close")):
+                               lambda call: 204 if call.path.split("/")[-4] in self.world.entities else (404, {"message": "Api not found"})})
+        self.platform.calls.clear()
+        aim_catalog.remove(common.created())
+        apim.remove(common.created())
+
+    def test_a_removal_deletes_the_proxy_through_gamma_with_its_copy_of_the_providers_and_api_management_finds_it_gone(self):
+        self.run_seed()
+        self.removed()
+        self.assertEqual([(m, p.replace(SCOPE, "").replace(V2, "")) for m, p in self.platform.changes()][:2],
+                         [("POST", "/apis/api-llm/_stop"), ("DELETE", "/deployable/api-llm")])
+        self.assertEqual(self.sent("DELETE", "/deployable/*")[0].params, {"kind": "LLM"})
+        self.assertEqual((self.world.proxies, self.world.entities, common.created()), ({}, {}, []))
+        self.assertIn("✓ Deleted api 'LLM Gateway'", self.output())
+
+    def test_a_proxy_whose_api_was_deleted_by_hand_counts_as_deleted_and_the_removal_goes_on(self):
+        self.run_seed()
+        self.world.entities.pop("api-llm")   # through API Management, which leaves Gamma's copy: no route deletes it then
+        aim_catalog.remove(common.created())
+        self.assertEqual(self.records(), [])
+        self.assertIn("✓ Deleted llm-proxy 'LLM Gateway'", self.output())
+
+    def test_the_proxy_is_read_by_the_id_apim_recorded_and_not_from_a_list_that_still_counts_an_api_just_deleted(self):
+        self.platform.add({("GET", SCOPE + "/llm-proxies"): (400, {"message": "Pagination is not valid"})})
+        self.assertIn(("PUT", "/llm-proxies/api-llm/providers"), self.run_seed())
+        self.world.proxies.pop("api-llm")
+        with self.assertRaisesRegex(common.SeedError, "No LLM proxy named 'LLM Gateway' was imported by this seed"):
+            self.run_seed()
+
+    def test_a_proxy_the_seed_did_not_import_stops_the_seed_and_a_copy_of_its_name_is_left_alone(self):
+        self.world.add_proxy("copy", "LLM Gateway")
+        self.run_seed()
+        self.assertEqual([c.path.replace(SCOPE, "") for c in self.sent("PUT", "/llm-proxies/*/providers")], ["/llm-proxies/api-llm/providers"])
+        common.save_created([x for x in common.created() if x["product"] != "apim"])
+        with self.assertRaisesRegex(common.SeedError, "No LLM proxy named 'LLM Gateway' was imported by this seed"):
+            self.run_seed()
+
+    def test_what_a_file_asks_that_gamma_does_not_do_stops_the_seed_before_the_proxy_is_written(self):
+        cases = ((PROXY.replace("  - source: On-prem\n", "  - source: On-prem\n    name: on-prem\n"), "cannot say name"),
+                 (PROXY.replace("{model: gemma,", "{model: claude-haiku,"), "takes the model claude-haiku from On-prem, and"),
+                 (PROXY.replace("source: On-prem", "source: Anthropic"), "The provider Anthropic of 'LLM Gateway' is listed twice"),
+                 (PROXY.replace("{model: gemma,", "{model: mistral,"), "uses the model mistral, which aim/models does not make"),
+                 (PROXY.replace("source: On-prem", "source: Mistral"), "names no model source"),
+                 (PROXY.replace("{bearer: ollama}", "{bearer: 12}"), "credentials maps each key to a text"),
+                 (PROXY.replace("    secondary: true\n", "    secondary: true\n    governance: {aliasOnly: false}\n"),
+                  "governance needs its prefixPolicy"),
+                 (PROXY.replace("    secondary: true\n", "    secondary: true\n    governance: {prefixPolicy: {policy: NONE}}\n"),
+                  "governance needs its prefixPolicy, {policy: one of PREFIXED_BOTH"),
+                 (PROXY.replace("    secondary: true\n", "    secondary: true\n    governance: "
+                                "{aliasOnly: true, prefixPolicy: {policy: NO_PREFIX}, modelPattern: 'gemma*'}\n"),
+                  "aliasOnly and a modelPattern do not go together"),
+                 (PROXY.replace("    secondary: true\n", "    secondary: true\n    governance: {prefixPolicy: {policy: NO_PREFIX}, glob: x}\n"),
+                  "governance cannot say glob"),
+                 ("api: LLM Gateway\nproviders: []\n", "lists none"))
+        for text, why in cases:
+            with self.subTest(why=why):
+                self.seed_files({"aim/llm-proxies/llm-gateway.yaml": text})
+                self.platform.calls.clear()
+                with self.assertRaisesRegex(common.SeedError, why):
+                    aim_catalog.check()   # what seed.py runs before any module changes anything
+                self.assertEqual(self.platform.calls, [])
+                with self.assertRaisesRegex(common.SeedError, why):
+                    self.run_seed()
+                self.assertEqual(self.sent("PUT", "/llm-proxies/*/providers"), [])
+
+    def test_a_provider_of_a_skipped_source_is_left_out(self):
+        self.seed_files({"aim/model-sources/on-prem.yaml": "needs: ONPREM_URL\n" + ONPREM_SOURCE})
+        self.run_seed()
+        [call] = self.sent("PUT", "/llm-proxies/*/providers")
+        self.assertEqual(len(call.json["providers"]), 1)
+        self.assertIn("Skipped the provider On-prem of LLM Gateway: its model source is skipped", self.output())
+
+
 class Removal(Catalog):
     """What a removal deletes: what the records say, dependents first, and nothing else."""
 
@@ -1070,10 +1736,10 @@ class Removal(Catalog):
         records = common.created()
         aim_catalog.remove(records)
         kinds = [x["kind"] for x in common.owned(records, aim_catalog.SECTION, aim_catalog.ORDER)]
-        self.assertEqual(kinds, ["api-tools", "agent", "skill", "knowledge", "knowledge", "mcp-server", "model", "model",
-                                 "provider", "provider", "credential", "credential"])
+        self.assertEqual(kinds, ["workflow-tool", "api-tools", "agent", "skill", "knowledge", "knowledge", "mcp-server", "model",
+                                 "model", "provider", "provider", "credential", "credential"])
         self.assertEqual(self.deleted(), [
-            "/catalog/sources", "/catalog/agents", "/catalog/skills", "/catalog/knowledge", "/catalog/knowledge",
+            "/workflow-tools", "/catalog/sources", "/catalog/agents", "/catalog/skills", "/catalog/knowledge", "/catalog/knowledge",
             "/catalog/sources", "/catalog/models", "/catalog/models", "/providers", "/providers", "/auth-profiles", "/auth-profiles",
             "/catalog/sources"])
         self.assertTrue(self.world.empty())
@@ -1085,7 +1751,7 @@ class Removal(Catalog):
         self.assertEqual([p.replace(SCOPE, "") for _, p in self.platform.changes()],
                          [f"/catalog/sources/{server['sourceId']}"])
         self.assertEqual(self.world.children(server), [])
-        self.assertEqual(len(self.world.of_kind("mcp-tool")), 1)   # the tool of the API is another source's
+        self.assertEqual(len(self.world.of_kind("mcp-tool")), 2)   # the tool of the API and the workflow's are other sources
 
     def test_what_is_gone_already_counts_as_deleted(self):
         self.seeded()
@@ -1143,7 +1809,10 @@ class Playground(Catalog):
 
     def test_the_seed_makes_every_kind_of_the_catalog(self):
         self.run_seed()
-        self.assertEqual({x["kind"] for x in self.records()}, set(aim_catalog.ORDER))
+        # the sample's workflow calls a keyless API, so it has no credential (WorkflowTools makes one), its models are in
+        # the manual source (ModelSources makes a model source), and it gives no LLM proxy its providers (LlmProxies does)
+        self.assertEqual({x["kind"] for x in self.records()},
+                         set(aim_catalog.ORDER) - {"workflow-credential", "model-source", "llm-proxy"})
 
     def test_without_a_key_there_is_no_gemini_provider_to_test_and_the_rest_is_seeded(self):
         self.env(GEMINI_API_KEY="")
@@ -1180,6 +1849,7 @@ class Guard(Catalog):
     def test_a_playground_that_seeds_none_of_its_folders_needs_no_setting_and_makes_no_call(self):
         self.seed_files({"aim/workspaces/team.yaml": "name: Team\n", "authz/policies.yaml": "x: 1\n"})
         with mock.patch.dict(os.environ, {}, clear=True):
+            aim_catalog.check()
             aim_catalog.seed()
         self.assertEqual(self.platform.calls, [])
         self.assertEqual(self.output(), "")
