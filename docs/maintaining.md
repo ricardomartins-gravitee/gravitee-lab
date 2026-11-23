@@ -35,7 +35,12 @@ Then do these one-time steps on GitHub:
 7. Name your maintainers in `.github/CODEOWNERS`, which the sweep leaves as it is, and decide on a code of conduct.
 8. Check that the `REPOSITORY` constant in `lab-ui/web/js/dialogs/welcome.js` has the new address. The sweep rewrites it.
 
-A fork builds the seeder's image only when you run its *Lab images* workflow by hand, from `main`.
+Set the repository Actions variable `PUBLISH_LAB_IMAGES` to `true` to publish a fork's seeder automatically when
+its seeder changes on `main`. Run *Lab images* by hand from `main` for the first build or to retry a failed one.
+The workflow pushes Linux AMD64 and ARM64 images to `ghcr.io/OWNER/REPO/seeder` using the workflow's own token.
+Make that package public before using it without a registry login. Use the `sha-<short commit>` tag to choose a build.
+Set `x-gravitee.seeder.published` in the fork's core Compose file to the package repository, without a tag.
+The Lab UI picks the `source-<hash>` tag, which lets releases with identical seeder sources share a build.
 
 ## End-to-end runs
 

@@ -14,7 +14,7 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from ..docker import compose, images
+from ..docker import compose, images, seed_image
 from . import layers, model, plugins, project as projects, tested
 from ..gravitee import license, places, platforms
 from .. import paths
@@ -726,9 +726,13 @@ def _started(project, plan, delete, undo=None):
         # every other folder a bind of its units names (layers.make_binds)
         (_folder(pid) / CREATED_FILE).parent.mkdir(exist_ok=True)
         # Started by name like any plan's (layers.steps), but what shares a plugin folder starts one at a time
-        start = [lambda job: plugins.up(job, project, named)] if named else []   # Compose reads no name as every service
+        def start(job):
+            seed = playground["seed"]
+            files = seed_image.files(job, project.get("published_seeder"), seed if seed in named else None)
+            plugins.up(job, project, named, files)
+
         try:
-            job.run_steps([*layers.steps(project, plan, []), *start])
+            job.run_steps([*layers.steps(project, plan, []), *([start] if named else [])])   # no names means every service
         finally:   # canceled while `up` started its seed
             _stop_seed(job, playground)
 
@@ -761,7 +765,8 @@ def reseed(project, pid, place=None, accept=None):
     def begin(job):
         job.step("Start the seed")
         try:
-            job.exec([*COMPOSE, "up", "-d", "--force-recreate", "--no-deps", playground["seed"]])
+            files = seed_image.files(job, project.get("published_seeder"), playground["seed"])
+            job.exec([*COMPOSE, *files, "up", "-d", "--force-recreate", "--no-deps", playground["seed"]])
         finally:   # canceled while `up` started it
             _stop_seed(job, playground)
     # Once the seed ended well, the playground works on the versions it runs on: what a start that failed on its seed, then fixed, leaves
@@ -815,7 +820,9 @@ def _delete_created(project, playground, elsewhere):
             try:   # its own file loaded, so that it deletes whatever else is on: a playground that is off has no seed service in
                 # the files that are. What else is on is not loaded, so Compose is told not to look for orphans, which it
                 # would warn of. Its line is the command typed in the folder, where the on file names it while it is on
-                job.exec([*COMPOSE, *compose.all_files([playground["file"]]), *seed], env={"COMPOSE_IGNORE_ORPHANS": "true"},
+                files = seed_image.files(job, project.get("published_seeder"), playground["seed"],
+                                         compose.all_files([playground["file"]]), remove=True)
+                job.exec([*COMPOSE, *files, *seed], env={"COMPOSE_IGNORE_ORPHANS": "true"},
                          shown=[*COMPOSE, *seed])
             except JobFailed as failed:   # "[seed] ✗ <why>": its reason, as a start says it
                 _stop_seed(job, playground)
@@ -894,7 +901,8 @@ def _seed_apart(job, project, playground, place, remove=False):
     named = [word for name in sorted(values) for word in ("-e", name)]
     named += [word for name in places.CLEARED if name not in values for word in ("-e", f"{name}=")]
     try:
-        job.exec([*COMPOSE, "run", "--rm", "--no-deps", *(["--pull=missing"] if remove else []), *named, playground["seed"],
+        files = seed_image.files(job, project.get("published_seeder"), playground["seed"], env=values, remove=remove)
+        job.exec([*COMPOSE, *files, "run", "--rm", "--no-deps", *(["--pull=missing"] if remove else []), *named, playground["seed"],
                   *(["--remove"] if remove else [])],
                  env=values)
     except JobFailed as failed:   # "[seed] ✗ <why>": its reason, as a start says it

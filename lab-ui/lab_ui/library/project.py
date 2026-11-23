@@ -1919,6 +1919,7 @@ def build(inputs):
     return {"name": meta.get("name") or core.get("name") or "", "categories": meta.get("categories") or [],
             # Compose reads every other file on top of the core's: without it, nothing starts or stops
             "core_loaded": CORE_FILE in raw, "license_var": _license_var(core),
+            "published_seeder": (meta.get("seeder") or {}).get("published") if isinstance(meta.get("seeder"), dict) else None,
             "license_services": sorted(_license_readers(core)), "license_usable": inputs["license_usable"],
             "groups": groups, "products": products,
             "addons": addons, "setups": setups, "playgrounds": playgrounds,

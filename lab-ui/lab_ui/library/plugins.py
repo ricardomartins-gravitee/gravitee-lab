@@ -413,7 +413,7 @@ def _unload_steps(running):
     return [[*COMPOSE, "stop", *running]]
 
 
-def up(job, project, names):
+def up(job, project, names, files=()):
     """Starts these services, `up -d --no-deps`. The services that load a product's plugins unpack them in the same
     folder as they start (.work), and two at once break each other's: a plugin of one does not load. Compose starts them
     one after the other when one depends on the other, as the core's do. Any other one starts first and alone, with what
@@ -422,6 +422,7 @@ def up(job, project, names):
     a container not made) fails the job; a wait that ends otherwise, unhealthy or after WAIT seconds, keeps nothing
     else from starting: its container says it."""
     names = list(names)
+    command = [*COMPOSE, *files, "up", "-d", "--no-deps"]
     depends = {name: layers.depends(project, names, [name]) for name in names}
     order = {name: (len(depends[name]), name) for name in names}
     alone = []
@@ -433,15 +434,15 @@ def up(job, project, names):
     for name in sorted(alone, key=order.get):
         group = sorted(({name} | depends[name]) - started)
         started.update(group)
-        job.exec([*COMPOSE, "up", "-d", "--no-deps", *group])
+        job.exec([*command, *group])
         try:   # the containers are made: this `up` only waits
-            job.exec([*COMPOSE, "up", "-d", "--no-deps", "--wait", f"--wait-timeout={WAIT}", *group], quiet=True)
+            job.exec([*command, "--wait", f"--wait-timeout={WAIT}", *group], quiet=True)
         except JobFailed:
             if job.canceled:
                 raise
     rest = [name for name in names if name not in started]
     if rest:
-        job.exec([*COMPOSE, "up", "-d", "--no-deps", *rest])
+        job.exec([*command, *rest])
 
 
 def _pick(project, product, item):
