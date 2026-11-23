@@ -22,6 +22,32 @@ the playground.
 
 A playground declares what it needs from the layers below. It never redefines them.
 
+## What makes a good playground
+
+A playground is shown to someone who does not know the product yet. They believe what they see work, in the product's
+own screens, and nothing else.
+
+- **Show, do not tell.** Each lesson shows the request (address, key, headers, body), where the rule that acts on it is
+  defined in the console, and a result the person can check. Send a request from an API client that shows it, in a tab of
+  the playground, rather than from a script that hides it. Keep the terminal for what has no screen.
+- **Build it the way a person would.** Set it up once by hand in the console, read what the product stores, then write
+  the seed so that it stores the same. Nothing exists only through a call a person would not make. Every page a lesson
+  opens is filled and every reference on it has a name: a policy names its principal and its target, a list of entities
+  is not empty, and each view the product offers for an object opens.
+- **Use the product's own features first.** Its provider types, its catalog, the groups of the identity provider, an
+  add-on of the Lab. A workaround is the last resort, and the README says why under its known limits.
+- **Look at each screen as the customer.** Every name, number and list makes sense to them: nothing listed twice, no
+  placeholder price, no name they would not recognize. What is simulated says so. Check a word of their trade before you
+  use it.
+- **Let real users sign in.** A person signs in through Access Management to a client of the playground, and the same
+  rule applies to them, so the lesson shows who is allowed what. Each actor is what it says it is: a demo agent in a
+  script is not presented as one running in production.
+- **Check every claim on its source.** A fact about a customer, a number, a release or a feature, in the guide or on a
+  slide, comes from what you read: the product, its documentation, a public document. A meeting note is a lead.
+- **Verify each item, not a sample.** "Every policy opens in the visual editor" means each one was opened. Before you
+  call it done, stop it with *Delete what it created*, start it again, go through the whole guide, then leave it as a
+  first reader finds it: protections off, demo data and caches reset.
+
 ## The folder
 
 ```text
@@ -452,12 +478,12 @@ except API exports and shared policy groups, which are `.json` (in `apis/` and `
 | `seed/environments/<id>/settings.yaml`, `apis/*.json`, `applications/*.yaml`, `subscriptions/*.yaml` | As `seed/apim/`, for that environment | APIM Management API |
 | `seed/environments/<id>/users.yaml`, `groups/*.yaml` | The users that groups name, and groups with their members | APIM Management API, Automation API |
 | `seed/environments/<id>/portal/`, `seed/apim/portal/` | The developer portal of the environment: theme, structure, pages, API listings, and the text of the page of each listed API. Images in `assets/` | Automation API, and the Console's navigation items for the listings and the pages of their APIs |
-| `seed/am/domain.yaml`, `applications/*.yaml`, `protected-resources/*.yaml` | Domain with its scopes, users, applications, MCP servers | AM Management API |
+| `seed/am/domain.yaml`, `applications/*.yaml`, `protected-resources/*.yaml` | Domain with its scopes, users, applications, MCP servers. An application or agent that signs in with its own key and no secret gives `oauth.tokenEndpointAuthMethod: private_key_jwt` and `oauth.jwksUri` (where AM fetches its public keys) or `oauth.jwks` (the keys), as Gamma's Agent Identity sets an agent in JWKS mode; an agent's `scopes: []` takes away any scope it holds | AM Management API |
 | `seed/am/gamma-link.yaml` | The link from Gamma to the AM domain | Gamma and AM APIs |
 | `seed/openfga/*.yaml` | OpenFGA store file (`fga store import`) | OpenFGA API |
-| `seed/aim/<resource>/*.yaml` | Agent Management: credentials, providers, models, MCP servers, knowledge, skills, agents (an agent file may also carry its `identity` and its `access` to the plan of a studio, or of an API that seed/apim makes, with an `apiKey` on a plan of API keys, on the amp-demo build only), API tools (only the `operations` listed, tailored when asked), workspaces (a component may name its own endpoint, `target`, with a price on each model: the amp-demo build takes no other), MCP proxies, studios (with their `subscriptions`, and, for one built in steps with `access`, `authorization.agentIdentityResolution` for a policy that reads the agent), dashboards, governance (approval rules and settings, compliance); a file with `needs: NAME` is skipped while the setting NAME is empty | Gamma and Automation APIs |
+| `seed/aim/<resource>/*.yaml` | Agent Management: credentials, providers, model sources (`model-sources`, one of each kind), models (in a model source or the manual one), the providers of an LLM proxy of `seed/apim` taken from model sources (`llm-proxies`), MCP servers, knowledge, skills, agents (an agent file may also carry its `identity` and its `access` to the plan of a studio, or of an API that seed/apim makes, with an `apiKey` on a plan of API keys, on the amp-demo build only), API tools (only the `operations` listed, tailored when asked), workflow tools (an Arazzo document over APIs of `seed/apim`, its canvas and the key it sends each one whose backend asks for one, published as one MCP tool), workspaces (a component may name its own endpoint, `target`, with a price on each model: the amp-demo build takes no other), MCP proxies and studios (with their `subscriptions` and `analytics`, and, for one built in steps with `access`, `authorization.agentIdentityResolution` for a policy that reads the agent), dashboards, governance (approval rules and settings, compliance); a file with `needs: NAME` is skipped while the setting NAME is empty | Gamma and Automation APIs |
 | `seed/edge/configuration.yaml` | Shared environment configuration: gateway and reactor URLs, proxy DNS domains and ordered routes, Shadow AI domains and reporting interval | Edge Management Gamma API |
-| `seed/authz/entities.yaml`, `policies/*.yaml`, `schema.yaml`, `schemas/*.yaml` | Authorization Management: what the policies are about, GAPL policies, the schema of the editor | Gamma API |
+| `seed/authz/entities.yaml`, `policies/*.yaml`, `schema.yaml`, `schemas/*.yaml` | Authorization Management: what the policies are about (with `sync: access-management`, the users, groups and agents of Access Management, and with `catalog`, what the AI catalog holds), GAPL policies of each type, the schema of the editor | Gamma API |
 | `seed/k8s/*.yaml` | Kubernetes manifests: a namespace, a Secret, a `ManagementContext` for the Gravitee Kubernetes Operator. One manifest to a file, in name order | Server-side apply on the cluster of `KUBECONFIG` |
 | `seed/controls.yaml` | The protections the lessons switch on | The APIs of the files above, aligned to the mode on every run |
 | `seed/refills.yaml` | What the lessons spend, given back on every run | The counters the gateway keeps in the core's Redis |
@@ -526,7 +552,55 @@ access to their definitions. Removal also recovers an incomplete group create by
 If the create cannot yet be confirmed, it keeps the recovery note for a later run. Omitting the folder makes no group
 request when seeding.
 
-A studio file (`seed/aim/studios/`) says its tools, its plan or its `access`, and its authorization check. Three keys
+A model source file (`seed/aim/model-sources/`) is what the console's AI Models > Add models makes: where a provider serves
+its models. A models file whose `source` is the name of a model source goes into it, and any other into the manual source.
+An LLM proxy file (`seed/aim/llm-proxies/`) gives an LLM proxy of `seed/apim/apis` its providers, each taken from a model
+source, as the console's "From catalog" provider does:
+
+```yaml
+# seed/aim/model-sources/anthropic.yaml
+name: Anthropic
+kind: anthropic                  # the source is llm.provider.<kind>: Gamma keeps one source of each kind
+baseUrl: ${ANTHROPIC_URL}
+format: ANTHROPIC                # OPEN_AI, OPEN_AI_COMPATIBLE, GEMINI, ANTHROPIC, BEDROCK or VERTEX_AI
+auth: {type: API_KEY, headerName: x-api-key}   # NONE, API_KEY, BEARER or SERVICE_ACCOUNT; headerName for API_KEY only
+
+# seed/aim/models/claude-haiku.yaml
+entityId: claude-haiku
+source: Anthropic
+definition: {name: Claude Haiku, queryName: claude-haiku-5-5, pricing: {inputPer1M: 1, outputPer1M: 5, currency: USD}}
+
+# seed/aim/llm-proxies/company-llm-proxy.yaml
+api: Company LLM proxy           # the name of the API in seed/apim/apis
+providers:
+  - source: Anthropic
+    credentials: {apiKey: "${ANTHROPIC_API_KEY}"}   # apiKey for API_KEY, bearer for BEARER, none for NONE
+    models:
+      - {model: claude-haiku, aliases: [fast]}    # the entityId of a models file of that source
+    governance: {aliasOnly: false, prefixPolicy: {policy: NO_PREFIX}, modelPattern: ""}
+    secondary: false             # true for the endpoint the failover of the API goes to
+```
+
+Gamma writes one endpoint for each provider, named after the id of its source: a policy that names an endpoint cannot name
+it in the API's file. A candidate of `ai-routing` leaves its `provider` empty instead, which resolves the model across every
+endpoint. Every endpoint Gamma writes is primary until the seed sets the `secondary` the file gives.
+
+A `governance` needs its `prefixPolicy` (`PREFIXED_BOTH`, `PREFIXED_ALIAS`, `PREFIXED_MODEL` or `NO_PREFIX`). Without a
+`modelPattern`, only the models the provider lists are served, by their aliases alone with `aliasOnly: true`. With one, any
+model whose name matches is served too, and `aliasOnly` cannot be set. Without `governance`, Gamma's default applies:
+callers prefix model names and aliases with the source.
+
+The seed checks these files before it changes anything. It saves the providers when what Gamma holds or the endpoints of
+the API differ from the file, then deploys the API, so a second run writes nothing. A removal deletes the LLM proxy through
+Gamma, which deletes the API and Gamma's own copy of its providers, credentials included; it then deletes each model source
+with its models.
+
+Gamma gives a workflow tool and a studio an id of its own each time the seed makes one, and takes none from the file: a guide
+links to the list that shows them, never to one of them.
+
+A studio file (`seed/aim/studios/`) says its tools, its plan or its `access`, and its authorization check. A tool is
+`{server, tool}` for an MCP server's, `{api, tool}` for one made from an API and `{workflow}` for a workflow tool, each with
+an optional `alias`. These keys
 serve the lessons:
 
 - `subscriptions` subscribes applications of `seed/apim/applications` to a published plan of the studio, with the
@@ -539,13 +613,70 @@ serve the lessons:
     - {application: Acme Shop copilot, apiKey: '${ACME_SHOP_COPILOT_KEY}'}
   ```
 
+  An MCP proxy file takes the same key, and its subscriptions are made once the proxy is deployed. An MCP proxy lets in any
+  valid token by default: `requireSubscription: true` in its plan's `securityConfiguration` lets in only the token of a
+  subscribed application, found by its client id, so the logs name the application and a control can pause it.
+- `analytics` says what the gateway records of the calls: `logging` (`mode`, `phase`, `content`), `tracing` and
+  `otelLogs`, as the API keeps them. It is written over what the platform made, on every run. An MCP proxy file takes the
+  same key.
+
 - In a file with `access`, `authorization.agentIdentityResolution: true` makes the authorization check put the agent the
   token names in the context (`context.agent`), which authz-pep 3.0.2 leaves out by default. A file with `plan` switches
   its check with `fga` and takes no `authorization`.
+- In a file with `access`, `responseTemplates` says what a client reads when a step of the studio refuses, by the key the
+  step gives (`GAPL_AUTHZ` for the authorization check), then by media type. LibreChat, for one, shows a JSON-RPC result
+  with `isError` as the tool's answer, and takes a 403 for a sign-in that failed. Each media type it names replaces the platform's, the
+  others stay. An MCP proxy file takes the same key.
 - The tools come back to the file on every run. Tools a person adds or removes with *Edit tools* in Gamma are written
   back in place, with the keys of the APIs, and the flow of the authorization check is written again after them.
-- A studio file of either shape gives its protocol versions with the key its build takes:
-  [What differs from one build to another](#what-differs-from-one-build-to-another).
+- A studio file gives its protocol versions with `supportedProtocolVersions`, a list, or `protocolVersion`, one value. A
+  release gets the list from either key; a build that refuses the list takes `protocolVersion` only, and a file that gives
+  the list stops the seed there before any change ([Versions of Gravitee](#versions-of-gravitee)).
+
+The files of `seed/authz/` give Authorization Management what a person would set up in it:
+
+- **Principals come from Access Management.** `sync: access-management` in `entities.yaml` sends what *Import*, *Sync
+  from Gravitee Access Management* sends on the Entities page: the users, groups and agents of the domain become
+  principals, each user under its groups. Give the rights to groups of the domain (`groups` in `seed/am/domain.yaml`)
+  rather than to a claim of the token. The seed waits a minute for the sync, after one already running ends, and stops
+  with the reason of one that ends in an error or a timeout. It records the principals of what seed/am made, which it
+  knows by their ids: a group keeps its id, an agent takes the name UUID of its client id, a user that of its sub. A
+  delete removes them, and never a principal of another domain.
+- **Resources come from the AI catalog where it holds them.** `catalog` in `entities.yaml` names MCP servers, models and
+  agents of the catalog (`mcp-servers`, `models`, `agents`), each by its slug or a name the catalog shows, and the seed saves
+  what *Import from AI Catalog* on the Entities page saves: one read-only entity each, with the catalog's slug as its id, its
+  source `gravitee-catalog` and the catalog's id in `_catalogId`, and the tools of an MCP server under it (`crm.get_customer`,
+  the id a studio sends as the resource of a call). An entry someone imported already in the console is left as it is. What
+  the catalog lacks under the name the gateway sends goes in `entities`, which may name an imported entity as its parent: an
+  alias of an LLM proxy (`fast`) as a child of the models it routes to, so that a policy on a model covers it.
+
+  ```yaml
+  catalog:
+    mcp-servers: [CRM, Wiki]
+    models: [claude-haiku-5-5, claude-opus-5-5]
+  source: local
+  entities:
+    - {type: Model, id: fast, parents: [[Model, claude-haiku-5-5]], attributes: {_displayName: fast}}
+    - {type: Action, id: invoke, attributes: {_displayName: invoke}}
+  ```
+
+- **Resources of a file of its own** are an `MCPServer` entity and one `MCPTool` per tool (`server` and `tools`), whose id is
+  the tool's name, which the studio sends as the resource of each call.
+- **The schema declares the actions**, one per tool, with the context each reads (`context.agent`, an argument of the call).
+  The Actions page cannot hold them: it refuses an id a tool already has.
+- **A policy is written as *Create policy* writes it**: one target, the MCP server or the model the wizard picks first and
+  the `// Target:` line names, whose *Visual* view offers no other resource. On MCPs, one statement per tool of that server,
+  `principal in Group::"<group:NAME>"`, `action == Action::"<tool>"`, `resource == MCPTool::"<tool>"`, and the agent in the
+  condition. `<group:NAME>` stands for
+  the id Access Management gave the group, and `<agent:CLIENT_ID>` for the agent's. Only the first statement carries an
+  `@id`, the name of the policy: [How APIM and Gamma behave](#how-apim-and-gamma-behave-what-the-seeder-relies-on) says why.
+  Open each policy in its *Visual* and *Classic* views once it is seeded. `kind` is `RESOURCE`, the default, or `GLOBAL`.
+  `type` is the page of the console that lists the policy: `MCP`, the default, `MODEL` (AI Models), `API`, `AGENT` or
+  `CUSTOM`. A policy keeps the kind and the type it was made with, so a file that changes either makes the policy again.
+- **A policy on models** is written as the AI Models page writes it: one policy per model,
+  `action == Action::"invoke"` (a Local action, `{type: Action, id: invoke}` in `entities`, which the page's action list
+  reads) and `resource in Model::"<slug>"`, which covers the aliases that are its children. The engine takes one entity in
+  the resource scope, never a list.
 
 Set optional API fields directly on either studio shape. Use existing category ids, supplied by the seed service's
 variables when they differ between platforms. Leave a field out to preserve it; use an empty list to clear it. Changing
@@ -755,7 +886,7 @@ not set`, and a variable a seed file uses with no value stops it with the file's
 | `AIM_AUTOMATION_URL` | Where `/automation` is served: Gamma's objects, and the groups and portals of an environment of its own | `APIM_MANAGEMENT_URL` |
 | `GAMMA_AM_URL` | The AM management API, as the APIM management API reaches it | `AM_MANAGEMENT_URL` |
 | `AM_PUBLIC_URL` | The AM gateway, as a browser reaches it | Required for `seed/am/gamma-link.yaml` |
-| `AM_GATEWAY_URL` | The AM gateway, as the API gateway and the seed reach it. Used by seed files, and the seed ends once it serves the domain and knows each application that has a `clientSecret`: a service that starts after the seed signs in at once | Unset: no wait |
+| `AM_GATEWAY_URL` | The AM gateway, as the API gateway and the seed reach it. Used by seed files, and the seed ends once it serves the domain and knows each application that has a `clientSecret`: a service that starts after the seed signs in at once. One that signs in with a key is not waited for, since only its key can sign in | Unset: no wait |
 | `APIM_GATEWAY_URL` | The API gateway, as a user reaches it. Used by seed files | |
 | `GATEWAY_INTERNAL_URL` | The API gateway, as the seed reaches it. With `SEED_WAIT_GATEWAY=1` the seed waits until it serves what was imported, in every environment; without it, it only uses it to wait for a replaced API to leave it | Unset: no wait |
 | `SEED_WAIT_GATEWAY` | `1` makes the seed wait for the gateway to take what it deployed: every API served, the protections and the budgets in force, a chat through every LLM proxy (`LLM_PROBE_KEY`). By default it does not: the seed ends when the management API holds everything, and the gateway takes it within seconds (an AI model downloads at its first deployment, which takes longer) | `0` |
@@ -843,9 +974,24 @@ outage:                             # lesson 2: an outage of the cloud provider 
   failover: true
 ```
 
+```yaml
+kill-switch:                        # lesson 6: the agent keeps calling the model until its subscription is paused
+  subscription: {application: Shop agent, api: Acme Shop LLM, plan: Agents}
+```
+
+```yaml
+kill-switch:                        # lesson 6: the agent keeps calling the model and its tools until both are paused
+  subscription:
+    - {application: Shop agent, api: Acme Shop LLM, plan: Agents}
+    - {application: Shop agent, api: Acme Shop MCP, plan: Agents}
+```
+
 A control targets an `api` (the steps of a flow, by phase, `request` or `response`, or with `failover: true` the API's failover,
-switched on or off), an `mcp-proxy` (the steps of a flow), a `workspace` (the steps of its router), or a `policy`. A failover control needs a
-`failover` block in the API's file, which says how it fails over once it is on.
+switched on or off), an `mcp-proxy` (the steps of a flow), a `workspace` (the steps of its router), a `policy`, or a
+`subscription`, named by its application, API and plan, which is paused while the control is on and resumed while it is
+off: one of `seed/apim/subscriptions/`, or of the `subscriptions` of an MCP proxy or a studio file, whose `api` is the
+name of the proxy or the studio. A list of subscriptions pauses them together. A failover control needs a `failover` block in the API's file, which says how it fails over
+once it is on. A subscription control names one that the platform accepts, never one that stays `pending`.
 
 - **Names are those of the seed files**, not always the console's. A step is named by its `name` in the file, a policy
   by its `name`, a target by the name of its API, proxy or workspace.
@@ -867,7 +1013,8 @@ switched on or off), an `mcp-proxy` (the steps of a flow), a `workspace` (the st
 - **Re-seed starts the lessons over.** Every run brings each control to the state of the mode, even one the person
   switched or edited in the console, and only the controls. An LLM proxy is updated in place, its steps and its failover and then a
   deployment, because an import would replace it, drop its keys and make the gateway reload. An MCP proxy and a
-  workspace's router are written with the mode. A policy is deployed or taken out of service. The rest of an API stays
+  workspace's router are written with the mode. A policy is deployed or taken out of service. A subscription is paused
+  or resumed (`_pause` and `_resume` of the management API v2), and keeps its id and its key. The rest of an API stays
   imported once, with its digest recorded. The digest is the file's, never the mode's.
 - **A busy platform does not replace an API, and neither does a wrong update.** The API is imported again from its file
   only when the platform says it lacks the in-place update of an LLM proxy (404, 405 or 501). A platform that cannot
@@ -929,6 +1076,8 @@ hackathon:                          # lesson 6: a click on "Spend the Hackathon 
 - The page lists the lessons and shows the guide a page per section: the introduction, each lesson, then the other
   sections, with previous and next and a picker of every page. Keep each section readable on its own.
 - Each page has an address (`#/playgrounds/acme-shop/4`), and the guide opens on the page read last.
+- A lesson reads best in one order: what happens without the gateway, what Gravitee changes, the steps, then what to
+  remember. Each step that changes something names where it is set in the console.
 - A diagram is a ```` ```mermaid ```` block, never drawn with characters. The page draws it in its own colors, light and
   dark alike, and so does GitHub.
 - What only matters before a start, such as memory, the first start's time and what to fix, is not in the guide. The
@@ -942,6 +1091,18 @@ language in any other viewer. The button is disabled, with the reason, while the
 a block as what a person would paste: one command a line, a long one continued with a backslash, with the addresses of the
 container (`$GATEWAY`), not `localhost`. A block meant to be read, such as
 a manifest or an output, is a plain fence.
+
+### A note in a guide
+
+A quote that opens with `[!NOTE]`, as GitHub writes an alert, is drawn as a note in the information color of the Lab UI,
+without the marker. Use it for what a step is worth, in a sentence the audience can read on the screen.
+
+```md
+> [!NOTE]
+> Each agent has its own identity and limits, so a faulty agent stays a small incident.
+```
+
+Any other quote stays a quote. GitHub and most viewers draw the same note.
 
 ### Accounts in a guide
 
@@ -1100,49 +1261,98 @@ in `.env`, then run `make all`.
   step's panel, under the name of its policy. A workspace's router step has no such field: the platform drops it, and the
   router shows the step's own name.
 - An API's tracing is `analytics.tracing` (`enabled`, `verbose`), with `analytics.logging` and `analytics.otelLogs` for
-  the payloads of the spans. The Automation API has no field for them: an MCP proxy's are set on its API entity.
+  the payloads of the spans. The Automation API has no field for them, and a studio is made without them: an MCP proxy's
+  and a studio's are set on its API entity.
+- Authorization Management, as of 4.13.4:
+  - *Create policy* writes `principal == Group::"..."` for a group, which permits none of its members. `principal in
+    Group::"..."`, the editor's *Includes*, permits them.
+  - An `@id` before any statement but the first leaves the policy in the *Code* view only. Decisions then names the other
+    statements `<policy>#1`, `#2`.
+  - The Policy Simulator runs in the browser and cannot evaluate a `when` condition: it marks such a cell uncertain and
+    may show Forbid where the engine permits. *Verify against engine* says what the engine decides.
+  - A domain deleted in Access Management leaves its synced principals, so a domain made again brings a second set.
 - Gamma has no upsert and keeps no name unique. A module looks each object up by name, slug or id, writes it only when it
   differs, records only what it created, and stops, naming it, when it finds one it did not create.
 
 ### Versions of Gravitee
 
-The seed reads the versions of API Management and Access Management at its start, with its own credentials: API Management
-says it for the gateways that report to it, Access Management for the plugins it ships with. Its first line says each, and
-how the seed treats it:
+The seed reads the version of API Management and of Access Management at its start, with its own credentials: API Management
+states it for each gateway that reports to it, Access Management for the plugins it ships with. Its first lines say each,
+and the path the seed takes:
 
-- **A release** (`4.13.3`) is seeded by its version: what changed from one release to the next is in the table below, and
-  the seeder fills **4.12 and later** releases. Below 4.12 the seed stops before it changes anything.
-- **A build that is no release** (`4.13.0-amp-demo-SNAPSHOT`, a master build), or a platform that says no version (a Cloud
-  environment with no gateway yet, a platform whose gateway is not started), is seeded by what it answers: [What differs from one build to
-  another](#what-differs-from-one-build-to-another). Nothing is promised for it.
+- **A release** (`4.12.2`, `4.13.3`, `4.14.28`) is seeded by the table of releases below. Most of what a seed makes is
+  made the same way on every release and has no row. A behavior that changed has one row per variant, from the first release
+  that has it: a release takes the variant of the last row at or below it, so a new release takes the latest variant until a
+  row says otherwise. The seeder fills **4.12.0 and later** releases: below that the seed stops before it changes anything.
+- **A build off the release channel** (the amp-demo build, a master build) is seeded by the table of builds, by the exact
+  version it states: the release it is seeded like, and each behavior where it differs from that release.
+- **Anything else stops the seed**, with the reason: a version that is neither, a product that states none (API Management
+  with no gateway started, after a minute of waiting for one), or a build beside another version. Gateways of several
+  releases make the oldest, as the Lab counts an environment of Gravitee Cloud.
 
-| What changed | Product | First release |
+API Management's version is the one its gateways state, which the Lab runs from the same setting as the management API
+(`APIM_VERSION`): give `APIM_GATEWAY_VERSION` another release and the seed follows the gateway. The technical API of the
+management API states its own version too, but it also serves the whole configuration of the node, so the lab keeps it
+inside each container.
+
+Two images of Docker Hub state a later release than their tag, on the management API and on the gateway alike: `4.13.0`
+states `4.13.4`, and `4.13.1` states `4.13.5`. The seed takes the version stated, so no row of the table below starts
+between the two (from 4.13.1 to 4.13.5), which a test holds; a change that does is told apart another way first.
+
+| What differs | Product | From | Variant | What the seed does |
+|---|---|---|---|---|
+| The usage surfaces of an AI credential | API Management | 4.13.0 | absent | The seed omits allowedUsageSurfaces, which the release API removed |
+| The Gamma modules the seeder fills: AI Management, Authorization Management | API Management | 4.12.0 | early | The platform ships versions 1 of both, whose routes the seeder does not fill (AI Management has no AI providers): a playground that seeds `aim/` or `authz/` stops before anything is asked of Gamma |
+| The Gamma modules the seeder fills: AI Management, Authorization Management | API Management | 4.13.0 | served | The seed asks the platform which modules it serves |
+| The MCP protocol versions of a studio and of an MCP proxy | API Management | 4.13.0 | list | A studio is made with `supportedProtocolVersions`, a list, from either key of its file, and an MCP proxy takes the `supportedProtocolVersions` and `endpointProtocolVersions` of its file |
+| The application of an agent of the AI catalog (`identity` and `access` of an agent file) | API Management | 4.13.0 | absent | The seed stops on an agent file that gives them, before any call, with what to write instead |
+| The module of a dashboard | API Management | 4.13.0 | required | A dashboard is created with the module `aim` |
+| Named schema documents of Authorization Management (`seed/authz/schemas/`) | API Management | 4.13.0 | several | Each file of `seed/authz/schemas/` is a document of its own |
+| Approvals and compliance of Agent Management (`seed/aim/governance/`) | API Management | 4.13.0 | absent | A playground that seeds them stops before any change, with where they are served |
+| Human approval on a studio (`humanApproval` of a studio file) | API Management | 4.13.0 | absent | A studio file that gives it stops the seed before any change, with where it is served |
+
+| Build | Product | Seeded like | Where it differs | What its seed files write |
+|---|---|---|---|---|
+| `4.13.0-amp-demo-SNAPSHOT`: The amp-demo build of API Management | API Management | 4.13.0 | The usage surfaces of an AI credential: required, the seed sends the legacy allowedUsageSurfaces the build requires; The MCP protocol versions of a studio and of an MCP proxy: single, a studio is made with `protocolVersion`, the one value its file gives, and the lists of an MCP proxy file are skipped with a warning: this build sets no protocol versions on an MCP proxy; The application of an agent of the AI catalog (`identity` and `access` of an agent file): served, the seed makes the application and subscribes it; The module of a dashboard: none, a dashboard is created with no module; Named schema documents of Authorization Management (`seed/authz/schemas/`): one, the files of `seed/authz/schemas/` are skipped with a warning: `seed/authz/schema.yaml` is the one document; Approvals and compliance of Agent Management (`seed/aim/governance/`): served, the seed writes the approval settings and rules, and the compliance answers; Human approval on a studio (`humanApproval` of a studio file): served, the seed switches it and writes the hold window of its flow | The models of an AI workspace are a component with an endpoint of its own (`target`, a price on each model) |
+| `4.14.0-SNAPSHOT`: A master build of Access Management, before 4.14.0 | Access Management | 4.13.6 | Nowhere | As on a release |
+
+The two tables are `RELEASES` and `BUILDS` in `seeder/lab_seeder/versions.py`, which writes them, and a test keeps this page
+equal to them. A module never compares versions: it asks the variant of a behavior and acts on it.
+
+Check each new release, and each build to seed, in two steps:
+
+1. **Measure it**: `make compat IMAGES="graviteeio/apim-management-api:4.14.0 graviteeio/am-management-api:4.14.0"` starts
+   each management API image alone, beside a throwaway database, and asks it what a seed meets there: the variant of each
+   behavior of the tables, the shape of each answer the seeder reads in more than one shape, and the other routes it calls
+   (`ROUTES`).
+   It prints `DIFFERS` where the tables, or the seeder, do not hold for the version the image states, and exits 1. The probes
+   are `seeder/compat.py`, one for each behavior of the tables, which a test holds.
+2. **Run the playgrounds on it** (`make e2e ID=playground:<id>` with its version in `.env`, or the *Gravitee versions*
+   workflow of a catalog, which runs them each night and moves their `x-gravitee.tested` forward): what the probes do not
+   ask, a playground that fails names.
+
+When a release changes something a seed makes, add a row to its behavior with that release and the new variant, keep the
+old variant for the releases before it, give the module the new case, and give `compat.py` the probe that measures it. When
+a build needs to be seeded, add it to `BUILDS` with its product, the exact version it states and the release it is closest
+to, and list where it differs. Read each row on the platform itself, never from memory.
+
+### What the seeder reads in either shape
+
+Some answers come in more than one shape, depending on the list, the release or the build, and the seeder reads each shape
+it meets, from the answer itself: no row of a version decides them. `make compat` checks on each image the shape of each row
+it has a probe for (`READS` in `seeder/compat.py`); the TLS row was read on imports into API Management 4.12. Measured on the images of API Management 4.13.0 to 4.13.5 and amp-demo (4.12 has no Gamma the seeder
+fills), and of Access Management 4.12.0, 4.12.14, 4.13.0 to 4.13.6 and master:
+
+| What comes in more than one shape | What the seed file writes | What the seeder does |
 |---|---|---|
-| The Gamma modules: AI Management, Authorization Management | API Management | 4.13.0 |
-
-A change between releases is a row here and an entry of `CHANGES` in `seeder/lab_seeder/versions.py`, which the modules ask
-by its name, and a test keeps the two equal. Which release a playground was tested on is its `x-gravitee.tested`, which
-the catalogs' *Gravitee versions* workflow moves forward each night.
-
-### What differs from one build to another
-
-For a build that is no release, the seeder does what the platform answers, and a seed file writes what its build takes:
-the playground says which build that is (`requires.images`). This table is what the seeder knows of them, and a row goes
-with the code it names once no build that the Lab runs needs it.
-
-| What differs | Builds | What the seed file writes | What the seeder does |
-|---|---|---|---|
-| A studio's protocol versions | A list on every release, one value on the amp-demo build, which refuses the list | `supportedProtocolVersions: ["2025-11-25"]` or `protocolVersion: "2025-11-25"` | Sends a release the list, from either key, and a build the key the file gives (`aim_proxies.protocol_versions`) |
-| A studio's keyless plan | The amp-demo build makes it from `KEYLESS`, the name of Agent Management, and its plans read it back as `KEY_LESS` | `plan: {security: {type: KEYLESS}}` | Knows both names where it checks a subscription (`seedlint.studio_problems`) |
-| Credential usage surfaces | Required by the amp-demo build; removed from the release API | Nothing | Omits `allowedUsageSurfaces` on releases and keeps the legacy default on builds (`aim_catalog`) |
-| The module of a dashboard | Some platforms ask for it, with a 400 that holds the code `module_required` | Nothing | Asks again with the module when the answer holds that code (`aim_dashboards`) |
-| An update the platform does not offer | It answers 404, 405 or 501 | Nothing | Imports the API again, or makes the studio again (`apim.UNSUPPORTED`) |
-| Models of an AI workspace with an endpoint of their own | The only kind the amp-demo build takes | A component with `target` and a price on each model | Makes the component the file describes (`aim_workspaces`) |
-| The application of an agent of the catalog | Served by the amp-demo build, not by a release (4.13.0 to 4.13.3) | `identity` and `access` in `seed/aim/agents/` on amp-demo; on a release, an application of `seed/apim/applications` whose `client_id` is the agent's | Stops with a line that says what to write instead (`aim_agents`) |
-| Where a Gamma list starts | Page 0 or page 1, depending on the list and the build | Nothing | Reads from the other start when page 0 is refused, or when the pages from 1 hold fewer rows than the list announces (`gamma.ManagementApi.rows`) |
-| The shape of a Gamma list | `content`, `data`, `items`, with a total or a `pagination` | Nothing | Reads all of them (`gamma.page_of`) |
-| Deleting a protected resource of Access Management | 4.12 answers 500 without its type | Nothing | Sends `type=MCP_SERVER` (`am.remove`) |
-| A TLS key store or trust store that is "no store" | 4.12 names it `NONE` and refuses `{"type": ""}`, which a 4.11 export holds | Leave the store out | Nothing |
+| A studio's keyless plan: made from `KEYLESS`, the name of Agent Management, read back as `KEY_LESS` | `plan: {security: {type: KEYLESS}}` | Knows both names where it checks a subscription (`seedlint.studio_problems`, `aim_agents`) |
+| An update the platform does not offer: it answers 404, 405 or 501 (every image measured takes the update of an MCP API) | Nothing | Imports the API again, or makes the studio again (`apim.UNSUPPORTED`) |
+| Where a Gamma list starts: the access entities and policies refuse page 0, and so do the AI workspaces of a release; a list that answers `pagination` reads page 0 as page 1 | Nothing | Reads from page 1 when page 0 is refused, or from page 0 when the pages from 1 hold fewer rows than the list announces (`gamma.ManagementApi.rows`) |
+| The shape of a Gamma list: `data` with `pagination.totalCount` for most, `content` with `totalElements` for the MCP proxies (and the AI workspaces of amp-demo), `data` with `total` for access entities and policies | Nothing | Reads all of them (`gamma.page_of`) |
+| An access entity read back: amp-demo gives no `active` | Nothing | Takes an absent `active` as true (`authz`) |
+| Deleting a protected resource of Access Management: 4.12 answers 500 without its type, 4.13 and master take it either way | Nothing | Always sends `type=MCP_SERVER` (`am.remove`) |
+| Adding a member to a group of Access Management: a body on `/members` is refused (405) on every release | Nothing | Puts the member in the path (`am.py`) |
+| A TLS key store or trust store that is "no store": 4.12 names it `NONE` and refuses `{"type": ""}`, which a 4.11 export holds | Leave the store out | Nothing |
 
 ### Environments and developer portals
 

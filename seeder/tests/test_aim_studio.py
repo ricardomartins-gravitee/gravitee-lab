@@ -352,7 +352,7 @@ class Creation(Studios):
         [call] = self.platform.sent("POST", AIM + "/mcp-studios")
         self.assertEqual(call.json, {
             "name": "Customer desk", "description": "The tools of Orchid's customer desk team, made of three REST APIs",
-            "contextPath": "/mcp/customer-desk", "protocolVersion": "2025-11-25",
+            "contextPath": "/mcp/customer-desk", "supportedProtocolVersions": ["2025-11-25"],
             "specification": {"tools": [{"id": "tool-searchCustomers", "alias": "search_customers"},
                                         {"id": "tool-getCustomer", "alias": "get_customer"},
                                         {"id": "tool-createRefund", "alias": "create_refund"}]},
@@ -372,17 +372,46 @@ class Creation(Studios):
         self.assertEqual(self.world.gateway_calls[0].json["params"]["protocolVersion"], "2025-11-25")
 
     def test_a_release_gets_the_list_of_versions_from_a_file_that_gives_one(self):
-        versions.note(versions.APIM, ["4.13.3"])
+        self.version("4.13.3", versions.APIM)
         self.seed()
         [call] = self.platform.sent("POST", AIM + "/mcp-studios")
         self.assertEqual(call.json["supportedProtocolVersions"], ["2025-11-25"])
         self.assertNotIn("protocolVersion", call.json)
+
+    def test_the_amp_demo_build_takes_the_one_version_its_file_gives_and_refuses_a_list(self):
+        self.version("4.13.0-amp-demo-SNAPSHOT", versions.APIM)
+        self.seed()
+        [call] = self.platform.sent("POST", AIM + "/mcp-studios")
+        self.assertEqual((call.json["protocolVersion"], "supportedProtocolVersions" in call.json), ("2025-11-25", False))
+
+    def test_the_amp_demo_build_gets_one_value_written_as_a_list_of_one_as_the_value(self):
+        self.version("4.13.0-amp-demo-SNAPSHOT", versions.APIM)
+        self.env(SEED_WAIT_GATEWAY="1")
+        self.file(STUDIO.replace('protocolVersion: "2025-11-25"', 'protocolVersion: ["2025-11-25"]'))
+        self.seed()
+        [call] = self.platform.sent("POST", AIM + "/mcp-studios")
+        self.assertEqual(call.json["protocolVersion"], "2025-11-25")
+        self.assertEqual(self.world.gateway_calls[0].json["params"]["protocolVersion"], "2025-11-25")
+
+    def test_the_amp_demo_build_refuses_a_file_that_gives_a_list(self):
+        self.version("4.13.0-amp-demo-SNAPSHOT", versions.APIM)
+        self.file(STUDIO.replace('protocolVersion: "2025-11-25"', 'supportedProtocolVersions: ["2025-11-25", "2025-06-18"]'))
+        with self.assertRaisesRegex(common.SeedError, "this platform takes one protocol version: write protocolVersion"):
+            self.seed()
 
     def test_a_tool_without_an_alias_goes_by_its_own_name(self):
         self.file(STUDIO.replace(", alias: search_customers", ""))
         self.seed()
         [call] = self.platform.sent("POST", AIM + "/mcp-studios")
         self.assertEqual(call.json["specification"]["tools"][0], {"id": "tool-searchCustomers"})
+
+    def test_a_workflow_tool_is_found_by_the_entity_id_of_its_name(self):
+        self.world.tools["mcp-tool.refund_order"] = "tool-workflow"
+        self.file(STUDIO.replace("  - {api: Orchid Orders API, tool: createRefund, alias: create_refund}\n",
+                                 "  - {workflow: refund_order, alias: refund_order}\n"))
+        self.seed()
+        [call] = self.platform.sent("POST", AIM + "/mcp-studios")
+        self.assertEqual(call.json["specification"]["tools"][2], {"id": "tool-workflow", "alias": "refund_order"})
 
     def test_a_studio_without_a_description_is_made_without_one(self):
         self.file(STUDIO.replace("description: The tools of Orchid's customer desk team, made of three REST APIs\n", ""))
@@ -407,7 +436,7 @@ class Creation(Studios):
         [call] = self.platform.sent("POST", V2 + "/apis/studio-1/plans")
         self.assertEqual(call.json, {
             "definitionVersion": "V4", "name": "Agents", "mode": "STANDARD", "validation": "AUTO",
-            "description": "Agents signed in by Access Management, one subscription each",
+            "description": "Callers signed in with Access Management, one subscription each",
             "characteristics": [], "tags": [], "excludedGroups": [], "commentRequired": False, "flows": [],
             "security": {"type": "JWT", "configuration": {
                 "signature": "RSA_RS256", "publicKeyResolver": "JWKS_URL",
@@ -469,6 +498,32 @@ class Flows(Studios):
         for key in ("id", "deploymentState", "createdAt", "updatedAt", "state", "definitionContext", "_links", "primaryOwner"):
             self.assertNotIn(key, call.json)
         self.assertEqual((call.json["name"], call.json["definitionVersion"]), ("Customer desk", "V4"))
+
+    def test_the_response_templates_of_the_file_are_written_with_the_flows_and_kept_on_the_next_run(self):
+        template = {"GAPL_AUTHZ": {"*/*": {"statusCode": 200, "body": '{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Not allowed"}}'}}}
+        self.file(STUDIO + "responseTemplates:\n  GAPL_AUTHZ:\n    \"*/*\": {statusCode: 200, body: '"
+                  + template["GAPL_AUTHZ"]["*/*"]["body"] + "'}\n")
+        self.seed()
+        self.assertEqual(self.the_api()["responseTemplates"], template)
+        self.again()
+        self.assertEqual(self.changes(), [])
+
+    def test_templates_that_are_not_media_types_and_templates_stop_the_seed_before_anything_is_made(self):
+        for text in ("responseTemplates: [GAPL_AUTHZ]\n", "responseTemplates:\n  GAPL_AUTHZ: 403\n",
+                     "responseTemplates:\n  GAPL_AUTHZ: {\"*/*\": denied}\n"):
+            with self.subTest(text=text), self.assertRaisesRegex(common.SeedError, "responseTemplates maps each key to its media types"):
+                self.file(STUDIO + text)
+                self.seed()
+            self.assertEqual(self.world.studios, {})
+
+    def test_a_template_of_the_file_replaces_only_its_own_media_type_of_what_the_platform_keeps(self):
+        self.file(STUDIO)
+        self.seed()
+        self.the_api()["responseTemplates"] = {"GAPL_AUTHZ": {"application/xml": {"statusCode": 403}}, "OTHER": {"*/*": {"statusCode": 500}}}
+        self.file(STUDIO + "responseTemplates:\n  GAPL_AUTHZ:\n    \"*/*\": {statusCode: 200}\n")
+        self.again()
+        self.assertEqual(self.the_api()["responseTemplates"], {"GAPL_AUTHZ": {"application/xml": {"statusCode": 403}, "*/*": {"statusCode": 200}},
+                                                               "OTHER": {"*/*": {"statusCode": 500}}})
 
     def test_an_authorization_check_without_attributes_adds_no_step(self):
         text = re.sub(r"  attributes:\n(    - .*\n)+", "", STUDIO)
@@ -701,6 +756,34 @@ class Gateway(Studios):
         self.assertEqual(len(self.world.gateway_calls), 2)
 
 
+class WhatItNeeds(Studios):
+    """check(): what a studio file asks that the version does not serve stops the seed before any change."""
+
+    def test_a_release_has_no_human_approval_on_a_studio(self):
+        self.version("4.13.5", versions.APIM)
+        with self.assertRaises(common.SeedError) as stopped:
+            aim_proxies.check()
+        for words in ("Customer desk", "humanApproval", "the build 4.13.0-amp-demo-SNAPSHOT"):
+            self.assertIn(words, str(stopped.exception))
+        self.assertEqual(self.platform.calls, [])
+
+    def test_a_release_takes_a_studio_without_it(self):
+        self.version("4.13.5", versions.APIM)
+        self.file(STUDIO.split("humanApproval:")[0])
+        aim_proxies.check()
+
+    def test_the_amp_demo_build_refuses_a_list_of_versions_before_any_change(self):
+        self.version("4.13.0-amp-demo-SNAPSHOT", versions.APIM)
+        self.file(STUDIO.replace('protocolVersion: "2025-11-25"', 'supportedProtocolVersions: ["2025-11-25", "2025-06-18"]'))
+        with self.assertRaisesRegex(common.SeedError, "this platform takes one protocol version: write protocolVersion"):
+            aim_proxies.check()
+        self.assertEqual(self.platform.calls, [])
+
+    def test_the_amp_demo_build_takes_the_studio_with_human_approval(self):
+        self.version("4.13.0-amp-demo-SNAPSHOT", versions.APIM)
+        aim_proxies.check()
+
+
 class Errors(Studios):
 
     def failing(self, pattern):
@@ -763,6 +846,7 @@ class OldShape(Studios):
         self.assertEqual(self.world.gateway_calls, [])
 
     def test_a_file_with_one_version_is_created_with_it_as_the_amp_demo_build_asks(self):
+        self.version("4.13.0-amp-demo-SNAPSHOT", versions.APIM)
         self.file(OLD_STUDIO.replace('supportedProtocolVersions: ["2025-11-25"]', 'protocolVersion: "2025-11-25"'), "customer-desk")
         self.seed()
         [call] = self.platform.sent("POST", AIM + "/mcp-studios")
@@ -1045,7 +1129,9 @@ class Subscriptions(Studios):
                 ("subscriptions: [{application: A, apiKey: ''}]", "the apiKey of A is empty"),
                 ("subscriptions: [{application: A, plan: 3}]", "the plan of A is the name of a plan"),
                 ("authorization: {agentIdentityResolution: true}",
-                 "^MCP studio Kazoo operations: authorization is read for a studio built in steps")):
+                 "^MCP studio Kazoo operations: authorization is read for a studio built in steps"),
+                ("responseTemplates: {GAPL_AUTHZ: {'*/*': {statusCode: 200}}}",
+                 "^MCP studio Kazoo operations: responseTemplates is written for a studio built in steps")):
             with self.subTest(text=text), self.assertRaisesRegex(common.SeedError, message):
                 self.file(PLAIN[:PLAIN.index("subscriptions:")] + text + "\n")
                 self.seed()
@@ -1099,3 +1185,65 @@ class Subscriptions(Studios):
         [sub] = self.world.subscriptions.values()
         self.assertEqual(sub["status"], "ACCEPTED", "the key of the file works")
         self.assertIn("✓ Subscription accepted: Steward on 13 tools → Kazoo operations (Copilots)", self.output())
+
+
+ANALYTICS = """\
+analytics:
+  logging:
+    mode: {entrypoint: true, endpoint: true}
+    phase: {request: true, response: true}
+    content: {headers: false, payload: true}
+  tracing: {enabled: true, verbose: true}
+"""
+
+
+class Analytics(Studios):
+    """`analytics` of a studio's file: what the gateway records of each tool call (the arguments and the answer, and as
+    traces), written on the studio's API over what the platform made, as an MCP proxy's is."""
+
+    def setUp(self):
+        super().setUp()
+        self.file(STUDIO + ANALYTICS)
+
+    def made_with_the_defaults(self):
+        """The studio the platform makes records the calls, without their payloads and with no traces."""
+        create = self.world.create
+
+        def made(call):
+            answer = create(call)
+            self.world.apis[answer[1]["id"]]["analytics"] = {"enabled": True, "connectionEvents": []}
+            return answer
+        self.platform.add({("POST", AIM + "/mcp-studios"): made})
+
+    def test_a_studio_built_in_steps_records_the_payloads_and_traces_in_the_update_of_its_flows(self):
+        self.made_with_the_defaults()
+        self.seed()
+        analytics = self.the_api()["analytics"]
+        self.assertEqual((analytics["enabled"], analytics["logging"]["content"], analytics["tracing"]),
+                         (True, {"headers": False, "payload": True}, {"enabled": True, "verbose": True}))
+        self.assertEqual(len(self.platform.sent("PUT", V2 + "/apis/studio-1")), 1, "one update with the flows")
+        self.assertEqual(self.the_api()["deploymentState"], "DEPLOYED")
+
+    def test_a_second_run_writes_nothing_and_what_someone_switched_off_is_put_back(self):
+        self.made_with_the_defaults()
+        self.run_twice()
+        self.assertEqual(self.changes(), [])
+        self.the_api()["analytics"]["logging"]["content"]["payload"] = False
+        self.again()
+        self.assertEqual(self.changes(), [("PUT", "/apis/studio-1"), ("POST", "/apis/studio-1/deployments")])
+        self.assertIs(self.the_api()["analytics"]["logging"]["content"]["payload"], True)
+
+    def test_a_studio_made_in_one_go_records_them_too_then_is_deployed(self):
+        self.file(OLD_STUDIO + ANALYTICS)
+        self.made_with_the_defaults()
+        self.seed()
+        self.assertEqual(self.the_api()["analytics"]["tracing"], {"enabled": True, "verbose": True})
+        self.assertEqual(self.changes()[-2:], [("PUT", "/apis/studio-1"), ("POST", "/apis/studio-1/deployments")])
+        self.again()
+        self.assertEqual(self.changes(), [])
+
+    def test_analytics_that_are_no_mapping_stop_the_seed_before_anything_is_made(self):
+        self.file(STUDIO + "analytics: [logging]\n")
+        with self.assertRaisesRegex(common.SeedError, "^MCP studio Customer desk: analytics is a mapping"):
+            self.seed()
+        self.assertEqual(self.world.studios, {})
