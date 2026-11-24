@@ -1,0 +1,52 @@
+name: Shared policy groups on Gravitee 4.13
+on:
+  push:
+    branches: [validation/shared-policy-groups-4-13]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    environment: e2e
+    strategy:
+      fail-fast: false
+      matrix:
+        apim: ["4.13.3", "4.13.7"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install seeder dependencies and initialize disposable Lab
+        run: |
+          python3 -m venv "$RUNNER_TEMP/seed-venv"
+          "$RUNNER_TEMP/seed-venv/bin/pip" install --quiet -r seeder/requirements.txt
+          make init
+      - name: Start isolated APIM 4.13
+        env:
+          GRAVITEE_LICENSE: ${{ secrets.GRAVITEE_LICENSE }}
+          APIM_VERSION: ${{ matrix.apim }}
+        run: |
+          if [ -n "$GRAVITEE_LICENSE" ]; then
+            printf '\nGRAVITEE_LICENSE=%s\n' "$GRAVITEE_LICENSE" >> .env
+          fi
+          docker compose -p spgproof -f docker-compose.yml up -d --wait --wait-timeout 360 apim-gateway
+      - name: Start the synthetic upstream for the test APIs
+        run: |
+          docker run --detach --name spgproof-backend --network spgproof_internal \
+            --network-alias fixture --volume "$PWD/.github/validation/spg_backend.py:/srv/backend.py:ro" \
+            python:3.12-alpine python /srv/backend.py
+      - name: Check APIM group types and verify the supported seed lifecycle
+        run: |
+          PYTHONPATH=seeder "$RUNNER_TEMP/seed-venv/bin/python" .github/validation/spg_proof.py
+      - name: Remove only this runner's proof containers and volumes
+        if: always()
+        run: |
+          if docker container inspect spgproof-backend >/dev/null 2>&1; then
+            docker rm -f spgproof-backend
+          fi
+          docker compose -p spgproof -f docker-compose.yml down --volumes --remove-orphans
+          test -z "$(docker ps -aq --filter label=com.docker.compose.project=spgproof)"
+          test -z "$(docker volume ls -q --filter label=com.docker.compose.project=spgproof)"
+          test -z "$(docker network ls -q --filter label=com.docker.compose.project=spgproof)"
+          rm -f .env
