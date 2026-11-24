@@ -1040,6 +1040,7 @@ class OptionalFields(Made):
             problems = seedlint.problems(folder)
             self.assertEqual(len(problems), 1, problems)
             self.assertEqual(problems[0].check, "policy-group")
+            self.assertIn("title=Seed shared policy group", seedlint.render(problems, "github"))
 
     def test_shared_policy_group_duplicates_and_phase_mismatches_are_reported(self):
         for index, other in enumerate((GROUP, {**GROUP, "crossId": "other"})):
