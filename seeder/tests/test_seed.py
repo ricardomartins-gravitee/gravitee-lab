@@ -252,6 +252,21 @@ class Modules(Seed):
         self.assertEqual(self.order, [])
         self.assertEqual(self.platform.changes(), [])
 
+    def test_an_invalid_shared_policy_group_stops_the_seed_before_any_module_runs(self):
+        self.run_modules()
+        self.seed_files({"environments/newt/environment.yaml": "id: newt\nname: Newt\n"})
+        for scope in ("apim", "environments/newt"):
+            with self.subTest(scope=scope):
+                path = f"{scope}/shared-policy-groups/controls.json"
+                self.seed_files({path: '{"name":"Controls","crossId":"controls","apiType":"MCP_PROXY","phase":"REQUEST"}'})
+                try:
+                    self.assertEqual(self.main(), 1, self.output())
+                    self.assertIn(f"{path}: apiType", self.output())
+                    self.assertEqual(self.order, [])
+                    self.assertEqual(self.platform.changes(), [])
+                finally:
+                    (common.SEED_DIR / path).unlink()
+
     def test_a_platform_that_serves_them_is_seeded(self):
         self.run_modules()
         self.seed_files({"aim/providers/p.yaml": "name: p", "authz/entities.yaml": "entities: []"})

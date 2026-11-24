@@ -73,7 +73,8 @@ COMMANDS = ("::", "##[")
 Problem = namedtuple("Problem", "check path line message")
 Report = namedtuple("Report", "problems playgrounds files")   # the playgrounds that have a seed, the seed files read
 TITLES = {"variable": "Seed variable", "read": "Seed file", "parse": "Seed file",
-          "environment": "Seed environment", "playground": "Seed service", "studio": "Seed studio", "owner": "Seed primary owner", "fields": "Seed fields"}
+          "environment": "Seed environment", "playground": "Seed service", "studio": "Seed studio",
+          "owner": "Seed primary owner", "fields": "Seed fields", "policy-group": "Seed shared policy group"}
 
 
 class Unreadable(common.SeedError):

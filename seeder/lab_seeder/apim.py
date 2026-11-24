@@ -1445,3 +1445,11 @@ def remove(records):
                 delete(x)
         else:
             parallel(delete, batch)
+
+
+def check():
+    groups = [read_shared_policy_group(path) for path in files("apim", "shared-policy-groups", suffixes=(".json",))]
+    definitions = [(load(path), path.name) for path in files("apim", "apis", suffixes=(".json",))]
+    check_policy_groups(groups, definitions)
+    for folder in folders(ENVIRONMENTS):
+        read_environment(folder)
