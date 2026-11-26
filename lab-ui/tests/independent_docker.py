@@ -586,7 +586,10 @@ class IndependentDocker(unittest.TestCase):
         b = next(row for row in listing["runtimes"] if row["id"] == self.instances["b"])
         self.assertFalse(a["running"])
         self.assertTrue(a["cleanup"]["containers"]["enabled"])
-        self.assertGreater(a["local_bytes"], 0)
+        self.assertIsNone(a["local_bytes"])
+        measured = self.json(self.lab + "/api/runtimes?storage=1")
+        measured_a = next(row for row in measured["runtimes"] if row["id"] == a["id"])
+        self.assertGreater(measured_a["local_bytes"], 0)
         volumes = [row["name"] for row in a["volumes"]]
         other_volumes = [row["name"] for row in b["volumes"]]
         plan = self.json(self.lab + path, "POST", {"operation": "containers", "check": True})
