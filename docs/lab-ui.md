@@ -92,6 +92,15 @@ it without replaying its seed. The sandbox’s More menu uses the existing actio
 Apply and Update keep writable data and assigned ports and never run the seed. Restart only restarts running containers.
 The normal sandbox creation, cloning and deletion actions remain separate.
 
+### Choose sandbox image versions
+
+In *Images*, use *Show images for* to select a sandbox that has started successfully. The version pickers work as they
+do in Shared Lab. *Save* records versions for that sandbox. *Save & apply* previews and recreates only its running
+containers whose image versions change. Stopped containers pick up the saved versions at their next Start. The
+sandbox keeps its data and ports. Check that your chosen versions support any migrations required by that data.
+The picker covers registry-backed components with a version setting, including captured clone images. The catalog
+sets the registry, and built images, seeds and digest-pinned images keep their existing settings.
+
 The Lab keeps private configuration and copied mounts in `.lab/runtimes/`, and named sandbox identities in
 `.lab/playground-runtimes.json`. Catalogs and linked worktrees stay in place. Shared data enters a named sandbox only through
 an explicitly selected clone of the complete Shared Lab. Existing private projects appear as named children after an upgrade,
@@ -104,11 +113,12 @@ and removal wait while a private sandbox using the catalog is on.
 
 ### Manage sandboxes and storage
 
-Open *Sandboxes* under Configure to manage independent instances, grouped by source playground. Stopped sandboxes and
+Open *Sandboxes* below *Containers* under Monitor to manage independent instances, grouped by source playground. Stopped sandboxes and
 kept data whose catalog source is unavailable remain listed. *Create sandbox* belongs to its playground; the same
 controls are available from a playground's More > Sandboxes dialog. *Clone sandbox* selects that instance as the source
 of the creation form. Choose a storage value to inspect volumes, sandbox files, assigned ports, captured versions and
-image identities. *Refresh storage* reads disk usage again. Images and build caches are shown once as machine-wide
+image identities. The sandbox list loads first, then shows progress while storage figures are measured. *Refresh storage*
+reads disk usage again. Images and build caches are shown once as machine-wide
 storage, because sandboxes can share their image layers.
 
 Choose *Containers* beside an instance to inspect it. Containers uses one table for Shared and sandboxes,
@@ -130,7 +140,8 @@ Stop a sandbox before cleanup, then choose:
 | *Delete data, keep sandbox* | That sandbox's containers, networks, volumes and generated sandbox folder | Its named definition, catalog source and links, all other sandboxes, images and build caches; Start initializes fresh data |
 | *Delete sandbox and data* | That sandbox and its private containers, networks, volumes and generated folder | Its source playground, catalog links, shared data and all other sandboxes |
 
-Review the exact resources before confirming. Data deletion also asks you to type `delete`. A resource or file changed
+Review the exact resources before confirming. Data deletion also asks you to type `delete`. The sandbox shows *Deleting*
+while cleanup runs, and the Lab confirms when it starts. A resource or file changed
 since the preview requires a new preview. Cleanup refuses ambiguous ownership, resources used outside the sandbox and
 linked sandbox roots. It never follows links inside the private files. This cleanup does not prune machine-wide storage.
 
@@ -180,6 +191,7 @@ setting of this machine, kept in `.lab/core.json`, out of git.
 | Add-ons | One capability each. One that lacks a setting keeps its *Start*, which waits for it and says which |
 | Catalogs | Where the items come from: add, update, go back to the previous copy or remove a catalog, make a new one, and see what each holds: [Catalogs](catalogs.md) |
 | Containers | The containers by group, the platform's actions, and every console to open |
+| Sandboxes | Named playground instances, their storage and cleanup. [Details](#playground-sandboxes) |
 | Logs | Several services merged in time order, filtered by level and by text |
 | Images | The version of every component, and the registry of the Gravitee ones: [Images and versions](configuration.md#images-and-versions). A row's *State* is *Running*, *Stopped* (it is on and does not run) or *Off* (what owns it is not turned on: its tooltip names it); *Not pulled* stands beside the version when its image is not on this machine, and the list of versions marks the ones that are with *Pulled*, in one column |
 | Plugins | The plugins of each product: [Plugins](configuration.md#plugins) |
@@ -189,8 +201,9 @@ Playgrounds, Setups and Add-ons are lists with a search, a category filter, the 
 combine, and, once there is more than one catalog, a catalog picker (*All catalogs*, one catalog, or *Personal*). Each row says the item's state (*Running*, *Stopped*, *Off*...) in a
 column of its own, next to its category and, on a wide window with more than one catalog, the catalog it comes from. A row opens on what the item runs and its files, from its chevron or a click anywhere on it.
 
-The menu also holds the state of the platform, the one place it is said on every page (*Platform running*, *Platform
-stopped*, *Platform issue*, whose popover says what the issue is, *Docker is not reachable*); while a job runs or once one
+The menu also holds the status of the Shared platform on every page (*Shared platform running*, *Shared platform
+stopped*, *Shared platform issue*, whose popover explains the issue, or *Docker is not reachable*). When any sandboxes
+are running, their count appears beneath that status and links to Sandboxes. While a job runs or once one
 failed, the Activity chip with it; the info button, the theme switch (system, dark, light) and a button that collapses the
 menu. The version of the Lab stands at the right of its name, at the top: it opens [its versions](#versions-of-the-lab), and turns
 into *Update* while a newer one is out (a dot on the logo says it when the menu is collapsed). Collapsed, the menu shows icons, each named in a tooltip.

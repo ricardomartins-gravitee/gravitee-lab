@@ -26,7 +26,7 @@ from ..docker import compose, images, terminal
 from ..gravitee import core, license, places, platforms, probe
 from . import dashboard, personas, runtimes, stack
 from .. import paths
-from ..catalogs import contribute, exports, firstrun, gitx, kept, moving, service, standalone, trust
+from ..catalogs import contribute, exports, firstrun, gitx, kept, moving, runtime_images, service, standalone, trust
 from ..catalogs.registry import CatalogError
 from ..docker.jobs import JOBS, Job
 
@@ -723,10 +723,13 @@ ROUTES = [(method, re.compile(pattern), handler) for method, pattern, handler in
     ("GET", "/favicon.ico", lambda r: r.answer(204)),   # the page carries its own icon
     ("GET", "/api/state", state),
     ("GET", "/api/runtimes", lambda r: runtimes.listing(project.load(), fresh=r.query.get("refresh") == "1",
-        playground=r.query.get("playground"), available=not _containers()[1])),
+        playground=r.query.get("playground"), available=not _containers()[1], measure=r.query.get("storage") == "1")),
     ("POST", f"/api/runtimes/{UNIT}/groups/{ID}/{DO}", lambda r, pid, gid, op: runtimes.group_action(project.load(), pid, gid, op)),
     ("POST", f"/api/runtimes/{UNIT}/(start|stop|restart|apply|update)", lambda r, pid, op: runtimes.managed_action(project.load(), pid, op)),
     ("GET", f"/api/runtimes/{UNIT}/check", lambda r, pid: runtimes.check(project.load(), pid, operation=r.query.get("action", "start"))),
+    ("GET", f"/api/runtimes/{UNIT}/images", lambda r, pid: runtime_images.state(project.load(), pid)),
+    ("GET", f"/api/runtimes/{UNIT}/image-tags", lambda r, pid: runtime_images.tags(project.load(), pid, r.query.get("component"))),
+    ("POST", f"/api/runtimes/{UNIT}/images", lambda r, pid: runtime_images.save(project.load(), pid, r.body)),
     ("POST", f"/api/runtimes/{UNIT}/cleanup", lambda r, pid: runtimes.cleanup(pid, r.body)),
     ("POST", f"/api/playgrounds/{UNIT}/runtimes", lambda r, pid: runtimes.create(project.load(), pid, r.body)),
     ("GET", f"/api/playgrounds/{UNIT}/runtimes", lambda r, pid: runtimes.creation_options(project.load(), pid)),

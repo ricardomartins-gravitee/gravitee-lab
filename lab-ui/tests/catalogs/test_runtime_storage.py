@@ -105,7 +105,8 @@ class RuntimeStorage(Case):
         jobs = self.patch(runtime_storage, "JOBS")
         plan = self.plan()
         runtime_storage.cleanup(self.pid, "containers", plan["fingerprint"])
-        _, steps, _ = self.started(jobs)
+        _, steps, metadata = self.started(jobs)
+        self.assertEqual((metadata["key"], metadata["verb"]), (f"playground:{self.pid}", "delete"))
         worker = Mock()
         steps[0](worker)
         self.assertEqual([c.args[0] for c in worker.exec.call_args_list],

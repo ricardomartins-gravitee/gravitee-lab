@@ -83,7 +83,7 @@ const PAGES = [
   [page("Dashboard", "#/dashboard"), "Whether the platform is all right and what is not applied, which version of each product runs here and in Gravitee Cloud, what else is on, and what the lab uses of your machine"],
   ["Library", `${page("Playgrounds", "#/playgrounds")}, ${page("Setups", "#/setups")} and ${page("Add-ons", "#/addons")}: what each one is and runs, to turn on and off`],
   ["Catalogs", `${page("Catalogs", "#/catalogs")}: where they come from, to add and to update`],
-  ["Monitor", `${page("Containers", "#/containers")}: every container with its version, ports and consoles to open. ${page("Logs", "#/logs")}: several services at once`],
+  ["Monitor", `${page("Containers", "#/containers")}: every container with its version, ports and consoles to open. ${page("Sandboxes", "#/sandboxes")}: isolated playground instances and their storage. ${page("Logs", "#/logs")}: several services at once`],
   ["Configure", `${page("Images", "#/images")}: the version of every image. ${page("Plugins", "#/plugins")}: the plugins of each product`],
 ];
 
@@ -172,7 +172,7 @@ function startPanel() {
   const first = cloud ? `Start all starts the hybrid gateway of ${esc(coreOf().name)} and the rest of the platform on this machine.`
     : "Its first start downloads about 15 GB of images: about 10 to 15 minutes.";
   if (running()) {
-    return `<h2>Your platform is running</h2>
+    return `<h2>Shared platform running</h2>
       <ul class="start-list">${consoles().map(consoleItem).join("") || '<li class="empty">No console runs</li>'}</ul>${license}`;
   }
   if (starting()) {

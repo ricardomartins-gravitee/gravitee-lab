@@ -98,18 +98,19 @@ def _owned(pid, resources):
                     raise ValueError("A volume is used outside this sandbox; cleanup is held")
 
 
-def inventory(pid):
+def inventory(pid, *, measure=True):
     folder = directory(pid)
     value = independent.read(pid)
     if not value:
         raise paths.NotFound("No prepared sandbox")
     resources = storage.resources(value["project"])
     files, error = None, None
-    try:
-        _owned(pid, resources)
-        files = tree(folder)
-    except (OSError, ValueError) as problem:
-        error = str(problem)
+    if measure:
+        try:
+            _owned(pid, resources)
+            files = tree(folder)
+        except (OSError, ValueError) as problem:
+            error = str(problem)
     return {"resources": resources, "local": files, "error": error,
             "running": any(row["state"] in RUNNING for row in resources["containers"])}
 
@@ -205,4 +206,4 @@ def cleanup(pid, operation, fingerprint):
             record["active"] = False
             independent._write(independent.folder(pid) / "runtime.json", record)
     return JOBS.start("Delete containers, keep data" if operation == "containers" else "Delete sandbox and data" if operation == "delete" else "Delete data, keep sandbox", [run],
-                      key=f"playground:{pid}", verb="stop")
+                      key=f"playground:{pid}", verb="delete")

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 
-import { flush, installDom, text } from "./dom-stub.mjs";
+import { Ev, flush, installDom, reply, text } from "./dom-stub.mjs";
 
 mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
 
@@ -32,9 +32,20 @@ const LISTED = ["4.13.0-alpha-debian", "4.13.0-alpha.4-debian", "4.13.0-alpha.4-
 const PLAIN = ["4.12.21", "4.13.0-alpha.4", "8.10.2", "9.5.3", "latest"];
 
 const listings = [];   // the lists of tags the page asked for
+const requests = [];
+const sandboxImage = { ...COMPONENTS[1], registry_key: null, registry: null, registry_resolved: null, follows: [],
+  source: "Docker Hub", version: "1-debian", version_resolved: "1-debian", running: ["graviteeio/apim-gateway:1-debian"],
+  services: ["runtime-a--apim-gateway"] };
+const scoped = "/api/runtimes/runtime-a/images", scopedTags = "/api/runtimes/runtime-a/image-tags";
 const page = installDom({
   stored: { thirdPartyOpen: "1" },   // the third-party section is unfolded
-  fetch: async (path) => {
+  fetch: async (path, options = {}) => {
+    const draft = options.body && JSON.parse(options.body);
+    requests.push([path, draft]);
+    if (path === scoped && draft?.check) return reply({ restarts: [{ name: "Gateway", kind: "service" }], fingerprint: "scope-plan", runs: true });
+    if (path === scoped && draft?.apply) return reply({ id: "1234abcd", for: "playground:runtime-a", verb: "apply", title: "Apply versions", done: false });
+    if (path === scoped) return reply({ components: [sandboxImage], registries: [], azure_in_use: false });
+    if (path.startsWith(scopedTags)) return reply({ tags: LISTED.map((name) => ({ name, updated: null })), local: [] });
     if (path.startsWith("/api/tags")) listings.push(path);
     const body = path.startsWith("/api/images") ? { components: COMPONENTS, registries: [], azure_in_use: false }
       : path.startsWith("/api/tags") ? { tags: LISTED.map((name) => ({ name, updated: null })), local: [] } : { host: null };
@@ -159,7 +170,6 @@ test("the tags listed are asked again once a job ended or the page opens again: 
 
 test("a tag typed that the registry does not list keeps its warning on the row once a job ended", async () => {
   const { Combo } = await import("../../../web/js/components/combo.js");
-  const { Ev } = await import("./dom-stub.mjs");
   Combo.init();
   const state = () => text(section.querySelector('tr[data-component="REDIS_VERSION"] .list-state'));
   section.querySelector('tr[data-component="REDIS_VERSION"] [data-version]').click();
@@ -178,4 +188,36 @@ test("a tag typed that the registry does not list keeps its warning on the row o
   await flush();
   assert.match(state(), /Tag not listed/, "the draft still holds the tag the registry does not list");
   assert.equal(listings.length - before, 1, "its list is asked again");
+});
+
+test("the same Images page previews and applies versions in the selected sandbox", async () => {
+  globalThis.EventSource = class { close() {} addEventListener() {} };
+  store.state = { ...store.state, runtime_scopes: { "runtime-a": { id: "runtime-a", name: "Demo", playground_name: "Source" } } };
+  imagesPage.show([undefined, "runtime-a"]);
+  imagesPage.render(store.state);
+  await flush();
+  assert.equal(text(page.doc.querySelector("#images-scope-value")), "Demo");
+  const version = section.querySelector("tr[data-component] [data-version]");
+  assert.equal(section.querySelector("[data-registry]"), null, "the captured registry is displayed as text");
+  assert.equal(section.querySelectorAll("tr[data-component]").length, 1);
+  version.click();
+  await flush();
+  assert.ok(requests.some(([path]) => path === scopedTags + "?component=APIM_GATEWAY_VERSION"));
+  const input = page.doc.querySelector("#combo-input");
+  input.value = "9.9.10-debian";
+  input.dispatchEvent(new Ev("input"));
+  page.doc.activeElement = section.querySelector("#images-search");
+  page.doc.querySelector("#combo-foot button[data-use]").click();
+  await flush();
+  const body = { values: { APIM_GATEWAY_VERSION: "9.9.10-debian" } };
+  section.querySelector("#images-apply").click();
+  await flush();
+  assert.deepEqual(requests.filter(([, sent]) => sent), [[scoped, { ...body, check: true }]]);
+  assert.match(text(page.ids["choice-title"]), /Save & apply to Demo/);
+  assert.match(text(page.ids["choice-list"]), /Gateway/);
+  page.ids.choice.returnValue = "ok";
+  page.ids.choice.onclose();
+  await flush();
+  assert.deepEqual(requests.filter(([, sent]) => sent), [[scoped, { ...body, check: true }],
+    [scoped, { ...body, apply: true, fingerprint: "scope-plan" }]]);
 });

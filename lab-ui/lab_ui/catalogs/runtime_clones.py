@@ -340,9 +340,10 @@ def _snapshot(job, project, source, target, config):
                  prepared_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     if private:
         value["binds"] = {key: str(new / Path(path).relative_to(root)) for key, path in value["binds"].items()}
-    references = (original.get("snapshot") or {}).get("references") if private else None
-    value["snapshot"] = {"scope": "runtime", "images": actual, "references": references or {
-        key: published.get(key, service.get("image", "")) for key, service in source_config["services"].items()}}
+    value["snapshot"] = {"scope": "runtime", "images": actual, "references": {
+        key: published.get(key) or (independent.image_reference(original, key, service["image"]) if private else None)
+        or service["image"]
+        for key, service in source_config["services"].items()}}
     built = {service.get("image") for service in source_config["services"].values() if service.get("build")}
     value["snapshot"]["local"] = (original.get("snapshot") or {}).get("local", []) if private and original.get("snapshot") else sorted(
         key for key, service in source_config["services"].items() if key not in published and

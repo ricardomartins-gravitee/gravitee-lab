@@ -363,8 +363,8 @@ def overlay(body, project):
     return _scopes(body, project, instances)
 
 
-def listing(project, fresh=False, playground=None, available=True):
-    """The Containers page's central inventory, including stopped and unavailable-source sandboxes."""
+def listing(project, fresh=False, playground=None, available=True, measure=False):
+    """The sandbox inventory, with disk and CPU measurements only when asked."""
     if playground is not None:
         layers.lookup(project, "playground", playground)
     records, problems = runtime_storage.known()
@@ -373,15 +373,13 @@ def listing(project, fresh=False, playground=None, available=True):
     ids = set(prepared) | set(instances)
     if playground is not None:
         ids = {rid for rid in ids if runtime_settings.source(rid) == playground}
+    measure = available and (measure or fresh)
     try:
-        usage = storage.usage(fresh=fresh) if available else {"volumes": {}, "shared": []}
+        usage = storage.usage(fresh=fresh) if measure else {"volumes": {}, "shared": []}
     except (OSError, ValueError, compose.ComposeError) as error:
         usage = {"volumes": {}, "shared": []}
         problems.append({"file": "Docker storage", "message": str(error)})
-    shared = storage.resources(compose.project_name()) if playground is None and available else {"containers": [], "volumes": []}
-    rows = [{"id": None, "name": "Shared platform", "mode": "shared", "prepared": True,
-             "containers": shared["containers"], "volumes": shared["volumes"], "ports": [],
-             "local_bytes": None, "source": True, "problem": None}] if playground is None else []
+    rows = []
     names = {rid: instances.get(rid, {}).get("name") or (prepared.get(rid) or {}).get("label") or rid for rid in ids}
     for pid in sorted(ids, key=lambda rid: (runtime_settings.source(rid), names[rid].casefold(), rid)):
         parent = runtime_settings.source(pid)
@@ -390,7 +388,7 @@ def listing(project, fresh=False, playground=None, available=True):
         value = {"resources": {"containers": [], "volumes": [], "networks": []}, "local": None, "error": None, "running": False}
         try:
             if record and available:
-                value = runtime_storage.inventory(pid)
+                value = runtime_storage.inventory(pid, measure=measure)
             elif available and (independent.folder(pid).exists() or any(storage.resources(independent.name(pid)).values())):
                 value["error"] = "An incomplete sandbox has private resources; cleanup is held"
         except (OSError, ValueError, compose.ComposeError) as error:
@@ -422,26 +420,26 @@ def listing(project, fresh=False, playground=None, available=True):
         rows.append(row)
     running = [c["name"] for row in rows for c in row["containers"] if c["state"] == "running"]
     try:
-        samples = storage.load(running) if available else {}
+        samples = storage.load(running) if measure and running else {}
     except (OSError, ValueError, compose.ComposeError) as error:
         samples = {}
         problems.append({"file": "Docker stats", "message": str(error)})
     for row in rows:
-        specs = (prepared.get(row["id"]) or {}).get("services", {}) if row["id"] else project["services"]
+        specs = (prepared.get(row["id"]) or {}).get("services", {})
         containers = {c["service"]: c for c in row["containers"]}
         row["services"] = []
-        for key in sorted(set(specs) | set(containers) if row["id"] else set(containers)):
+        for key in sorted(set(specs) | set(containers)):
             spec = specs.get(key, {})
             # Docker omits published bindings after Stop. Captured assignments
             # still belong to their service after its containers are removed.
-            ports = containers.get(key, {}).get("ports") or (spec.get("ports", []) if row["id"] else [])
+            ports = containers.get(key, {}).get("ports") or spec.get("ports", [])
             actual = [{name: c[name] for name in ("name", "state")} for c in row["containers"] if c["service"] == key]
             status = containers.get(key, {}).get("state")
             display = spec.get("display") or spec
             row["services"].append({"id": key, "label": spec.get("label") or key,
                                     "key": independent.service_key(row["id"], key) if row["id"] else key,
                                     "role": "seed" if key in (prepared.get(row["id"]) or {}).get("oneshots", []) else display.get("role"),
-                                    "on": bool(row["id"]),
+                                    "on": True,
                                     "ports": sorted({str(port) for port in ports}), "containers": actual,
                                     "image": spec.get("image", ""), "tag": display.get("tag", ""), "built": bool(display.get("built")),
                                     "state": {"key": "absent" if not status else "running" if status == "running" else
@@ -451,11 +449,11 @@ def listing(project, fresh=False, playground=None, available=True):
         row["ports"] = sorted({port for service in row["services"] for port in service["ports"]})
         row["running"] = sum(c["state"] in runtime_storage.RUNNING for c in row["containers"])
         row["state"] = "Unavailable" if not available else "Running" if row["running"] else "Stopped" if row["prepared"] else "Not started"
-        row["volume_bytes"] = sum(usage["volumes"][v["name"]] for v in row["volumes"]) if not row["problem"] and all(
+        row["volume_bytes"] = sum(usage["volumes"][v["name"]] for v in row["volumes"]) if measure and not row["problem"] and all(
             usage["volumes"].get(v["name"]) is not None for v in row["volumes"]) else None
         each = [samples.get(c["name"]) for c in row["containers"] if c["state"] == "running"]
-        row["cpu_percent"] = round(sum(s["cpu_percent"] for s in each), 1) if all(s is not None for s in each) else None
-        row["memory_bytes"] = sum(s["memory_bytes"] for s in each) if all(s is not None for s in each) else None
+        row["cpu_percent"] = round(sum(s["cpu_percent"] for s in each), 1) if measure and all(s is not None for s in each) else None
+        row["memory_bytes"] = sum(s["memory_bytes"] for s in each) if measure and all(s is not None for s in each) else None
         row["volumes"] = [{"name": v["name"], "bytes": usage["volumes"].get(v["name"])} for v in row["volumes"]]
         row["containers"] = [{key: c[key] for key in ("name", "service", "state", "ports")} for c in row["containers"]]
         if not available:

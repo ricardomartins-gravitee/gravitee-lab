@@ -1,9 +1,9 @@
 // Images: the version of every component and, for the Gravitee ones, the registry it comes from.
 // Changes are a draft until they are saved.
 
-import { $, esc, icon, setHTML, loading, ago, compareVersions, api, store, drafts, recall, remember, VARIANTS, ofPlatform, bareTag } from "../core.js";
+import { $, esc, icon, setHTML, loading, ago, compareVersions, api, store, router, drafts, recall, remember, VARIANTS, ofPlatform, bareTag } from "../core.js";
 import { toast, emptyHtml, applyBadge, dockerDown, paintProgress, paintBusy, refocus, actionButton,
-  paintActions, statusHtml, noteBadge, progressBar, setOff } from "../components/ui.js";
+  paintActions, statusHtml, noteBadge, progressBar, setOff, confirmEffects, planRows } from "../components/ui.js";
 import { runJob, runPlatform, busy, confirmApply, savedOnly } from "../activity/jobs.js";
 import { Combo } from "../components/combo.js";
 
@@ -24,6 +24,10 @@ let stale = true;       // to be read again: the page opens, or a job ended
 let ended = null;       // the last job seen ended
 let target = null;      // the component an address names (#/images/APIM_VERSION), shown once the components are read
 let reading = false;    // the components are being read: what is drawn meanwhile is what was read before
+let sandbox = null, requested = 0;
+const sandboxName = () => store.state?.runtime_scopes?.[sandbox]?.name || "Sandbox";
+const imagesPath = (id = sandbox) => id ? `/api/runtimes/${id}/images` : "/api/images";
+const jobKey = () => sandbox ? `playground:${sandbox}` : "platform";
 
 // The value a variable has in its .env (its default when it has none), the value of the draft, and what a value
 // gives once the ${VARIABLE} references it holds are followed
@@ -35,7 +39,7 @@ function resolve(value, depth = 0) {
   return value.replace(/\$\{(\w+)\}/g, (_, key) => resolve(valueOf(key), depth + 1));
 }
 const verOf = (c) => resolve(valueOf(c.version_key));
-const regOf = (c) => (c.kind === "gravitee" ? resolve(valueOf(c.registry_key)) : null);
+const regOf = (c) => (c.registry_key ? resolve(valueOf(c.registry_key)) : null);
 // A component follows another one when its version is the reference to that one's; its registry follows too when
 // it is the reference to that one's registry
 const followOf = (c) => c.follows.find((f) => f.version === valueOf(c.version_key));
@@ -55,8 +59,8 @@ const registryName = (registry) => images.registries.find((r) => r.value === reg
 const nameOf = (image) => image.replace(/^docker\.io\/(library\/)?/, "").replace(/:[^:/]+$/, "");
 // What owns a component, as the state holds it and names its progress: a group of the platform, an add-on or a
 // playground
-const ownerKey = (c) => `${c.owner.kind === "platform" ? "group" : c.owner.kind}:${c.owner.id}`;
-const ownerOf = (c) => (c.owner.kind === "platform" ? store.state.platform.groups.find((g) => g.id === c.owner.id)
+const ownerKey = (c) => sandbox ? jobKey() : `${c.owner.kind === "platform" ? "group" : c.owner.kind}:${c.owner.id}`;
+const ownerOf = (c) => sandbox ? store.item("playground", sandbox) : (c.owner.kind === "platform" ? store.state.platform.groups.find((g) => g.id === c.owner.id)
   : store.item(c.owner.kind, c.owner.id));
 
 function set(key, value) {
@@ -71,11 +75,11 @@ const dirty = () => Object.keys(draft).length > 0;
 
 // The image a component runs changes: its version, or the registry of a Gravitee one, once references are followed.
 // A link to another component that gives the same image changes what .env says, not what runs.
-const regChanged = (c) => c.kind === "gravitee" && regOf(c) !== c.registry_resolved;
+const regChanged = (c) => !!c.registry_key && regOf(c) !== c.registry_resolved;
 const imageChanged = (c) => verOf(c) !== c.version_resolved || regChanged(c);
 
 function isChanged(c) {
-  const raw = valueOf(c.version_key) !== c.version || (c.kind === "gravitee" && valueOf(c.registry_key) !== c.registry);
+  const raw = valueOf(c.version_key) !== c.version || (c.registry_key && valueOf(c.registry_key) !== c.registry);
   return raw || imageChanged(c);
 }
 
@@ -91,7 +95,7 @@ const behind = (c) => !c.running.every((i) => c.configured.includes(i)) || c.ser
 // the one saved
 const reasonOf = (c) => [...new Set(c.services.map((name) => store.service(name))
   .filter((service) => service?.behind && service.note_apply).map((service) => service.note_title))].join(" ")
-  || "The saved image differs from the one that runs.";
+  || (sandbox && c.running.length ? `Running ${c.running.join(", ")}. Saved ${c.configured.join(", ")}.` : "The saved image differs from the one that runs.");
 // ... and as the causes its popover draws, each once across the services of the component
 function causesOf(c) {
   const found = new Map();
@@ -100,20 +104,21 @@ function causesOf(c) {
   }
   return [...found.values()];
 }
-const tagsKey = (c) => `${c.id}:${regOf(c) ?? ""}`;
+const tagsKey = (c) => `${sandbox || ""}:${c.id}:${regOf(c) ?? ""}`;
 
 // The tags of a component on its registry, read again once old (load). A registry that does not answer is asked again
 // the next time, and the list it gave before stays.
 async function tagsOf(c) {
   const key = tagsKey(c);
   if (!tags[key] || tags[key].old) {
-    const registry = c.kind === "gravitee" ? `&registry=${encodeURIComponent(regOf(c))}` : "";
+    const id = sandbox, path = id ? `/api/runtimes/${id}/image-tags` : "/api/tags";
+    const registry = c.registry_key ? `&registry=${encodeURIComponent(regOf(c))}` : "";
     try {
-      tags[key] = await api(`/api/tags?component=${encodeURIComponent(c.id)}${registry}`);
+      tags[key] = await api(`${path}?component=${encodeURIComponent(c.id)}${registry}`);
     } catch (err) {
       return tags[key] || { error: err.message };
     }
-    draw();   // the row says when its tag is not among them
+    if (sandbox === id) draw();   // the row says when its tag is not among them
   }
   return tags[key];
 }
@@ -161,7 +166,7 @@ function status(c) {
   if (changed && !imageChanged(c)) html = pill("warn", followOf(c) ? "Will link" : "Will unlink");
   else if (changed && tagMissing(c)) html = pill("warn", "Will change") + note("Tag not listed", "warn");
   else if (changed) html = pill("warn", "Will change") + note(`from ${c.version_resolved}${regChanged(c) ? ` (${c.registry_resolved})` : ""}`);
-  else if (store.progress(key) !== null) {
+  else if (store.progress(key) !== null && ownerOf(c)?.state) {
     const { key: dot, label } = ownerOf(c).state;
     html = statusHtml(dot, label, { extra: progressBar(key) });
   } else if (!c.enabled && !c.running.length) html = statusHtml("off", "Off", { quiet: true, tip: [`${ownerOf(c).name} is off`] });
@@ -178,7 +183,7 @@ function status(c) {
 // A Gravitee component chooses its registry in a field, as its version: one that follows another component's says whose it is
 // after it (a registry chosen there is its own from then on, as a tag of its own is for a version)
 function registryCell(c) {
-  if (c.kind !== "gravitee") return `<span class="field-text source-label">${esc(c.source)}</span>`;
+  if (!c.registry_key) return `<span class="field-text source-label">${esc(c.source)}</span>`;
   const follow = followOf(c), registry = regOf(c), shared = sharesRegistry(c, follow) ? follow : null;
   return `<button class="combo-btn ${valueOf(c.registry_key) !== c.registry ? "changed" : ""}" data-registry data-tip="${fieldTip(registry, shared)}">
     <span class="source-label">${esc(registryName(registry))}</span>${shared ? sameAs(shared) : ""}${icon("chevron")}</button>`;
@@ -216,7 +221,7 @@ function band(id, label, hidden, { sub = false, plain = false } = {}) {
 function sections(shown, q) {
   const of = (id) => shown.filter((c) => sectionOf(c) === id);
   const platform = of("platform"), addons = of("addons"), third = of("third");
-  const name = store.state.platform.name;
+  const name = sandbox ? sandboxName() : store.state.platform.name;
   let html = "";
   if (platform.length || addons.length) {
     html += band("platform", name, [...platform, ...addons], { plain: !!q });
@@ -277,13 +282,14 @@ function reveal(c) {
 // on the platform's, where they apply.
 function renderActions() {
   const changed = dirty(), wait = store.wait(), idle = changed && !restarted().length;
-  const why = wait || (!changed ? "No changes" : idle ? "No running container changes" : "");
+  const needed = sandbox && images?.components.some(behind);
+  const why = wait || (needed ? "" : !changed ? "No changes" : idle ? "No running container changes" : "");
   const title = "Save, then recreate the containers that changed";
   $("#images-unsaved").hidden = !changed;
   setOff($("#images-discard"), !changed, "No changes");
-  setHTML($("#images-save-slot"), actionButton({ key: "images", verb: "save", label: "Save",
-    attrs: `id="images-save" ${changed ? 'data-tip="Write .env only"' : 'aria-disabled="true" data-why="No changes"'}` }));
-  setHTML($("#images-apply-slot"), actionButton({ key: "platform", verb: ["apply", "save"],
+  setHTML($("#images-save-slot"), actionButton({ key: sandbox ? `images:${sandbox}` : "images", verb: "save", label: "Save",
+    attrs: `id="images-save" ${changed ? `data-tip="${sandbox ? "Save sandbox versions" : "Write .env only"}"` : 'aria-disabled="true" data-why="No changes"'}` }));
+  setHTML($("#images-apply-slot"), actionButton({ key: jobKey(), verb: ["apply", "save"],
     label: changed ? "Save & apply" : "Apply", icon: "apply", cls: "primary",
     attrs: `id="images-apply" ${why ? `aria-disabled="true" data-why="${esc(why)}"` : `data-tip="${title}"`}` }));
   paintActions($("#images-actions"));
@@ -302,7 +308,7 @@ const changes = () => ({ label: "Changes", items: images.components.filter(isCha
 // then its tags that move, its releases and its builds, those Docker holds marked "Pulled", in one column. Another tag can be
 // typed.
 function pickTag(button, c) {
-  const follow = followOf(c), image = c.kind === "gravitee" ? `${regOf(c)}/${c.repository}` : nameOf(c.configured[0]);
+  const follow = followOf(c), image = c.registry_key ? `${regOf(c)}/${c.repository}` : nameOf(c.configured[0]);
   // A tag built on a given system opens on the tags built on the same one
   const built = variantOf(verOf(c));
   let listed = [], pulled = new Set(), variants = new Set(), variant = built === "default" ? "all" : built;
@@ -414,14 +420,18 @@ async function loadRegistry() {
 const login = (host) => runJob(() => api("/api/registry/login", { host }), { key: `registry:${host}`, verb: "login" });
 
 async function load() {
-  loadRegistry();
+  const turn = ++requested;
+  if (!sandbox) loadRegistry();
   // The tags listed and those Docker holds are asked again too: a job may have pulled one, and a registry gets new ones.
   // A row judges its tag by the list it had until the new one comes
   for (const list of Object.values(tags)) list.old = true;
   reading = true;
   try {
-    images = await api("/api/images");
+    const found = await api(imagesPath());
+    if (turn !== requested) return;
+    images = found;
   } catch (err) {
+    if (turn !== requested) return;
     reading = false;
     if (images) toast(err.message, true);
     else setHTML($("#images-empty"), `<span class="err-text">${esc(err.message)}</span>`);
@@ -436,6 +446,7 @@ async function load() {
 // server counts it with the draft: when it is nothing, Save & apply only saves, and says why. With nothing unsaved,
 // Apply is the platform's, which says first what it restarts.
 async function save(apply) {
+  if (sandbox) return saveSandbox(apply);
   if (apply && !dirty()) return runPlatform("apply");
   const sent = { ...draft };
   let applying = false, said = "Saved";
@@ -463,6 +474,45 @@ async function save(apply) {
   }
 }
 
+async function saveSandbox(apply) {
+  const id = sandbox, path = imagesPath(id), key = jobKey(), sent = { ...draft };
+  const clear = () => {
+    for (const [field, tag] of Object.entries(sent)) if (draft[field] === tag) delete draft[field];
+    draw();
+  };
+  try {
+    if (apply) {
+      const plan = await busy(key, "save", api(path, { values: sent, check: true }), { quiet: true });
+      if (sandbox !== id) return;
+      if (plan.runs) {
+        const title = `${dirty() ? "Save & apply" : "Apply"} to ${sandboxName()}`;
+        if (!(await confirmEffects(title, [...(dirty() ? [changes()] : []), ...planRows(plan)], dirty() ? "Save & apply" : "Apply"))) return;
+        await runJob(async () => {
+          const job = await api(path, { values: sent, apply: true, fingerprint: plan.fingerprint });
+          if (sandbox === id) clear();
+          return job;
+        }, { key, verb: "apply" });
+        return;
+      }
+      if (!dirty()) return;
+    }
+    const found = await busy(`images:${id}`, "save", api(path, { values: sent }));
+    if (sandbox === id) { images = found; clear(); }
+    toast(apply ? "Saved: applied on next start" : "Saved");
+    store.refresh();
+  } catch (err) { toast(err.message, true); }
+}
+
+function chooseSandbox(button) {
+  const scopes = Object.values(store.state?.runtime_scopes || {});
+  Combo.open(button, { plain: true, current: sandbox || "shared",
+    groups: (query) => [{ label: "", items: [{ value: "shared", name: "Shared Lab" },
+      ...scopes.map((scope) => ({ value: scope.id, name: scope.name, meta: scope.playground_name }))].filter(
+        (item) => `${item.name} ${item.meta || ""}`.toLowerCase().includes(query)) }],
+    choose: (value) => router.go(value === "shared" ? "#/images" : `#/images/sandbox/${encodeURIComponent(value)}`),
+  });
+}
+
 function init(section) {
   section.innerHTML = `
     <div class="page-head">
@@ -475,6 +525,12 @@ function init(section) {
       </div>
     </div>
 
+    <div class="container-context">
+      <span id="images-scope-label">Show images for</span>
+      <button class="combo-btn" id="images-scope" aria-labelledby="images-scope-label images-scope-value" aria-haspopup="dialog">
+        <span id="images-scope-value">Shared Lab</span>${icon("chevron")}
+      </button>
+    </div>
     <div class="card list-card">
       <div class="list-tools">
         <label class="search grow">${icon("search")}<input id="images-search" type="search" placeholder="Search…" aria-label="Search the images" autocomplete="off"></label>
@@ -507,10 +563,11 @@ function init(section) {
       $("#images-search").value = "";
       onlyRunning = false;
       draw();
-    } else if ("version" in b.dataset) pickTag(b, componentOf(b));
+    } else if (b.id === "images-scope") chooseSandbox(b);
+    else if ("version" in b.dataset) pickTag(b, componentOf(b));
     else if ("registry" in b.dataset) pickRegistry(b, componentOf(b));
     else if (b.dataset.login) login(b.dataset.login);
-    else if (b.id === "images-pull") runJob(() => api("/api/stack/pull", {}), { key: "platform", verb: "pull" });
+    else if (b.id === "images-pull" && !sandbox) runJob(() => api("/api/stack/pull", {}), { key: "platform", verb: "pull" });
     else if (b.id === "images-discard") discard();
     else if (b.id === "images-save" || b.id === "images-apply") save(b.id === "images-apply");
     else if ("fold" in b.dataset) {
@@ -525,15 +582,28 @@ function init(section) {
 
 export const imagesPage = {
   id: "images",
-  pattern: /^#\/images(?:\/(\w+))?$/,   // #/images/<version variable> opens at that component
+  pattern: /^#\/images(?:\/(?:(\w+)|sandbox\/([^/]+)))?$/,   // Shared component links still open their version picker
   nav: "images",
   title: "Images",
   init,
-  show([id]) {
+  show([id, runtime]) {
+    const next = runtime ? decodeURIComponent(runtime) : null;
+    if (sandbox !== next) {
+      sandbox = next;
+      images = null;
+      draft = {};
+      setHTML($("#images-rows"), "");
+      $("#images-empty").hidden = false;
+      setHTML($("#images-empty"), loading("Loading"));
+      renderActions();
+    }
     stale = true;
     target = id || null;
   },
   render(state) {
+    $("#images-scope-value").textContent = sandbox ? sandboxName() : "Shared Lab";
+    $("#images-pull").hidden = !!sandbox;
+    if (sandbox) $("#images-registry").hidden = true;
     // A job may have pulled images, recreated containers or logged in to a registry
     if (state.job?.done && state.job.id !== ended) { ended = state.job.id; stale = true; }
     if (stale) { stale = false; load(); }

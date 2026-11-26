@@ -25,6 +25,7 @@ from ..library import layers, model, plugins, runtime_settings, tested
 from . import service as catalog_service, standalone
 
 FOLDER = ".lab/runtimes"
+VERSIONS = "x-gravitee-sandbox-versions"
 LOCK = threading.RLock()
 LOCAL_URL = re.compile(r"(?P<host>https?://(?:localhost|127\.0\.0\.1)):(?P<port>\d+)(?!\d)")
 
@@ -50,6 +51,18 @@ def read(pid):
         raise ValueError("The sandbox record cannot be read") from error
     if not isinstance(value, dict) or type(value.get("schema")) is not int or value.get("schema") != 1 or value.get("id") != runtime_settings.key(pid) or value.get("project") != name(pid):
         raise ValueError("The sandbox record does not match this sandbox")
+    if (file.parent / "compose.json").is_file():
+        config = _configuration(pid)
+        versions = config.get(VERSIONS, {})
+        for key, tag in versions.items():
+            if key in value["services"] and key in config["services"]:
+                service = value["services"][key]
+                service["image"] = config["services"][key]["image"]
+                service.setdefault("display", {})["tag"] = tag
+        proof = value.get("tested") or {}
+        for variable, key in proof.get("services", {}).items():
+            if key in versions:
+                proof["versions"][variable] = versions[key]
     return value
 
 
@@ -140,13 +153,21 @@ def _mount(source, target, empty=False, refresh=False):
         _copy(source, target)
 
 
-def _requirements(gathered):
+def image_reference(record, key, image):
+    """The captured registry reference behind a clone's private alias."""
+    if image == f"{record['project']}/{key}:clone":
+        return (record.get("snapshot") or {}).get("references", {}).get(key)
+    return image
+
+
+def _requirements(gathered, versions):
     required = (gathered["unit"].get("requires") or {}).get("images") or {}
     if required:
         for component in images.components(gathered["found"]):
             wanted = required.get(component["id"])
             if wanted:
-                actual = gathered["found"]["services"][component["services"][0]]["tag"]
+                key = component["services"][0]
+                actual = versions.get(key, gathered["found"]["services"][key]["tag"])
                 if not layers.enough(gathered["unit"], component["id"], actual, wanted):
                     raise ValueError(f"Choose {component['id']} {wanted} or later on Images before preparing this sandbox")
     units = {uid: gathered.get("units", {}).get(kind, {}).get(uid, gathered["unit"] if uid == gathered["unit"]["id"] else {})
@@ -158,11 +179,21 @@ def _requirements(gathered):
 
 def _config(pid, gathered, previous, dry_run=False, snapshot=None):
     if snapshot is None:
-        _requirements(gathered)
+        versions = _configuration(pid).get(VERSIONS, {}) if previous and (folder(pid) / "compose.json").is_file() else {}
+        _requirements(gathered, versions)
         config = compose.config_json(compose.all_files([gathered["unit"]["file"]]), timeout=60)
         selected = standalone._keep(config, gathered, standalone._products(gathered))
         config["services"] = {key: value for key, value in config["services"].items() if key in selected}
         standalone._without(config["services"], set(gathered["found"]["services"]) - selected)
+        if versions:
+            kept = {}
+            for key, tag in versions.items():
+                service = config["services"].get(key, {})
+                parts = images.tagged(service.get("image"))
+                if parts and not service.get("build"):
+                    service["image"] = f"{parts[0]}:{tag}"
+                    kept[key] = tag
+            config[VERSIONS] = kept
     else:
         config = copy.deepcopy(snapshot)
     config["name"] = name(pid)
@@ -553,7 +584,7 @@ def change_plan(pid, operation):
     if operation == "apply":
         plan(pid, refresh=True)
     elif not running:
-        raise ValueError("Nothing runs")
+        raise ValueError("Start this sandbox first")
     return {"starts": [], "stops": [], "turns_off": [], "keeps": [], "independent": True,
             "restarts": [],
             "scope": "Recreates changed running containers and starts failed services" if running else "Saved settings apply at the next Start"}
@@ -580,7 +611,7 @@ def apply(pid):
         if names:
             _wait(pid, job, names)
         else:
-            job.lines.append("Nothing runs: saved settings apply at the next Start")
+            job.lines.append("Saved settings apply at the next Start")
     return JOBS.start("Apply " + _label(pid), [run], key=f"playground:{pid}", verb="apply",
                       changes={"start": [["playground", pid]]})
 
@@ -591,10 +622,12 @@ def update(pid):
         value = read(pid)
         names = _running(pid, value)
         if not names:
-            raise JobFailed("Nothing runs")
+            raise JobFailed("Start this sandbox first")
         config = _configuration(pid)
         snapshot = value.get("snapshot") or {}
-        references = snapshot.get("references") or {}
+        references = {key: ref for key, ref in (snapshot.get("references") or {}).items()
+                      if key not in config.get(VERSIONS, {}) or key not in config["services"]
+                      or config["services"][key]["image"].startswith(name(pid) + "/")}
         # Clones own their image aliases. Refresh those aliases from their configured references;
         # never retag another runtime's image or substitute today's Shared configuration.
         if any(not config["services"][key]["image"].startswith(name(pid) + "/")
@@ -610,10 +643,10 @@ def update(pid):
             if not service:
                 continue
             job.exec(["docker", "image", "tag", reference, service["image"]])
-        if not references:
-            pulls = [key for key, service in config["services"].items() if not service.get("build") and service.get("pull_policy") != "never"]
-            if pulls:
-                job.exec(command(pid, "pull", "--ignore-buildable", "--ignore-pull-failures", *pulls))
+        direct = [key for key, service in config["services"].items()
+                  if key not in references and not service.get("build") and service.get("pull_policy") != "never"]
+        if direct:
+            job.exec(command(pid, "pull", "--ignore-buildable", "--ignore-pull-failures", *direct))
         job.exec(command(pid, "up", "-d", "--no-deps", "--build", *names))
         _wait(pid, job, names)
     return JOBS.start("Update " + _label(pid), [run], key=f"playground:{pid}", verb="update",
@@ -626,7 +659,7 @@ def restart(pid):
         raise ValueError("Start this sandbox first")
     names = _running(pid, value)
     if not names:
-        raise ValueError("Nothing runs")
+        raise ValueError("Start this sandbox first")
     return JOBS.start("Restart " + _label(pid), [command(pid, "restart", *names)], key=f"playground:{pid}", verb="restart")
 
 

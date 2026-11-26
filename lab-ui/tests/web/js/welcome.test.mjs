@@ -135,7 +135,7 @@ test("Continue keeps This machine and moves on at once to the start, which says 
   await settle();
   assert.deepEqual(calls.filter((call) => call.path === "/api/core").map((call) => call.body), [{ place: "machine" }]);
   assert.equal(step("core").getAttribute("data-state"), "done");
-  assert.equal(heading(), "Your platform is running");
+  assert.equal(heading(), "Shared platform running");
   const items = body.querySelectorAll(".start-item");
   assert.deepEqual(items.map((item) => item.querySelectorAll(".start-text > *").map(text)), [["Gamma Console", "admin / admin"], ["AM Console", "admin / adminadmin"]],
     "the platform's current consoles, product by product: an add-on's is not one, the older ones are on the Dashboard");
@@ -182,7 +182,7 @@ test("a stopped platform is started from the start, which stays open and follows
   assert.deepEqual(actions().querySelectorAll(".btn").map(text), ["Back", "Done", "Show output", "Try again"]);
   store.state = { ...store.state, platform: platform("running"), job: { id: "j2", for: "platform", verb: "start", done: true, ok: true } };
   store.notify();
-  assert.equal(heading(), "Your platform is running");
+  assert.equal(heading(), "Shared platform running");
   assert.equal(step("start").getAttribute("data-state"), "done");
 });
 
@@ -271,7 +271,7 @@ test("the layers on top of the platform say they come from a catalog, and the co
 test("the pages it points to are the Library's and the Catalogs, each leading to its page", () => {
   const rows = body.querySelectorAll(".pairs > div").map((one) => [text(one.querySelector("dt")), one.querySelectorAll("a").map((a) => a.getAttribute("href"))]);
   assert.deepEqual(rows, [["Dashboard", ["#/dashboard"]], ["Library", ["#/playgrounds", "#/setups", "#/addons"]], ["Catalogs", ["#/catalogs"]],
-    ["Monitor", ["#/containers", "#/logs"]], ["Configure", ["#/images", "#/plugins"]]]);
+    ["Monitor", ["#/containers", "#/sandboxes", "#/logs"]], ["Configure", ["#/images", "#/plugins"]]]);
 });
 
 test("with the catalogs there, the foot of the start is what it always was: Back, and Discover the playgrounds that works", async () => {

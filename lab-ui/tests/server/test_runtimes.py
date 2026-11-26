@@ -131,13 +131,19 @@ class RuntimeState(Case):
                               "snapshot": {"images": {"db": "sha256:captured"}, "references": {"db": "store:1"}}}),
                    ("local/orphan", {"active": False, "label": "Orphan", "services": {}})]
         self.patch(runtimes.runtime_storage, "known", return_value=(records, []))
-        self.patch(runtimes.storage, "usage", return_value={"volumes": {"own-volume": 200}, "shared": [{"kind": "Images", "bytes": 9000}]})
+        usage = self.patch(runtimes.storage, "usage", return_value={"volumes": {"own-volume": 200}, "shared": [{"kind": "Images", "bytes": 9000}]})
         self.patch(runtimes.storage, "resources", return_value={"containers": [], "volumes": [], "networks": []})
         private = {"resources": {"containers": [], "volumes": [{"name": "own-volume"}], "networks": []},
                    "local": {"bytes": 100}, "error": None, "running": False}
-        self.patch(runtimes.runtime_storage, "inventory", return_value=private)
-        self.patch(runtimes.storage, "load", return_value={})
-        result = runtimes.listing(self.project)
+        inventory = self.patch(runtimes.runtime_storage, "inventory", return_value=private)
+        stats = self.patch(runtimes.storage, "load", return_value={})
+        quick = runtimes.listing(self.project)
+        self.assertEqual({row["id"] for row in quick["runtimes"]}, {self.rid, "local/orphan"})
+        self.assertTrue(all(row["volume_bytes"] is None for row in quick["runtimes"]))
+        self.assertTrue(all(call.kwargs == {"measure": False} for call in inventory.call_args_list))
+        usage.assert_not_called()
+        stats.assert_not_called()
+        result = runtimes.listing(self.project, measure=True)
         rows = {row["id"]: row for row in result["runtimes"]}
         self.assertEqual(rows[self.rid]["images"], [{"service": "db", "id": "sha256:captured", "reference": "store:1"}])
         self.assertEqual(rows[self.rid]["volume_bytes"], 200)

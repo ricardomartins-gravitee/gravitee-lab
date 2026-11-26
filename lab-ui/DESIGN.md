@@ -359,12 +359,12 @@ Every page and dialog does the same thing the same way. Before adding a piece, f
     "Running" for an item ("Healthy" is a container's word).
   - On and off are turned ("Turn on", "Turn off", "Turned on at start"). What starts or stops containers says so
     ("Start", "Stop", "Starts with the platform", "Stops at start"). What runs behind what is saved says "Apply needed".
-  - The health chip names the platform ("Platform running"); it is the one place of the platform's state, on every page. One
-    order everywhere: the platform, the playground, then the add-ons.
+  - The health chip names the shared platform ("Shared platform running") on every page. When sandboxes are running,
+    their count appears underneath and links to Sandboxes. One order everywhere: the platform, the playground, then the add-ons.
   - Where a playground deploys: "Deploy to" (the picker), "Deploys to" (the last step of a dialog), "Deployed to" (the
     panel of what it created), "This machine", and a place written "Development (My Account)", the environment then the
-    platform, never with a middle dot or any bullet between them. "Platform" alone is still the core in the chip, the
-    banner and Containers; where the two meet, the core is "This machine". Cloud's own words are kept: Account Token,
+    platform, never with a middle dot or any bullet between them. The status chip calls the core "Shared platform";
+    the place picker calls it "This machine". Cloud's own words are kept: Account Token,
     Account ID, Cloud Token, environment. The token of a hybrid gateway is never named.
   - No label ends with "…", whether it asks first or not; a working face does, while nothing is measured. The title
     of a dialog is the label that was clicked, without a question mark; its button is the verb.
@@ -714,11 +714,11 @@ Platform controls remain scoped to the shared project. The private sandbox group
 resource use includes active private projects. An unreadable private record is a problem of that playground and holds
 its actions, rather than hiding the whole Lab.
 
-Sandboxes is a Configure page for instance creation, cloning and cleanup. Its table groups independent instances by
+Sandboxes is a Monitor page below Containers for instance creation, cloning and cleanup. Its table groups independent instances by
 source playground and shows state and storage, with Containers and Open sandbox links. It shares its component with
 More > Sandboxes. Shared has no duplicate management row. Storage details retain assigned ports, captured versions and
-image references. Machine-wide image and build-cache usage is shown once. `/api/runtimes` runs only while a management
-view is open; storage scans never hold the normal state stream.
+image references. Machine-wide image and build-cache usage is shown once. The inventory loads before Docker disk usage,
+private folder sizes and container statistics. Visible progress distinguishes an inventory refresh from a storage scan.
 
 Containers opens on Shared Lab, with one Show containers for picker. `#/containers/<sandbox id>` identifies an explicit private view;
 Back, Forward and reload restore that target. Opening the ordinary menu link returns to Shared. Selection changes no
@@ -814,7 +814,7 @@ its catalog have the Start or Stop of their item, as the lists' rows have.
   to a screen reader) all use it, and no state is a pill on one row and plain text on another. A word that opens a
   tooltip has no mark of its own (it is underlined while hovered or focused); no text is underlined at rest, a name least of all, so
   that no row has a link and a button side by side. A state that needs explaining has a badge with an information mark, which is a
-  tooltip: the page never shows "Apply needed", "Platform issue" or a disabled button with no reason to read.
+  tooltip: the page never shows "Apply needed", "Shared platform issue" or a disabled button with no reason to read.
   - **Three to two from 1150 px of page.** The page here is the space next to the menu (`main`, 1164 px at a 1440 px window): the
     two columns stand side by side, 1.6 to 1 (the platform's grid needs 686 px, the catalog's 438), each as high as its content and
     starting at the same line (`align-items: start`: a column that is shorter simply ends, there is no blank to fill). Under 1150 px the
@@ -838,7 +838,7 @@ its catalog have the Start or Stop of their item, as the lists' rows have.
   `stack.js`: one implementation): its title and beside it, while something runs behind what is saved, the badge "Apply needed"
   in amber, in whatever state the platform is (`applyBadge`, its popover a row for each product, add-on or playground that runs
   behind with its causes: [Behind what is saved](#behind-what-is-saved), `behindWhy`). The platform's state is not in a head: it is
-  the sidebar's chip, on every page ("Platform running", "Platform stopped", "Platform issue", "Docker is not reachable"), whose
+  the sidebar's chip, on every page ("Shared platform running", "Shared platform stopped", "Shared platform issue", "Docker is not reachable"), whose
   popover says, for an issue, a line for each group that says what is wrong ("API Management: Gateway exited (1)",
   `store.health().why`); Docker not reachable has none, as the banner above says the cause. Then at most one button, on the key `platform` with its progress, its dialogs and its refusals: Start all while the platform is stopped, Apply when
   something runs behind what is saved (the

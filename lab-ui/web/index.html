@@ -81,15 +81,18 @@
       <a class="nav-item" href="#/catalogs" data-nav="catalogs" aria-label="Catalogs" data-tip="Where items come from" data-tip-collapsed="Catalogs"><svg aria-hidden="true" focusable="false"><use href="#i-catalog"/></svg><span>Catalogs</span><i class="nav-dot" aria-hidden="true" hidden></i></a>
       <span class="nav-label">Monitor</span>
       <a class="nav-item" href="#/containers" data-nav="stack" aria-label="Containers" data-tip="Containers" data-tip-collapsed><svg aria-hidden="true" focusable="false"><use href="#i-grid"/></svg><span>Containers</span></a>
+      <a class="nav-item" href="#/sandboxes" data-nav="runtimes" aria-label="Sandboxes" data-tip="Sandboxes" data-tip-collapsed><svg aria-hidden="true" focusable="false"><use href="#i-layers"/></svg><span>Sandboxes</span></a>
       <a class="nav-item" href="#/logs" data-nav="logs" aria-label="Logs" data-tip="Logs" data-tip-collapsed><svg aria-hidden="true" focusable="false"><use href="#i-logs"/></svg><span>Logs</span></a>
       <span class="nav-label">Configure</span>
-      <a class="nav-item" href="#/sandboxes" data-nav="runtimes" aria-label="Sandboxes" data-tip="Sandboxes" data-tip-collapsed><svg aria-hidden="true" focusable="false"><use href="#i-layers"/></svg><span>Sandboxes</span></a>
       <a class="nav-item" href="#/images" data-nav="images" aria-label="Images" data-tip="Images" data-tip-collapsed><svg aria-hidden="true" focusable="false"><use href="#i-box"/></svg><span>Images</span></a>
       <a class="nav-item" href="#/plugins" data-nav="plugins" aria-label="Plugins" data-tip="Plugins" data-tip-collapsed><svg aria-hidden="true" focusable="false"><use href="#i-plug"/></svg><span>Plugins</span></a>
       <a class="nav-item" href="#/cloud" data-nav="cloud" aria-label="Gravitee Cloud" data-tip="Gravitee Cloud" data-tip-collapsed><svg aria-hidden="true" focusable="false"><use href="#i-cloud"/></svg><span>Gravitee Cloud</span></a>
     </nav>
     <div class="sidebar-foot">
       <a class="health" id="health" href="#/containers"><span class="state busy" id="health-state"><span id="health-text">Connecting</span></span></a>
+      <a class="health" id="sandbox-health" href="#/sandboxes" data-tip-collapsed hidden>
+        <span class="pill ok"><svg aria-hidden="true" focusable="false"><use href="#i-layers"/></svg><span class="pill-text" id="sandbox-health-text"></span></span>
+      </a>
       <span class="sr-only" id="health-said" role="status"></span>
       <span class="sr-only" id="job-said" role="status"></span>
       <button class="activity meter" id="activity" hidden>

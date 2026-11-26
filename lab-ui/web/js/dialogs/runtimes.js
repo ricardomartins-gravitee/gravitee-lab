@@ -73,7 +73,10 @@ export async function independentAction(item, verb) {
 }
 
 export const runtimeActionEntries = (item) => ["apply", "update"].map((verb) => {
-  const reason = store.wait(true) || (!item.runtime?.prepared ? "Start this sandbox first" : item.runtime.initialized === false ? "Start this sandbox successfully first" : verb === "update" && !item.runtime.running ? "Nothing runs" : "");
+  const { runtime } = item;
+  const reason = store.wait(true) || (!runtime?.prepared ? "Start this sandbox first"
+    : runtime.initialized === false ? "Start this sandbox successfully first"
+      : verb === "update" && !runtime.running ? "Start this sandbox first" : "");
   return { label: verb === "apply" ? "Apply" : "Update", disabled: !!reason, reason,
     onSelect: () => independentAction(item, verb) };
 });

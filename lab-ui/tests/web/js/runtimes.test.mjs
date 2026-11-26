@@ -5,13 +5,18 @@ import { Ev, installDom, reply, text, isOff, offWhy } from "./dom-stub.mjs";
 
 mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
 const calls = [];
-let payload, requirements, holdRead = null, readFailure = false;
+let payload, requirements, holdRead = null, holdStorage = null, readFailure = false, cleanupReply = null;
 const job = { id: "abcdef12", for: "playground:local/a", verb: "stop", title: "Cleanup", done: false, ok: null, phases: [], progress: null };
+const cleanupJob = { ...job, verb: "delete", title: "Delete sandbox and data" };
 const page = installDom({ fetch: async (path, options = {}) => {
   if (readFailure && !options.body && path.startsWith('/api/runtimes')) throw new Error('Offline');
-  if (!options.body && holdRead && path.startsWith("/api/runtimes")) await holdRead;
+  if (!options.body && path.startsWith("/api/runtimes")) {
+    const held = /[?&](?:storage|refresh)=1/.test(path) ? holdStorage : holdRead;
+    if (held) await held;
+  }
   const body = options.body ? JSON.parse(options.body) : null;
   calls.push({ path, body });
+  if (path.endsWith("/cleanup") && body && !body.check) return cleanupReply || reply(cleanupJob);
   const value = /\/api\/(?:playgrounds|runtimes)\/.+\/check/.test(path) ? requirements
     : path.startsWith("/api/runtimes/") && body?.check ? { fingerprint: "reviewed-resources", removes: {
     containers: ["own-app"], networks: ["own-net"], volumes: body.operation === "data" ? ["own-volume"] : [],
@@ -33,7 +38,8 @@ const privateRow = { id: "local/a", name: "Private A", mode: "independent", sele
   containers: [], volumes: [{ name: "own-volume", bytes: 100 }], local_bytes: 100, volume_bytes: 100,
   ports: ["31000"], problem: null, state: "Stopped", running: 0, active: false, memory_bytes: 0, cpu_percent: 0,
   cleanup: { containers: { enabled: true }, data: { enabled: true }, delete: { enabled: true } } };
-let root, panel;
+let root, panel, watchInventory = false;
+store.subscribe((state) => { if (watchInventory) panel.render(state); });
 async function show(rows = [privateRow], playground = null) {
   remember("runtime-expanded", "{}");
   store.state = structuredClone(base);
@@ -41,7 +47,8 @@ async function show(rows = [privateRow], playground = null) {
   store.offline = false;
   calls.length = 0;
   requirements = { checks: [], dialog: { starts: [] }, blocked: null };
-  payload = { default: "independent", runtimes: structuredClone(rows), shared_storage: [{ kind: "Images", bytes: 9000 }], problems: [] };
+  payload = { default: "independent", available: !rows.some((row) => row.state === "Unavailable"),
+    runtimes: structuredClone(rows), shared_storage: [{ kind: "Images", bytes: 9000 }], problems: [] };
   root = page.doc.createElement("section");
   page.doc.body.append(root);
   panel = runtimePanel(root, playground);
@@ -162,6 +169,19 @@ test("Apply opens its scoped confirmation before sending a change", async () => 
   close();
 });
 
+test("a stopped sandbox's Clone, Restart and Update give the same next step", async () => {
+  await show();
+  root.querySelector("[data-runtime-menu]").click();
+  const entries = page.ids.menu.querySelectorAll(".menu-item");
+  for (const label of ["Clone sandbox", "Restart", "Update"]) {
+    const item = entries.find((entry) => text(entry).startsWith(label));
+    assert.ok(isOff(item));
+    assert.match(text(item), /Start this sandbox first$/);
+  }
+  assert.ok(!isOff(entries.find((entry) => text(entry) === "Apply")));
+  close();
+});
+
 test("Start and Apply show named requirement warnings and help, and wait for confirmation", async () => {
   const { independentAction } = await import("../../../web/js/dialogs/runtimes.js");
   for (const verb of ["start", "apply"]) {
@@ -243,6 +263,75 @@ test("data deletion waits for both the exact scope and typed confirmation; cance
   close();
 });
 
+test("deletion is visible before acknowledgment and is still shown when returning during the job", async () => {
+  const sibling = { ...privateRow, id: "local/b", name: "Private B" };
+  await show([privateRow, sibling]);
+  watchInventory = true;
+  page.ids.toasts.innerHTML = "";
+  let accept;
+  cleanupReply = new Promise((resolve) => { accept = resolve; });
+  try {
+    await menu("Delete sandbox and data");
+    await choice(true);
+    page.ids["confirm-input"].value = "delete";
+    page.ids["confirm-input"].oninput();
+    assert.equal(page.ids["confirm-ok"].disabled, false);
+    page.ids.confirm.returnValue = "ok";
+    page.ids.confirm.onclose();
+    await flush();
+    const statuses = () => root.querySelectorAll(".status-word").map(text);
+    assert.deepEqual(statuses(), ["Deleting", "Stopped"]);
+    assert.ok(isOff(root.querySelector("[data-runtime-act]")));
+    assert.ok(isOff(root.querySelector("[data-runtime-menu]")));
+    assert.doesNotMatch(text(page.ids.toasts), /Cleanup started/);
+    store.state.job = cleanupJob;
+    accept(reply(cleanupJob));
+    await flush();
+    mock.timers.tick(600);
+    await flush();
+    assert.match(text(page.ids.toasts), /Cleanup started for Private A/);
+    assert.equal(text(page.ids["job-title"]), "Delete sandbox and data");
+    assert.equal(store.pending.has(cleanupJob.for), false);
+
+    panel.hide();
+    panel.show();
+    await flush();
+    assert.deepEqual(statuses(), ["Deleting", "Stopped"]);
+    payload.runtimes = [sibling];
+    store.state.playgrounds = [];
+    store.state.job = { ...cleanupJob, done: true, ok: true };
+    store.notify();
+    await flush();
+    assert.deepEqual(statuses(), ["Stopped"]);
+    assert.doesNotMatch(text(root), /Private A/);
+  } finally {
+    cleanupReply = null;
+    watchInventory = false;
+    close();
+  }
+});
+
+test("a refused cleanup restores its row and shows the refusal", async () => {
+  await show();
+  watchInventory = true;
+  page.ids.toasts.innerHTML = "";
+  cleanupReply = reply({ error: "The sandbox changed after the preview" }, 409);
+  try {
+    await menu("Delete containers, keep data");
+    await choice(true);
+    mock.timers.tick(600);
+    await flush();
+    assert.equal(text(root.querySelector(".status-word")), "Stopped");
+    assert.ok(!isOff(root.querySelector("[data-runtime-menu]")));
+    assert.match(text(page.ids.toasts), /The sandbox changed after the preview/);
+    assert.doesNotMatch(text(page.ids.toasts), /Cleanup started/);
+  } finally {
+    cleanupReply = null;
+    watchInventory = false;
+    close();
+  }
+});
+
 test("a completed cleanup refreshes the inventory, and Refresh storage requests fresh sizes", async () => {
   await show();
   panel.render(store.state);
@@ -273,18 +362,41 @@ test("Containers can open before the initial Lab state arrives", async () => {
 });
 
 
-test("management controls wait for an inventory refresh and become usable again", async () => {
+test("returning to cached rows visibly refreshes sandbox information", async () => {
   await show();
   let release;
   holdRead = new Promise((resolve) => { release = resolve; });
-  root.querySelector("[data-runtime-refresh]").click();
+  panel.hide();
+  panel.show();
+  await flush();
+  assert.match(text(root), /Refreshing sandboxes/);
+  assert.match(text(root), /Private A/);
   assert.ok(isOff(root.querySelector("[data-runtime-act]")));
-  assert.ok(!isOff(root.querySelector("[data-runtime-menu]")), "navigation remains available during storage reads");
+  assert.ok(!isOff(root.querySelector("[data-runtime-menu]")), "navigation remains available during inventory reads");
   release();
   holdRead = null;
   await flush();
+  assert.doesNotMatch(text(root), /Refreshing sandboxes/);
   assert.ok(!isOff(root.querySelector("[data-runtime-act]")));
   assert.ok(!isOff(root.querySelector("[data-runtime-menu]")));
+  close();
+});
+
+test("storage measurements show progress without holding sandbox rows or their actions", async () => {
+  let release;
+  holdStorage = new Promise((resolve) => { release = resolve; });
+  await show();
+  assert.match(text(root), /Private A/);
+  assert.match(text(root), /Reading storage/);
+  assert.ok(!isOff(root.querySelector("[data-runtime-act]")));
+  assert.ok(!isOff(root.querySelector("[data-runtime-menu]")));
+  assert.ok(isOff(root.querySelector("[data-runtime-refresh]")));
+  release();
+  holdStorage = null;
+  await flush();
+  assert.doesNotMatch(text(root), /Reading storage/);
+  assert.match(text(root), /Images: 9 kB/);
+  assert.ok(!isOff(root.querySelector("[data-runtime-refresh]")));
   close();
 });
 
@@ -334,7 +446,8 @@ test("the More popup follows jobs only while open and reopening targets the chos
   await flush();
   assert.match(text(dialog), /Source B/);
   assert.match(text(dialog), /Only B/);
-  assert.equal(calls.at(-1).path, "/api/runtimes?playground=local%2Fb");
+  assert.deepEqual(calls.slice(-2).map(({ path }) => path),
+    ["/api/runtimes?playground=local%2Fb", "/api/runtimes?playground=local%2Fb&storage=1"]);
   dialog.querySelector("[data-runtime-menu]").click();
   const escape = new Ev("keydown", { key: "Escape", cancelable: true });
   page.doc.dispatchEvent(escape);

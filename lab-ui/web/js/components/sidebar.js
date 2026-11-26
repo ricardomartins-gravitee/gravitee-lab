@@ -55,12 +55,9 @@ export function initSidebar() {
   });
 }
 
-// The one place of the platform's state on every page: the state chip of the sidebar, which leads to Containers. Its words are its
-// tooltip, which the collapsed menu needs; an issue's popover says what each group has. A screen reader hears it change.
+// The shared platform status leads to Containers. Running sandboxes have their own count and link below it.
 function renderHealth() {
-  const state = store.health(), { tone, title, why = [] } = state, health = $("#health");
-  const runtimeView = router.current?.page.id === "runtimes" || router.current?.page.id === "stack" && router.current.params?.[0];
-  const text = runtimeView ? state.text.replace(/^Platform /, "Shared ") : state.text;
+  const { tone, text, title, why = [] } = store.health(), health = $("#health");
   $("#health-state").className = `state ${tone}`;
   $("#health-text").textContent = text;
   health.dataset.tip = title ? `${text}: ${title}` : text;
@@ -68,7 +65,16 @@ function renderHealth() {
   health.toggleAttribute("data-tip-collapsed", !title && !why.length);   // its words alone: a tooltip only while the menu shows icons
   if (why.length) health.dataset.tipCard = JSON.stringify({ title: text, rows: [{ lines: why.map((line) => [line]) }] });
   else delete health.dataset.tipCard;
-  if ($("#health-said").textContent !== text) $("#health-said").textContent = text;
+  const state = store.state, sandboxes = $("#sandbox-health");
+  const running = store.offline || store.error || state?.docker.error ? 0
+    : Object.values(state?.runtime_scopes || {}).filter((scope) => scope.running).length;
+  const summary = running ? `${running} ${running === 1 ? "sandbox" : "sandboxes"} running` : "";
+  sandboxes.hidden = !summary;
+  $("#sandbox-health-text").textContent = summary;
+  sandboxes.dataset.tip = summary;
+  sandboxes.setAttribute("aria-label", summary);
+  const spoken = summary ? `${text}. ${summary}` : text;
+  if ($("#health-said").textContent !== spoken) $("#health-said").textContent = spoken;
 }
 
 // A file that could not be read, and why; one the editor opens is a link to it

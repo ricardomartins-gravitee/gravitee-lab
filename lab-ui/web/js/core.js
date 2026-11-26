@@ -250,7 +250,7 @@ export const store = {
     const { key, label } = platform.state, moving = key === "starting" || key === "stopping";
     const why = key === "issue" ? platform.groups.filter((g) => g.note && !g.note_apply && ["err", "warn"].includes(g.note_tone))
       .map((g) => `${g.name}: ${g.note}`) : [];
-    return { tone: `${TONE[key] || ""}${moving ? " busy" : ""}`, text: `Platform ${label.toLowerCase()}`, why };
+    return { tone: `${TONE[key] || ""}${moving ? " busy" : ""}`, text: `Shared platform ${label.toLowerCase()}`, why };
   },
 
   // How far something is, from 0 to 1; null when nothing measures it, or while the Lab UI does not answer.

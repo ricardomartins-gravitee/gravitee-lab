@@ -12,8 +12,8 @@ from unittest.mock import Mock
 
 from lab_ui import paths
 from lab_ui.library import runtime_settings
-from lab_ui.catalogs import independent, standalone
-from lab_ui.docker import compose, seed_image
+from lab_ui.catalogs import independent, runtime_images, standalone
+from lab_ui.docker import compose, images, seed_image
 from tests import Case
 
 
@@ -423,6 +423,68 @@ class Independent(Case):
         self.assertNotIn("a-seed", commands[-1])
         self.assertEqual((independent.folder("local/a") / "compose.json").read_bytes(), before)
 
+    def test_sandbox_images_save_and_apply_target_only_the_selected_running_components(self):
+        runtime_settings.initialize(["local/a"])
+        pid = runtime_settings.create("local/a", "Image test")["id"]
+        sibling = runtime_settings.create("local/a", "Keep")["id"]
+        project = {"playgrounds": {"local/a": self.inputs["local/a"][1]["unit"]}, "addons": {},
+                   "groups": [{"id": "databases", "name": "Databases"}], "services": {
+                       "db": {"raw_image": "redis:${REDIS_VERSION:-8}", "image_tags": None, "label": "Redis",
+                              "owner": {"id": "databases", "kind": "platform", "name": "Databases"}},
+                       "a-app": {"raw_image": "fixture/app:${APP_VERSION:-local}", "image_tags": None, "label": "App",
+                                 "owner": {"id": "local/a", "kind": "playground", "name": "a"}}}}
+        first = independent.prepare(pid)
+        independent.prepare(sibling)
+        first.update(initialized=True, snapshot={"references": {"db": "redis:8"}, "local": ["a-app"]})
+        independent._write(independent.folder(pid) / "runtime.json", first)
+        sibling_before = self.config(sibling)
+        config = self.config(pid)
+        alias = f"{independent.name(pid)}/db:clone"
+        config["services"]["db"].update(image=alias, pull_policy="never")
+        independent._write(independent.folder(pid) / "compose.json", config)
+        self.patch(compose, "image_ids", return_value={"redis:8": "old", "redis:8.2.1": "new"})
+        rows = self.patch(independent, "containers", return_value={"db": {"State": "running", "Image": alias, "ID": "ours"},
+                                                                  "a-app": {"State": "running", "Image": "local-app"}})
+        tags = self.patch(images, "repository_tags", return_value=[{"name": "8.2.1"}])
+        self.assertEqual(runtime_images.tags(project, pid, "REDIS_VERSION")["tags"], [{"name": "8.2.1"}])
+        tags.assert_called_once_with(None, "library/redis")
+        jobs = self.patch(runtime_images, "JOBS", current=None)
+        waited = self.patch(independent, "_wait")
+        values = {"REDIS_VERSION": "8.2.1"}
+        with self.assertRaisesRegex(ValueError, "Invalid sandbox image version"):
+            runtime_images.save(project, pid, {"values": {"APP_VERSION": "8.2.1"}})
+        with self.assertRaises(paths.NotFound):
+            runtime_images.save(project, "local/a", {"values": values})
+        saved = runtime_images.save(project, pid, {"values": values})
+        self.assertEqual(len(saved["components"]), 1)
+        self.assertEqual(saved["components"][0]["configured"], ["redis:8.2.1"])
+        self.assertEqual(saved["components"][0]["running"], ["redis:8"])
+        self.assertEqual(saved["components"][0]["services"], [independent.service_key(pid, "db")])
+        jobs.start.assert_not_called()
+        preview = runtime_images.save(project, pid, {"check": True})
+        self.assertEqual([row["id"] for row in preview["restarts"]], ["db"])
+        apply = {"apply": True, "fingerprint": preview["fingerprint"]}
+        runtime_images.save(project, pid, apply)
+        _, steps, kwargs = self.started(jobs)
+        worker = Mock()
+        rows.return_value["db"]["ID"] = "replaced"
+        with self.assertRaisesRegex(ValueError, "changed after the preview"):
+            steps[0](worker)
+        worker.exec.assert_not_called()
+        rows.return_value["db"]["ID"] = "ours"
+        steps[0](worker)
+        self.assertEqual(kwargs["key"], f"playground:{pid}")
+        self.assertEqual([call.args[0] for call in worker.exec.call_args_list],
+                         [independent.command(pid, "pull", "db"), independent.command(pid, "up", "-d", "--no-deps", "db")])
+        waited.assert_called_once_with(pid, worker, {"db": "ours"})
+        self.assertEqual(independent.read(pid)["services"]["db"]["display"]["tag"], "8.2.1")
+        self.assertEqual(self.config(sibling), sibling_before)
+        self.assertEqual(self.config(pid)["volumes"], config["volumes"])
+        self.inputs["local/a"][0]["services"]["db"]["image"] = "redis:9"
+        independent.prepare(pid, refresh=True)
+        self.assertEqual(self.config(pid)["services"]["db"]["image"], "redis:8.2.1")
+        self.assertEqual(independent.read(pid)["ports"], first["ports"])
+
     def test_cloned_update_refreshes_only_its_image_aliases_and_off_update_is_refused(self):
         value = self.prepare()
         config = self.config()
@@ -450,7 +512,7 @@ class Independent(Case):
         self.assertNotIn("a-app", sent[-1])
         self.assertNotIn("a-seed", sent[-1])
         rows.return_value = {"db": {"State": "exited"}}
-        with self.assertRaisesRegex(ValueError, "Nothing runs"):
+        with self.assertRaisesRegex(ValueError, "Start this sandbox first"):
             independent.update("local/a")
 
     def test_apply_recovers_failed_services_but_never_starts_their_stopped_dependencies(self):
