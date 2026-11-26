@@ -65,6 +65,27 @@ There is one lab per machine: the Compose project is named `gravitee` and its co
 
 CI runs the same checks on every pull request.
 
+The sandbox Docker workflows use disposable Labs with linked catalogs; they do not use an installed Lab:
+
+```sh
+PYTHONPATH=lab-ui python3 -m tests.runtime_clone_docker
+PYTHONPATH=lab-ui python3 -m unittest tests.gamma_am_clone_docker.AmCloneDocker
+```
+
+To include Gamma, set `RUNTIME_CLONE_TEST_LICENSE` privately to a license with Gamma enabled and run
+`PYTHONPATH=lab-ui python3 -m unittest tests.gamma_am_clone_docker.GammaAmCloneDocker`. Do not put the license in a command,
+commit or test artifact. These workflows verify complete Shared and private storage copies, working keys and credentials,
+source preservation, and linked catalogs.
+
+Docker test isolation is checked before startup and again before cleanup. The sandbox fixtures require their own
+project, local volume and network names, and mounts inside their temporary Lab and catalog folders. Existing resource
+names, foreign ownership and failed inspections stop the workflow; they never authorize cleanup. Catalog smoke tests
+use disposable writable mounts instead of the catalog's existing state. App-test timeouts remove only container IDs
+with the matching test ownership label. Cleanup failures fail the workflow.
+
+Run the refusal cases without a Docker daemon with `python3 lab-ui/tests/run.py tests.test_dockersafety tests.test_e2e`.
+The real Docker workflows run in CI on disposable runners. Do not use one-off scripts against an installed Lab to verify isolation.
+
 ## Add an add-on, a setup or a playground
 
 Items do not live in this repository: they live in catalogs. The ones the Lab shows by default are in the
@@ -139,3 +160,19 @@ Maintainers: see [docs/maintaining.md](docs/maintaining.md) to move or fork the 
 ## License of contributions
 
 Your contribution is licensed under the project's license, the GNU Affero General Public License v3.0 (see [LICENSE](LICENSE); [NOTICE](NOTICE) requires its attribution to stay). There is no contributor license agreement, and no sign-off is required.
+
+### Try playground sandboxes
+
+Run the isolated Docker workflow explicitly:
+
+```bash
+PYTHONPATH=lab-ui python3 -m tests.independent_docker
+```
+
+It builds the seeder, creates two named sandboxes of the same playground, starts uniquely named temporary projects
+and checks real Gravitee APIs, applications,
+subscriptions and API keys across Stop, Start, Apply and Update. It also checks concurrent playgrounds, private writable
+binds, volumes and ports, preserved catalog links, and a separate shared Redis sentinel. It exercises container removal
+without data loss, stale cleanup refusal, deletion of private data while another sandbox runs, and a fresh start after
+deletion. It removes only its own projects and volumes. Set `INDEPENDENT_E2E_ARTIFACTS` to an absolute folder to keep its
+diagnostics. No installed Lab or catalog is used. CI runs this workflow separately from the unit tests.

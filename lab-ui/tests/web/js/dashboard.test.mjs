@@ -327,9 +327,9 @@ test("a platform with an issue says what it is in the popover of the sidebar's c
   await open({ state: lab({ groups, platform: { state: { key: "issue", label: "Issue" }, apply: { needed: true, restarts: [], starts: [], dialog: null }, behind } }) });
   renderShell();
   const chip = page.ids["health-state"], health = page.ids.health;
-  assert.deepEqual([text(page.ids["health-text"]), chip.getAttribute("class").trim()], ["Platform issue", "state err"]);
+  assert.deepEqual([text(page.ids["health-text"]), chip.getAttribute("class").trim()], ["Shared platform issue", "state err"]);
   assert.deepEqual(JSON.parse(health.getAttribute("data-tip-card")).rows[0].lines, [["API Management: Gateway exited (1)"], ["Alert Engine: Needs a license"]], "what is wrong, by product");
-  assert.equal(text(page.ids["health-said"]), "Platform issue", "a screen reader hears it change");
+  assert.equal(text(page.ids["health-said"]), "Shared platform issue", "a screen reader hears it change");
   // And what is to apply is the banner's, with its reason: Apply is not offered with no reason
   assert.ok(text(page.ids.banner).startsWith("Apply needed"));
   assert.deepEqual(tipOf(page.ids.banner.querySelector(".tip-btn")), ["Access Management 4.13.0-alpha.7 4.12.7", "Apply restarts it with what is saved."]);
@@ -342,6 +342,31 @@ test("a platform with an issue says what it is in the popover of the sidebar's c
   assert.equal(text(page.ids["health-text"]), "Docker is not reachable");
   assert.equal(health.getAttribute("data-tip-card"), null, "the banner says the cause once");
   dashboardPage.hide();
+});
+
+test("the sidebar keeps one shared status across pages and counts running sandboxes separately", () => {
+  const current = router.current;
+  const health = page.ids["health-text"], count = page.ids["sandbox-health"], label = page.ids["sandbox-health-text"];
+  const running = { running: true }, stopped = { running: false, active: true };
+  const draw = (state) => { store.state = state; renderShell(); };
+  for (const [id, params] of [["dashboard", []], ["runtimes", []], ["stack", ["runtime-a"]]]) {
+    router.current = { page: { id }, params };
+    draw(lab({ runtime_scopes: { "runtime-a": running, "runtime-b": stopped } }));
+    assert.equal(text(health), "Shared platform running");
+    assert.equal(count.hidden, false);
+    assert.equal(text(label), "1 sandbox running");
+    assert.equal(count.getAttribute("aria-label"), "1 sandbox running");
+    assert.equal(text(page.ids["health-said"]), "Shared platform running. 1 sandbox running");
+  }
+  draw(lab({ core: "stopped", runtime_scopes: { "runtime-a": running, "runtime-b": running } }));
+  assert.equal(text(health), "Shared platform stopped");
+  assert.equal(text(label), "2 sandboxes running");
+  draw(lab({ runtime_scopes: { "runtime-a": stopped } }));
+  assert.equal(count.hidden, true);
+  draw(lab({ docker: { error: "Docker is not reachable" }, runtime_scopes: { "runtime-a": running } }));
+  assert.equal(text(health), "Docker is not reachable");
+  assert.equal(count.hidden, true);
+  router.current = current;
 });
 
 test("a button that is still saying how its action went stays alone: nothing is offered beside it", async () => {
@@ -368,7 +393,7 @@ test("its Start, Apply and Stop are the Containers page's, button for button and
   assert.deepEqual(["start", "stop"].map((verb) => text(section.querySelector(`[data-stack="${verb}"] .pbtn-face`))), ["Start all", "Stop all"]);
   assert.deepEqual(["start", "stop"].map((verb) => text(containers.querySelector(`[data-stack="${verb}"] .pbtn-face`))), ["Start", "Stop"]);
   assert.ok(section.querySelectorAll(".page-actions [data-act-for]").every((button) => button.dataset.actFor === "platform"));
-  assert.equal(containers.querySelectorAll(".page-actions button").length, 6, "the Containers page keeps every action");
+  assert.equal(containers.querySelectorAll(".page-head .page-actions button").length, 6, "the Containers page keeps every action");
   assert.equal(containers.querySelector("[data-more]").getAttribute("aria-label"), "More");
   dashboardPage.hide();
 });
@@ -391,11 +416,14 @@ test("with the platform stopped the banner leaves its Start to the head, and the
     return banner();
   };
   assert.deepEqual(drawn(lab({ core: "stopped" }), "dashboard"), []);
+  assert.deepEqual(drawn(lab({ core: "stopped" }), "runtimes"), [], "instance management offers no unrelated Shared Start");
+  assert.equal(text(page.ids["health-text"]), "Shared platform stopped");
   assert.deepEqual(drawn(lab({ core: "stopped" }), "playgrounds"), ["Gravitee platform is stopped Start"], "any other page has it");
   const why = "API Management: 4.12.20 is saved, 4.13.0-alpha.4 still runs.";
   const late = lab({ platform: { apply: { needed: true, restarts: [], starts: [], dialog: null },
     behind: [{ kind: "group", id: "api-management", name: "API Management", reason: why, causes: [] }] } });
   assert.deepEqual(drawn(late, "stack"), [], "Containers shows it in its table");
+  assert.deepEqual(drawn(late, "runtimes"), [], "instance management offers no unrelated Shared Apply");
   // One notice: its headline, a summary that names no product, whose popover says which and why, and Apply
   for (const id of ["dashboard", "playgrounds", "images", "plugins"]) assert.deepEqual(drawn(late, id), ["Apply needed 1 container differs from what is saved Apply"], id);
   // Its name starts with the words it shows, so that a voice that says them finds it

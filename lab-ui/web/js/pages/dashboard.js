@@ -10,7 +10,7 @@
 // the load of the containers only while it is on screen. The load is drawn as a chart that slides: its path is moved by an animation
 // frame from the clock, not redrawn by the sample. No link has an effect on the page it opens, and a click on a name acts on nothing.
 
-import { $, $$, esc, icon, setHTML, loading, ago, api, store, hrefOf, recall, remember, splitKey, catalogRows } from "../core.js";
+import { $, $$, esc, icon, setHTML, loading, ago, size, api, store, hrefOf, recall, remember, splitKey, catalogRows } from "../core.js";
 import { busy } from "../activity/jobs.js";
 import { actionButton, paintActions, paintBusy, paintProgress, stateDot, noteHtml, noteBadge, dockerDown, onKnown, keyed,
   showing, starButton, toggleStar, openMenu, Pager, emptyHtml, tipHtml, cardHtml, tipAttrs, statusHtml, refocus, safeHref, applyBadge,
@@ -101,13 +101,6 @@ const still = () => !!motion?.matches;
 // A number of gigabytes as a person reads it, one decimal. The memory counts in binary gigabytes, as the system and
 // Docker's settings say it; the disk and Docker's data in decimal ones, as Finder and `docker system df` do.
 const gb = (bytes, binary = false) => (bytes / (binary ? 2 ** 30 : 1e9)).toFixed(1);
-// Bytes with their unit; MB below one GB, kB below one MB
-function size(bytes, binary = false) {
-  if (!known(bytes)) return "—";
-  const [kilo, mega, giga] = binary ? [2 ** 10, 2 ** 20, 2 ** 30] : [1e3, 1e6, 1e9];
-  if (bytes >= giga) return `${gb(bytes, binary)} GB`;
-  return bytes >= mega ? `${Math.round(bytes / mega)} MB` : bytes >= kilo ? `${Math.round(bytes / kilo)} kB` : `${bytes} B`;
-}
 
 const percent = (value) => (known(value) ? `${value < 10 ? value.toFixed(1) : Math.round(value)}%` : "—");
 

@@ -172,7 +172,8 @@ function pend(key, verb) {
 // the error tone of the button; either way the state follows. `key` and `verb` name what the job acts on and what it
 // does ({key: "addon:<id>", verb: "stop"}): its button says so from the click on, then the job's own `for` and `verb`
 // keep it at work until the job ends and what it started or stopped got there, and its face says how it went.
-export async function runJob(ask, { key, verb } = {}) {
+// A quiet action still says a refusal in the toast, for actions whose feedback is shown outside a button.
+export async function runJob(ask, { key, verb, quiet = false } = {}) {
   if (asking) return;
   asking = true;
   const release = key ? pend(key, verb) : null;
@@ -187,7 +188,7 @@ export async function runJob(ask, { key, verb } = {}) {
   }
   await store.refresh();
   asking = false;
-  release?.(refused ? false : undefined);
+  release?.(refused && !quiet ? false : undefined);
 }
 
 // A request without a job (a save, a create, a delete): the button of `key` says `verb` until it answers, then for a

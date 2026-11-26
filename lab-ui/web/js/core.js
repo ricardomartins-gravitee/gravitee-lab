@@ -250,7 +250,7 @@ export const store = {
     const { key, label } = platform.state, moving = key === "starting" || key === "stopping";
     const why = key === "issue" ? platform.groups.filter((g) => g.note && !g.note_apply && ["err", "warn"].includes(g.note_tone))
       .map((g) => `${g.name}: ${g.note}`) : [];
-    return { tone: `${TONE[key] || ""}${moving ? " busy" : ""}`, text: `Platform ${label.toLowerCase()}`, why };
+    return { tone: `${TONE[key] || ""}${moving ? " busy" : ""}`, text: `Shared platform ${label.toLowerCase()}`, why };
   },
 
   // How far something is, from 0 to 1; null when nothing measures it, or while the Lab UI does not answer.
@@ -280,7 +280,8 @@ export const store = {
   unit(key) {
     const [kind, id] = splitKey(key), platform = store.state?.platform;
     if (kind === "platform") return platform;
-    if (kind === "group") return platform?.groups.find((g) => g.id === id);
+    if (kind === "group") return platform?.groups.find((g) => g.id === id)
+      || Object.values(store.state?.runtime_scopes || {}).flatMap((scope) => scope.groups).find((group) => group.id === id);
     if (kind === "service") return store.service(id);
     // A catalog by its namespace, whose download has a progress; "content" is what the lists wait for while one is on its way
     if (kind === "catalog") return store.state?.catalogs.find((c) => c.id === id);
@@ -480,3 +481,12 @@ export const router = {
   // fn() runs once a page is left, as it hides: what was open over it (a menu, the picker, the drawer) closes
   onLeave(fn) { leaving.push(fn); },
 };
+
+
+// Disk uses decimal units; memory can opt into the binary units of Docker's settings.
+export function size(bytes, binary = false) {
+  if (bytes === null || bytes === undefined) return "—";
+  const [kilo, mega, giga] = binary ? [2 ** 10, 2 ** 20, 2 ** 30] : [1e3, 1e6, 1e9];
+  if (bytes >= giga) return `${(bytes / giga).toFixed(1)} GB`;
+  return bytes >= mega ? `${Math.round(bytes / mega)} MB` : bytes >= kilo ? `${Math.round(bytes / kilo)} kB` : `${bytes} B`;
+}

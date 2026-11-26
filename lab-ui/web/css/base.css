@@ -228,11 +228,11 @@ body.nav-collapsed .brand-dot:not([hidden]) {
 .sidebar-tools { display: flex; gap: 2px; }
 #sidebar-toggle { margin-left: auto; }
 
-/* The platform's state, the one place it is said on every page: the state chip (components.css, 24 px) in a target of 32 px that leads
-   to Containers. Then, while a job runs or once one failed, the activity chip, a control of 32 px with a pill's look. */
+/* The shared platform status leads to Containers. The count underneath leads to Sandboxes.
+   Then, while a job runs or once one failed, the activity chip. */
 .health { display: flex; align-items: center; min-width: 0; height: var(--h-control); padding: 0 var(--sp-1); border-radius: var(--r-control); text-decoration: none; }
 .health:hover { background: var(--surface-2); }
-.health > .state { min-width: 0; max-width: 100%; }
+.health > :is(.state, .pill) { min-width: 0; max-width: 100%; }
 /* A text too long for the chip gives way ("docker-compose.yml does not load"): its tooltip says it in full */
 #health-text { overflow: hidden; text-overflow: ellipsis; }
 .activity {
@@ -250,11 +250,12 @@ body.nav-collapsed .brand-dot:not([hidden]) {
 
 /* Collapsed: icons only. A narrow window always has it (sidebar.js), so that the lists keep their columns. */
 body.nav-collapsed .sidebar { width: 64px; }
-body.nav-collapsed :is(.brand-text, .nav-item span, #health-text, #activity-text, .activity .progress) { display: none; }
+body.nav-collapsed :is(.brand-text, .nav-item span, #health-text, #sandbox-health-text, #activity-text, .activity .progress) { display: none; }
 /* A section's name becomes the line that separates it from the one above: the Dashboard, first of the menu, has none of its own */
 body.nav-collapsed .nav-label { height: 1px; margin: 8px 12px; padding: 0; background: var(--border); font-size: 0; }
 body.nav-collapsed :is(.brand, .nav-item, .health, .activity) { justify-content: center; padding: 0; }
 body.nav-collapsed .health > .state { gap: 0; padding: 0 9px; }   /* its dot alone, in a round pill */
+body.nav-collapsed .health > .pill { gap: 0; padding: 0 5px; }   /* the sandbox icon alone */
 body.nav-collapsed .sidebar-tools { flex-direction: column; align-items: center; gap: 4px; }
 body.nav-collapsed #sidebar-toggle { margin-left: 0; }
 

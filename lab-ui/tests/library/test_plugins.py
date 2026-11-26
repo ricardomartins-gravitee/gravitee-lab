@@ -81,12 +81,29 @@ class Installed(Case):
 
     def setUp(self):
         self.folder(plugins)
+        self.patch(compose, "image_ids", return_value={})
         for prefix in ("local:plugins-installed:", "plugin-bundled:"):
             compose.CACHE.drop(prefix)
             self.addCleanup(compose.CACHE.drop, prefix)
         # The image each service's files are read from, by its id (compose.image_key)
         self.image = self.patch(compose, "image_key", return_value="sha256:running")
         self.patch(compose, "loaded", return_value=None)   # Compose cannot say which services it reads: all of them count
+
+    def test_private_requirements_use_only_the_private_destination_and_scoped_pull(self):
+        target = {**APIM, "folder": str(self.root / "private-plugins")}
+        own = {**PROJECT, "products": {"apim": target}}
+        unknown = {"bundled_error": "Image not pulled", "ext": {}, "bundled": {}}
+        ready = {**unknown, "bundled_error": None}
+        self.patch(plugins, "_installed", side_effect=[unknown, ready])
+        selected = [(None, {"name": "plugin-a"}, {"file": "plugin-a.zip"})]
+        self.patch(plugins, "_required_versions", return_value=selected)
+        change = self.patch(plugins, "_change")
+        pull, job = mock.Mock(), mock.Mock()
+        self.assertTrue(plugins.required(job, own, "apim", ["plugin-a"], pull))
+        pull.assert_called_once_with(["gateway"])
+        change.assert_called_once_with(job, self.root / "private-plugins", selected)
+        job.exec.assert_not_called()
+        self.assertFalse((self.root / APIM["folder"]).exists())
 
     def test_zips_by_plugin_name(self):
         found = plugins._zips([("gravitee-policy-x-2.1.0.zip", 1700), ("notes.txt", 1), ("a-b-1.0.0-alpha.1.zip", 1800)])

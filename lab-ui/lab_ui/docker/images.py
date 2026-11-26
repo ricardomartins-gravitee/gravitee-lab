@@ -444,7 +444,10 @@ def tags(project, component, registry=None):
         if not REGISTRY.fullmatch(registry):
             raise ValueError("Invalid registry")
         host, repository = _locate(f"{registry}/{repository}")
+    return repository_tags(host, repository)
 
+
+def repository_tags(host, repository):
     def ask():
         try:
             if host is None:
@@ -466,6 +469,14 @@ def _split(image):
         return name, digest
     slash, colon = image.rfind("/"), image.rfind(":")
     return (image[:colon], image[colon + 1:]) if colon > slash else (image, "latest")
+
+
+def tagged(image):
+    """A repository and tag that can select another version, or None for a digest or unresolved reference."""
+    if not image or "@" in image or "$" in image:
+        return None
+    repository, tag = _split(image)
+    return (repository, tag) if TAG.fullmatch(tag) else None
 
 
 def _status(url, token=None):

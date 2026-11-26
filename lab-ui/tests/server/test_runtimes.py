@@ -1,0 +1,283 @@
+"""Private runtime state and persona identities stay separate from the shared Lab's controls.
+
+Compiler and Docker lifecycle behavior live in catalogs/test_independent and independent_docker.
+"""
+
+import copy
+
+from lab_ui import paths
+from lab_ui.catalogs import independent
+from lab_ui.library import runtime_settings
+from lab_ui.server import runtimes, personas
+from tests import Case
+
+
+class RuntimeState(Case):
+    def setUp(self):
+        self.folder(paths)
+        runtime_settings.initialize(["local/source-a", "local/b"])
+        self.rid = runtime_settings.create("local/source-a", "A")["id"]
+        self.project = {"playgrounds": {"local/source-a": {"seed": None, "name": "Source A"}, "local/b": {}}, "links": [], "services": {}}
+        self.body = {"playgrounds": [{"id": "local/source-a", "name": "Source A"}, {"id": "local/b", "name": "B"}],
+                     "services": {}, "problems": []}
+
+    def test_existing_shared_items_are_unchanged_and_private_unprepared_items_can_start(self):
+        self.patch(independent, "read", return_value=None)
+        result = runtimes.overlay(copy.deepcopy(self.body), self.project)
+        shared, b, a = result["playgrounds"]
+        self.assertEqual(shared["runtime"]["mode"], "shared")
+        self.assertTrue(a["action"]["enabled"])
+        self.assertFalse(a["on"])
+        self.assertEqual(a["services"], [])
+        self.assertEqual(b, {"id": "local/b", "name": "B", "runtime": {"mode": "shared"}})
+
+    def test_offline_scopes_keep_names_ports_and_source_unavailable_instances_without_querying_docker(self):
+        value = {"project": "private-test", "ports": {"8000": 31000}, "oneshots": [], "active": False,
+                 "services": {"db": {"label": "Database", "image": "store:1", "ports": ["31000"],
+                                     "display": {"tag": "1", "environment": {"TOKEN": "never-return"}}}}}
+        self.patch(independent, "read", return_value=value)
+        self.patch(independent, "created", return_value=[])
+        self.patch(runtimes.frames, "declared", return_value=[])
+        query = self.patch(independent, "containers", side_effect=AssertionError("Must not query Docker"))
+        self.body["docker"] = {"error": "Docker is not reachable"}
+        for source_available in (True, False):
+            project = self.project if source_available else {**self.project, "playgrounds": {}}
+            body = copy.deepcopy(self.body) if source_available else {"playgrounds": [], "services": {}, "docker": self.body["docker"]}
+            result = runtimes.overlay(body, project)
+            scope = result["runtime_scopes"][self.rid]
+            service = result["services"][independent.service_key(self.rid, "db")]
+            self.assertEqual((scope["name"], scope["source"]), ("A", source_available))
+            self.assertEqual((service["ports"], service["state"]["label"]), (["31000"], "Unavailable"))
+            self.assertFalse(result.get("problems"))
+            self.assertNotIn("never-return", repr(result))
+        query.assert_not_called()
+
+    def test_inventory_offline_preserves_definitions_and_disables_cleanup_without_storage_scans(self):
+        value = {"active": False, "label": "A", "services": {"db": {"label": "Database", "ports": ["31000"]}}}
+        self.patch(runtimes.runtime_storage, "known", return_value=([(self.rid, value)], []))
+        scans = [self.patch(runtimes.storage, name, side_effect=AssertionError("Must not query Docker"))
+                 for name in ("usage", "resources", "load")]
+        result = runtimes.listing(self.project, available=False)
+        row = next(row for row in result["runtimes"] if row["id"] == self.rid)
+        self.assertEqual((row["name"], row["ports"], row["state"]), ("A", ["31000"], "Unavailable"))
+        self.assertFalse(result["available"])
+        self.assertTrue(all(not entry["enabled"] for entry in row["cleanup"].values()))
+        for scan in scans:
+            scan.assert_not_called()
+
+    def test_container_groups_validate_the_explicit_runtime_and_never_accept_a_sibling_or_shared_group(self):
+        value = {"project": "private-test", "ports": {}, "oneshots": [], "active": True,
+                 "services": {"db": {"label": "Database", "image": "store:1"}, "app": {"label": "App", "image": "app:1"}}}
+        self.project["groups"] = [{"id": "database", "name": "Database", "services": ["db", "shared-only"]}]
+        self.patch(independent, "read", return_value=value)
+        invoke = self.patch(independent, "service_group")
+        gid = independent.service_key(self.rid, "database")
+        for invalid in ("database", independent.service_key("runtime-sibling", "database")):
+            with self.assertRaises(paths.NotFound):
+                runtimes.group_action(self.project, self.rid, invalid, "stop")
+        invoke.assert_not_called()
+        runtimes.group_action(self.project, self.rid, gid, "stop")
+        invoke.assert_called_once_with(self.rid, ["db"], "stop", gid, "Database")
+
+    def test_damaged_runtime_does_not_hide_the_other_playgrounds_or_offer_an_unsafe_start(self):
+        self.patch(independent, "read", side_effect=ValueError("Damaged private record"))
+        result = runtimes.overlay(copy.deepcopy(self.body), self.project)
+        self.assertFalse(result["playgrounds"][2]["action"]["enabled"])
+        self.assertEqual(result["problems"][0]["message"], "Damaged private record")
+        self.assertEqual(result["playgrounds"][1]["id"], "local/b")
+
+    def test_private_personas_are_distinct_and_unknown_private_keys_never_use_the_shared_api(self):
+        self.patch(runtimes.library_project, "load", return_value=self.project)
+        self.patch(runtimes.frames, "declared", return_value=[{"persona": "user-a"}])
+        self.patch(independent, "read", return_value={"ports": {str(personas.API[1]): 32123}})
+        key = runtimes.persona_key(self.rid, "user-a")
+        self.assertLessEqual(len(key), 63)
+        self.assertNotEqual(key, runtimes.persona_key("local/b", "user-a"))
+        self.assertEqual(runtimes.persona_api(key), (personas.API[0], 32123))
+        self.assertIsNone(runtimes.persona_api("runtime-missing--unknown"))
+        self.assertEqual(runtimes.persona_api("shared-user"), personas.API)
+
+    def test_private_state_exposes_only_display_fields_and_restart_never_replays_seed(self):
+        self.project["playgrounds"]["local/source-a"]["name"] = "A"
+        value = {"project": "private-test", "ports": {}, "oneshots": ["seed"],
+                 "services": {"db": {"label": "Database", "image": "redis:8", "display": {"command": "--token=do-not-return"}},
+                              "seed": {"label": "Seed", "image": "fixture:local"}}}
+        rows = {"db": {"Name": "private-test-db-1", "State": "running"}, "seed": {"State": "exited", "ExitCode": 0}}
+        self.patch(independent, "read", return_value=value)
+        self.patch(independent, "created", return_value=[])
+        self.patch(runtimes, "_snapshot", return_value=({"prepared": True, "running": True, "on": True}, rows))
+        self.patch(runtimes.frames, "declared", return_value=[])
+        result = runtimes.overlay(copy.deepcopy(self.body), self.project)
+        self.assertNotIn("do-not-return", repr(result))
+        self.assertEqual(result["services"][independent.service_key(self.rid, "db")]["name"], "Database (A)")
+        self.assertTrue(result["playgrounds"][2]["up"])
+        value["initialized"] = True
+        rows.pop("seed")
+        resumed = runtimes.overlay(copy.deepcopy(self.body), self.project)
+        self.assertTrue(resumed["playgrounds"][2]["up"], "Removed completed one-shots must not leave the runtime partly running")
+        self.assertEqual(resumed["runtime_scopes"][self.rid]["groups"][0]["state"]["key"], "running")
+        value["services"]["stopped"] = {"label": "Stopped app", "image": "fixture:local"}
+        rows["stopped"] = {"State": "exited", "ExitCode": 0}
+        self.patch(independent, "containers", return_value=rows)
+        jobs = self.patch(independent, "JOBS")
+        runtimes.action(self.project, self.rid, "restart")
+        _, commands, _ = self.started(jobs)
+        self.assertEqual(commands[0][-2:], ["restart", "db"])
+
+    def test_central_inventory_keeps_stopped_and_missing_source_runtimes_and_counts_exclusive_storage(self):
+        records = [(self.rid, {"active": False, "label": "A", "tested": {"versions": {"VERSION": "1"}},
+                              "services": {"db": {"label": "Database", "ports": ["31000"], "image": "store:1",
+                                                  "display": {"tag": "1"}}, "worker": {"label": "Worker", "ports": []}},
+                              "snapshot": {"images": {"db": "sha256:captured"}, "references": {"db": "store:1"}}}),
+                   ("local/orphan", {"active": False, "label": "Orphan", "services": {}})]
+        self.patch(runtimes.runtime_storage, "known", return_value=(records, []))
+        usage = self.patch(runtimes.storage, "usage", return_value={"volumes": {"own-volume": 200}, "shared": [{"kind": "Images", "bytes": 9000}]})
+        self.patch(runtimes.storage, "resources", return_value={"containers": [], "volumes": [], "networks": []})
+        private = {"resources": {"containers": [], "volumes": [{"name": "own-volume"}], "networks": []},
+                   "local": {"bytes": 100}, "error": None, "running": False}
+        inventory = self.patch(runtimes.runtime_storage, "inventory", return_value=private)
+        stats = self.patch(runtimes.storage, "load", return_value={})
+        quick = runtimes.listing(self.project)
+        self.assertEqual({row["id"] for row in quick["runtimes"]}, {self.rid, "local/orphan"})
+        self.assertTrue(all(row["volume_bytes"] is None for row in quick["runtimes"]))
+        self.assertTrue(all(call.kwargs == {"measure": False} for call in inventory.call_args_list))
+        usage.assert_not_called()
+        stats.assert_not_called()
+        result = runtimes.listing(self.project, measure=True)
+        rows = {row["id"]: row for row in result["runtimes"]}
+        self.assertEqual(rows[self.rid]["images"], [{"service": "db", "id": "sha256:captured", "reference": "store:1"}])
+        self.assertEqual(rows[self.rid]["volume_bytes"], 200)
+        self.assertEqual(rows[self.rid]["local_bytes"], 100)
+        db, worker = rows[self.rid]["services"]
+        self.assertEqual((db["id"], db["label"], db["ports"], db["containers"], db["image"], db["tag"]),
+                         ("db", "Database", ["31000"], [], "store:1", "1"))
+        self.assertEqual(db["state"]["key"], "absent")
+        self.assertEqual(db["key"], independent.service_key(self.rid, "db"))
+        self.assertNotEqual(db["key"], "db")
+        self.assertEqual((worker["id"], worker["ports"]), ("worker", []))
+        self.assertEqual(rows[self.rid]["ports"], ["31000"])
+        self.assertTrue(rows["local/orphan"]["cleanup"]["data"]["enabled"])
+        self.assertFalse(rows["local/orphan"]["source"])
+        self.assertEqual(rows["local/orphan"]["name"], "Orphan")
+        self.assertEqual(result["shared_storage"][0]["bytes"], 9000)
+        for state, ports, expected in (("running", ["32000"], ["32000"]), ("exited", [], ["31000"])):
+            with self.subTest(state=state):
+                private["resources"]["containers"] = [{"name": "runtime-db", "service": "db", "state": state, "ports": ports}]
+                row = next(r for r in runtimes.listing(self.project)["runtimes"] if r["id"] == self.rid)
+                self.assertEqual(row["services"][0]["ports"], expected)
+                self.assertEqual(row["services"][0]["containers"], [{"name": "runtime-db", "state": state}])
+                self.assertEqual(row["services"][0]["state"]["key"], "running" if state == "running" else "stopped")
+                self.assertEqual(row["ports"], expected)
+
+    def test_missing_source_runtime_can_be_stopped_without_rewriting_catalogs_or_choices(self):
+        self.patch(independent, "read", return_value={"id": "local/orphan"})
+        stop = self.patch(independent, "stop", return_value="job")
+        self.assertEqual(runtimes.managed_action(self.project, "local/orphan", "stop"), "job")
+        stop.assert_called_once_with("local/orphan")
+
+    def test_unreadable_record_is_not_presented_as_an_empty_fresh_runtime(self):
+        self.patch(runtimes.runtime_storage, "known", return_value=([], [{
+            "file": (independent.folder(self.rid) / "runtime.json").relative_to(self.root).as_posix(), "message": "Damaged record"}]))
+        self.patch(runtimes.storage, "usage", return_value={"volumes": {}, "shared": []})
+        self.patch(runtimes.storage, "resources", return_value={"containers": [], "volumes": [], "networks": []})
+        self.patch(runtimes.storage, "load", return_value={})
+        row = next(row for row in runtimes.listing(self.project)["runtimes"] if row["id"] == self.rid)
+        self.assertEqual(row["problem"], "Damaged record")
+        self.assertIsNone(row["volume_bytes"])
+        self.assertFalse(row["cleanup"]["data"]["enabled"])
+
+    def test_creation_registers_multiple_stopped_children_and_does_not_select_or_start_either(self):
+        plan = self.patch(independent, "plan", return_value={})
+        start = self.patch(independent, "start")
+        jobs = self.patch(runtimes, "JOBS")
+        jobs.current = None
+        demo = runtimes.create(self.project, "local/source-a", {"name": "Demo"})
+        other = runtimes.create(self.project, "local/source-a", {"name": "Sandbox"})
+        self.assertNotEqual(demo["id"], other["id"])
+        self.assertEqual(runtime_settings.mode("local/source-a"), "shared")
+        self.assertEqual(plan.call_args.args, ("local/source-a",))
+        self.assertEqual(plan.call_args.kwargs, {"refresh": True})
+        start.assert_not_called()
+        self.assertFalse(independent.folder(demo["id"]).exists())
+        self.assertFalse(independent.folder(other["id"]).exists())
+        plan.side_effect = ValueError("Unsupported mount")
+        before = runtime_settings.instances()
+        with self.assertRaisesRegex(ValueError, "Unsupported mount"):
+            runtimes.create(self.project, "local/source-a", {"name": "Invalid"})
+        self.assertEqual(runtime_settings.instances(), before)
+
+    def test_named_runtime_actions_cannot_target_the_shared_or_remote_platform(self):
+        for operation in ("start", "apply", "update"):
+            for pid, body in (("local/source-a", {}), (self.rid, {"place": "cloud/environment"})):
+                with self.subTest(pid=pid, operation=operation), self.assertRaises(ValueError):
+                    runtimes.action(self.project, pid, operation, body)
+        with self.assertRaisesRegex(ValueError, "Unknown sandbox action"):
+            runtimes.action(self.project, self.rid, "rebuild")
+
+    def test_requirement_warnings_remain_visible_without_blocking_only_the_selected_sandbox(self):
+        registry = "ghcr.io/example/lab/seeder"
+        self.project["published_seeder"] = registry
+        self.patch(independent, "read", return_value=None)
+        self.patch(independent, "plan", return_value={"starts": []})
+        self.patch(independent, "change_plan", return_value={"restarts": []})
+        host = self.patch(runtimes.playgrounds, "_host_checks")
+        license = self.patch(runtimes.playgrounds, "_license_checks", return_value=[
+            {"name": "License", "state": "warn", "detail": "License not set"}])
+        for detail in ("Not checked", "Not reachable"):
+            host.return_value = [{"name": "Model downloads", "state": "warn", "detail": detail,
+                                  "help": "The gateway downloads its models on first deployment"}]
+            for operation in ("start", "apply"):
+                with self.subTest(detail=detail, operation=operation):
+                    result = runtimes.check(self.project, self.rid, operation)
+                    self.assertIsNone(result["blocked"])
+                    self.assertEqual(result["checks"][1:], host.return_value + license.return_value)
+                    action = self.patch(independent, operation, return_value="private-job")
+                    self.assertEqual(runtimes.action(self.project, self.rid, operation), "private-job")
+                    options = {"published_seeder": registry} if operation == "start" else {}
+                    action.assert_called_once_with(self.rid, **options)
+
+    def test_a_failed_sandbox_plan_still_blocks_actions_even_with_advisory_warnings(self):
+        self.patch(independent, "read", return_value=None)
+        self.patch(independent, "plan", side_effect=ValueError("Unsupported mount"))
+        self.patch(independent, "change_plan", side_effect=ValueError("Unsupported mount"))
+        self.patch(runtimes.playgrounds, "_host_checks", return_value=[
+            {"name": "Model downloads", "state": "warn", "detail": "Not checked"}])
+        self.patch(runtimes.playgrounds, "_license_checks", return_value=[])
+        for operation in ("start", "apply", "update"):
+            with self.subTest(operation=operation):
+                result = runtimes.check(self.project, self.rid, operation)
+                self.assertEqual(result["blocked"], "Unsupported mount")
+                self.assertIsNone(result["dialog"])
+                action = self.patch(independent, operation)
+                with self.assertRaisesRegex(ValueError, "Unsupported mount"):
+                    runtimes.action(self.project, self.rid, operation)
+                action.assert_not_called()
+
+    def test_clone_rejects_other_playgrounds_before_registering_or_starting_anything(self):
+        before = runtime_settings.instances()
+        self.patch(runtimes, "JOBS").current = None
+        check = self.patch(runtimes.runtime_clones, "check")
+        for source in ("local/b", "runtime-unknown", None):
+            with self.subTest(source=source), self.assertRaisesRegex(ValueError, "only.*this playground"):
+                runtimes.create(self.project, "local/source-a", {"name": "Clone", "mode": "clone", "source": source})
+        check.assert_not_called()
+        self.assertEqual(runtime_settings.instances(), before)
+
+    def test_clone_uses_the_selected_child_and_keeps_the_normal_playground_shared(self):
+        self.patch(runtimes, "JOBS").current = None
+        self.patch(independent, "plan", return_value={})
+        check = self.patch(runtimes.runtime_clones, "check")
+        clone = self.patch(runtimes.runtime_clones, "create")
+        clone.return_value.summary.return_value = {"id": "clone-job"}
+        result = runtimes.create(self.project, "local/source-a", {"name": "Copy", "mode": "clone", "source": self.rid})
+        self.assertEqual(result["job"], {"id": "clone-job"})
+        check.assert_called_once_with(self.rid)
+        clone.assert_called_once_with(self.project, self.rid, result["id"])
+        self.assertEqual(runtime_settings.source(result["id"]), "local/source-a")
+        self.assertEqual(runtime_settings.mode("local/source-a"), "shared")
+
+    def test_incomplete_clones_cannot_start_apply_or_update(self):
+        self.patch(independent, "read", return_value={"clone_pending": True})
+        for operation in ("start", "apply", "update"):
+            with self.subTest(operation=operation), self.assertRaisesRegex(ValueError, "clone is incomplete"):
+                runtimes.action(self.project, self.rid, operation)

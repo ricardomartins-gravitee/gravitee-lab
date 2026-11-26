@@ -50,9 +50,9 @@ def response_cookie(persona, header):
     return "; ".join([f"{_cookie_name(persona, name)}={value}", f"Path={PREFIX}{persona}/", *kept])
 
 
-def location(persona, value):
+def location(persona, value, origins=ORIGINS):
     """A Location of the API as the persona's: one on the API, absolute or from its root, goes back through the relay."""
-    for origin in ORIGINS:
+    for origin in origins:
         if value.startswith(origin + "/") or value == origin:
             value = value[len(origin):] or "/"
             break
@@ -67,13 +67,17 @@ def allowed(headers):
     return host in LOCAL and (origin is None or urlsplit(origin).hostname in LOCAL)
 
 
-def relay(handler, method):
+def relay(handler, method, api_for=None):
     """Answers one request under /persona/<persona>/ with what the Management API answers to it."""
     found = PERSONA.match(urlsplit(handler.path).path)
     if not found or not allowed(handler.headers):
         handler.answer(403 if found else 404, b"")
         return
     persona, query = found.group(1), urlsplit(handler.path).query
+    api = api_for(persona) if api_for else API
+    if api is None:
+        handler.answer(404, b"")
+        return
     target = found.group(2) + (f"?{query}" if query else "")
     size = handler.headers.get("Content-Length") or "0"
     if not (size.isascii() and size.isdigit()):   # a negative number reads until the connection closes
@@ -87,8 +91,8 @@ def relay(handler, method):
     cookies = request_cookies(persona, handler.headers.get("Cookie"))
     if cookies:
         headers["Cookie"] = cookies
-    headers["Host"] = f"{API[0]}:{API[1]}"
-    connection = http.client.HTTPConnection(*API, timeout=TIMEOUT)
+    headers["Host"] = f"{api[0]}:{api[1]}"
+    connection = http.client.HTTPConnection(*api, timeout=TIMEOUT)
     try:
         connection.request(method, target, body=body, headers=headers)
         response = connection.getresponse()
@@ -103,7 +107,8 @@ def relay(handler, method):
         if key.lower() in HOP or key.lower() in {name.lower() for name in GUARDED}:
             continue
         name = key.lower()
-        handler.send_header(key, response_cookie(persona, value) if name == "set-cookie" else location(persona, value)
+        handler.send_header(key, response_cookie(persona, value) if name == "set-cookie" else location(
+                            persona, value, (*ORIGINS, *(f"http://{host}:{api[1]}" for host in LOCAL)))
                             if name == "location" else value)
     for key, value in GUARDED.items():
         handler.send_header(key, value)

@@ -34,7 +34,7 @@ def tag(root):
     return "source-" + digest.hexdigest()
 
 
-def _builds_engine(service):
+def builds_engine(service):
     """Only the ordinary build of the engine's own Dockerfile may be replaced."""
     build = service.get("build")
     return ((service.get("labels") or {}).get(SEED) == "seed"
@@ -45,6 +45,24 @@ def _builds_engine(service):
             and service.get("pull_policy") in (None, "build"))
 
 
+def published_reference(repository, image):
+    return (isinstance(repository, str) and REPOSITORY.fullmatch(repository)
+            and isinstance(image, str) and re.fullmatch(re.escape(repository) + r":source-[a-f0-9]{64}", image) is not None)
+
+
+def override(args, images):
+    """Use the selected images while keeping each seed's original environment and mounts."""
+    if not images:
+        return args
+    text = "services:\n" + "".join(
+        f"  {json.dumps(name)}:\n    image: {json.dumps(image)}\n    build: !reset null\n    pull_policy: missing\n"
+        for name, image in sorted(images.items()))
+    file = compose.scratch() / f"seeder-{hashlib.sha256(text.encode()).hexdigest()}.yml"
+    if not file.is_file():
+        paths.write_atomic(file, text)
+    return [*args, "-f", str(file)]
+
+
 def files(job, repository, name, args=(), env=None, remove=False):
     """Compose file arguments for a seed action, with a private override when its image is available."""
     if not name or not isinstance(repository, str) or not REPOSITORY.fullmatch(repository):
@@ -52,7 +70,7 @@ def files(job, repository, name, args=(), env=None, remove=False):
     original = args or ["-f", compose.CORE_FILE, "-f", compose.ON_FILE]
     try:
         config = compose.config_json(original, timeout=15, environ={**compose.environment(), **env} if env else None)
-        if not _builds_engine(config.get("services", {}).get(name, {})):
+        if not builds_engine(config.get("services", {}).get(name, {})):
             return args
         image = repository + ":" + tag(paths.ROOT)
     except (OSError, ValueError, RuntimeError):
@@ -69,11 +87,7 @@ def files(job, repository, name, args=(), env=None, remove=False):
                 raise
             job.lines.append("Published seeder unavailable. Using the playground's configured build.")
             return args
-    text = f"services:\n  {json.dumps(name)}:\n    image: {json.dumps(image)}\n    build: !reset null\n    pull_policy: missing\n"
-    override = compose.scratch() / f"seeder-{hashlib.sha256(text.encode()).hexdigest()}.yml"
-    if not override.is_file():
-        paths.write_atomic(override, text)
-    return [*original, "-f", str(override)]
+    return override(original, {name: image})
 
 
 if __name__ == "__main__":
